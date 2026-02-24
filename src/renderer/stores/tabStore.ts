@@ -61,6 +61,7 @@ export function openContent(
     const idx = tab.panes.findIndex((p) => p.id === tab.activePaneId)
     if (idx >= 0) {
       tab.panes.splice(idx, 1, pane)
+      tab.activePaneId = pane.id
     } else {
       tab.panes.push(pane)
       tab.activePaneId = pane.id
