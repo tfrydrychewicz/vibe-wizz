@@ -14,6 +14,27 @@ type NoteRow = {
   archived_at: string | null
 }
 
+type EntityTypeRow = {
+  id: string
+  name: string
+  icon: string
+  schema: string
+  kanban_enabled: number
+  kanban_status_field: string | null
+  color: string | null
+}
+
+type EntityRow = {
+  id: string
+  name: string
+  type_id: string
+  fields: string
+  created_at: string
+  updated_at: string
+}
+
+const BUILTIN_ENTITY_TYPE_IDS = new Set(['person', 'project', 'team', 'decision', 'okr'])
+
 export function registerDbIpcHandlers(): void {
   /**
    * db:status — returns SQLite version and the list of tables.
@@ -93,4 +114,137 @@ export function registerDbIpcHandlers(): void {
       return { ok: true }
     }
   )
+
+  // ─── Entity Types ───────────────────────────────────────────────────────────
+
+  /** entity-types:list — returns all entity types sorted by name. */
+  ipcMain.handle('entity-types:list', () => {
+    const db = getDatabase()
+    return db
+      .prepare(`SELECT * FROM entity_types ORDER BY name COLLATE NOCASE`)
+      .all() as EntityTypeRow[]
+  })
+
+  /**
+   * entity-types:create — creates a new custom entity type.
+   * Built-in IDs (person/project/team/decision/okr) are blocked.
+   */
+  ipcMain.handle(
+    'entity-types:create',
+    (
+      _event,
+      {
+        name,
+        icon,
+        color,
+        schema,
+      }: { name: string; icon: string; color: string; schema: string }
+    ) => {
+      const db = getDatabase()
+      const id = randomUUID()
+      db.prepare(
+        `INSERT INTO entity_types (id, name, icon, color, schema) VALUES (?, ?, ?, ?, ?)`
+      ).run(id, name, icon, color, schema)
+      return db.prepare('SELECT * FROM entity_types WHERE id = ?').get(id) as EntityTypeRow
+    }
+  )
+
+  /**
+   * entity-types:update — updates name, icon, color, and schema for any entity type.
+   * Built-in types can be edited (fields/icon/color/name) but not deleted.
+   */
+  ipcMain.handle(
+    'entity-types:update',
+    (
+      _event,
+      {
+        id,
+        name,
+        icon,
+        color,
+        schema,
+      }: { id: string; name: string; icon: string; color: string; schema: string }
+    ) => {
+      const db = getDatabase()
+      db.prepare(
+        `UPDATE entity_types SET name = ?, icon = ?, color = ?, schema = ? WHERE id = ?`
+      ).run(name, icon, color, schema, id)
+      return db.prepare('SELECT * FROM entity_types WHERE id = ?').get(id) as EntityTypeRow
+    }
+  )
+
+  /**
+   * entity-types:delete — deletes a custom entity type.
+   * Built-in types cannot be deleted.
+   */
+  ipcMain.handle('entity-types:delete', (_event, { id }: { id: string }) => {
+    if (BUILTIN_ENTITY_TYPE_IDS.has(id)) {
+      return { ok: false, error: 'Cannot delete built-in entity types' }
+    }
+    const db = getDatabase()
+    db.prepare(`DELETE FROM entity_types WHERE id = ?`).run(id)
+    return { ok: true }
+  })
+
+  // ─── Entities ────────────────────────────────────────────────────────────────
+
+  /** entities:list — returns all entities of a given type, sorted by name. */
+  ipcMain.handle('entities:list', (_event, { type_id }: { type_id: string }) => {
+    const db = getDatabase()
+    return db
+      .prepare(
+        `SELECT id, name, type_id, updated_at, created_at
+         FROM entities WHERE type_id = ? ORDER BY name COLLATE NOCASE`
+      )
+      .all(type_id) as Pick<EntityRow, 'id' | 'name' | 'type_id' | 'updated_at' | 'created_at'>[]
+  })
+
+  /** entities:create — creates a new entity with a given type and name. */
+  ipcMain.handle(
+    'entities:create',
+    (_event, { type_id, name }: { type_id: string; name: string }) => {
+      const db = getDatabase()
+      const id = randomUUID()
+      db.prepare(
+        `INSERT INTO entities (id, name, type_id, fields) VALUES (?, ?, ?, ?)`
+      ).run(id, name, type_id, '{}')
+      return db.prepare('SELECT * FROM entities WHERE id = ?').get(id) as EntityRow
+    }
+  )
+
+  /**
+   * entities:get — returns a single entity plus its parsed type schema.
+   * Returns null if not found.
+   */
+  ipcMain.handle('entities:get', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    const entity = db.prepare('SELECT * FROM entities WHERE id = ?').get(id) as EntityRow | undefined
+    if (!entity) return null
+    const entityType = db
+      .prepare('SELECT * FROM entity_types WHERE id = ?')
+      .get(entity.type_id) as EntityTypeRow
+    return { entity, entityType }
+  })
+
+  /** entities:update — updates name and fields JSON for an entity. */
+  ipcMain.handle(
+    'entities:update',
+    (_event, { id, name, fields }: { id: string; name: string; fields: Record<string, unknown> }) => {
+      const db = getDatabase()
+      db.prepare(
+        `UPDATE entities
+         SET name = ?, fields = ?,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?`
+      ).run(name, JSON.stringify(fields), id)
+      return { ok: true }
+    }
+  )
+
+  /** entities:delete — hard-deletes an entity. */
+  ipcMain.handle('entities:delete', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    db.prepare(`DELETE FROM entities WHERE id = ?`).run(id)
+    return { ok: true }
+  })
 }

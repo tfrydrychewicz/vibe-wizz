@@ -494,7 +494,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] SQLite database with FTS5
 - [x] TipTap note editor with auto-save
 - [x] Basic note CRUD + list view
-- [ ] Entity types + entity CRUD
+- [x] Entity types + entity CRUD
 - [ ] `@` mentions in editor
 - [ ] `[[` mentions in editor
 - [ ] Note templates

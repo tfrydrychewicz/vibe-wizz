@@ -145,6 +145,27 @@ body {
   background: var(--color-accent-hover);
 }
 
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  padding: 8px 18px;
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btn-secondary:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
 /* ── Notes view (two-pane) ── */
 .notes-view {
   display: flex;
