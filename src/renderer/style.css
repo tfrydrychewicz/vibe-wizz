@@ -274,6 +274,90 @@ body {
 .align-justify::before { width: 100%; content: ''; display: block; height: 1.5px; background: currentColor; border-radius: 1px; }
 .align-justify::after  { width: 100%; content: ''; display: block; height: 1.5px; background: currentColor; border-radius: 1px; }
 
+/* ── Toolbar dropdown ── */
+.tb-dropdown {
+  position: relative;
+}
+
+.tb-dropdown-btn {
+  gap: 4px;
+  padding: 0 5px;
+}
+
+.tb-chevron {
+  flex-shrink: 0;
+  opacity: 0.5;
+  transition: transform 0.15s;
+}
+
+.tb-chevron.open {
+  transform: rotate(180deg);
+}
+
+.tb-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 170px;
+  background: #252525;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 200;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.tb-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s, color 0.1s;
+}
+
+.tb-dropdown-item:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.tb-dropdown-item.active {
+  color: var(--color-accent);
+}
+
+.tb-di-icon {
+  width: 22px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.tb-di-svg {
+  width: 16px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.tb-dropdown-item:hover .tb-di-svg,
+.tb-dropdown-item.active .tb-di-svg { opacity: 1; }
+
+.tb-di-p  { font-size: 11px; font-weight: 400; }
+.tb-di-h1 { font-size: 15px; font-weight: 700; }
+.tb-di-h2 { font-size: 13px; font-weight: 600; }
+.tb-di-h3 { font-size: 11px; font-weight: 600; }
+
+.tb-align svg { display: block; }
+
 /* Color swatches */
 .tb-colors {
   gap: 3px;
@@ -482,6 +566,38 @@ body {
 .note-body .tiptap [style*="text-align: center"] { text-align: center; }
 .note-body .tiptap [style*="text-align: right"]  { text-align: right; }
 .note-body .tiptap [style*="text-align: justify"] { text-align: justify; }
+
+/* Task list */
+.note-body .tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 4px;
+  margin: 0 0 8px;
+}
+
+.note-body .tiptap ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.note-body .tiptap ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  padding-top: 4px;
+  cursor: pointer;
+}
+
+.note-body .tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--color-accent);
+}
+
+.note-body .tiptap ul[data-type="taskList"] li[data-checked="true"] > div {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+}
 
 /* Horizontal rule */
 .note-body .tiptap hr {
