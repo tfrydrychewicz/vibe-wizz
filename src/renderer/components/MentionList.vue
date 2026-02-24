@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import LucideIcon from './LucideIcon.vue'
 
 export interface MentionItem {
   id: string
@@ -57,7 +58,7 @@ defineExpose({ onKeyDown })
         @mousedown.prevent
         @click="select(i)"
       >
-        <span class="mention-item-icon">{{ item.type_icon }}</span>
+        <span class="mention-item-icon"><LucideIcon :name="item.type_icon" :size="14" /></span>
         <span class="mention-item-name">{{ item.name }}</span>
         <span class="mention-item-type">{{ item.type_name }}</span>
       </button>
@@ -99,9 +100,9 @@ defineExpose({ onKeyDown })
 }
 
 .mention-item-icon {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
-  font-size: 14px;
-  line-height: 1;
 }
 
 .mention-item-name {

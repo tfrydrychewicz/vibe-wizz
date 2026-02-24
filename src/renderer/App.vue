@@ -6,6 +6,7 @@ import NoteList from './components/NoteList.vue'
 import EntityList from './components/EntityList.vue'
 import EntityDetail from './components/EntityDetail.vue'
 import EntityTypeModal from './components/EntityTypeModal.vue'
+import LucideIcon from './components/LucideIcon.vue'
 
 type NavItem = {
   id: string
@@ -22,14 +23,14 @@ type EntityTypeRow = {
 }
 
 const FIXED_TOP_NAV: NavItem[] = [
-  { id: 'today',    label: 'Today',    icon: '📋' },
-  { id: 'notes',    label: 'Notes',    icon: '📝' },
+  { id: 'today',    label: 'Today',    icon: 'sun' },
+  { id: 'notes',    label: 'Notes',    icon: 'file-text' },
 ]
 
 const FIXED_BOTTOM_NAV: NavItem[] = [
-  { id: 'actions',  label: 'Actions',  icon: '✅' },
-  { id: 'calendar', label: 'Calendar', icon: '📅' },
-  { id: 'search',   label: 'Search',   icon: '🔍' },
+  { id: 'actions',  label: 'Actions',  icon: 'check-square' },
+  { id: 'calendar', label: 'Calendar', icon: 'calendar' },
+  { id: 'search',   label: 'Search',   icon: 'search' },
 ]
 
 const activeView = ref<string>('today')
@@ -152,7 +153,7 @@ onMounted(loadEntityTypes)
           :class="{ active: activeView === item.id }"
           @click="onNavClick(item.id)"
         >
-          <span class="nav-icon">{{ item.icon }}</span>
+          <span class="nav-icon"><LucideIcon :name="item.icon" :size="14" /></span>
           <span class="nav-label">{{ item.label }}</span>
         </button>
 
@@ -166,7 +167,9 @@ onMounted(loadEntityTypes)
           :class="{ active: activeView === et.id }"
           @click="onNavClick(et.id)"
         >
-          <span class="nav-icon">{{ et.icon }}</span>
+          <span class="nav-icon">
+            <LucideIcon :name="et.icon" :size="14" :color="et.color ?? undefined" />
+          </span>
           <span
             class="nav-label"
             :style="activeView === et.id && et.color ? { color: et.color } : {}"
@@ -195,14 +198,14 @@ onMounted(loadEntityTypes)
           :class="{ active: activeView === item.id }"
           @click="onNavClick(item.id)"
         >
-          <span class="nav-icon">{{ item.icon }}</span>
+          <span class="nav-icon"><LucideIcon :name="item.icon" :size="14" /></span>
           <span class="nav-label">{{ item.label }}</span>
         </button>
       </nav>
 
       <div class="sidebar-bottom">
         <button class="nav-item">
-          <span class="nav-icon">⚙</span>
+          <span class="nav-icon"><LucideIcon name="settings" :size="14" /></span>
           <span class="nav-label">Settings</span>
         </button>
       </div>
@@ -225,7 +228,7 @@ onMounted(loadEntityTypes)
             @open-entity="onOpenEntity"
           />
           <div v-else class="placeholder">
-            <span class="placeholder-icon">📝</span>
+            <span class="placeholder-icon"><LucideIcon name="file-text" :size="48" /></span>
             <h2>Notes</h2>
             <button class="btn-primary" @click="newNote">New Note</button>
           </div>
@@ -249,7 +252,13 @@ onMounted(loadEntityTypes)
             @saved="entityListRef?.refresh()"
           />
           <div v-else class="placeholder">
-            <span class="placeholder-icon">{{ activeEntityType()?.icon }}</span>
+            <span class="placeholder-icon">
+              <LucideIcon
+                :name="activeEntityType()?.icon ?? 'tag'"
+                :size="48"
+                :color="activeEntityType()?.color ?? undefined"
+              />
+            </span>
             <h2>{{ activeEntityType()?.name }}</h2>
             <button class="btn-primary" @click="createEntity">
               New {{ activeEntityType()?.name }}
@@ -262,7 +271,10 @@ onMounted(loadEntityTypes)
       <template v-else>
         <div class="placeholder">
           <span class="placeholder-icon">
-            {{ [...FIXED_TOP_NAV, ...FIXED_BOTTOM_NAV].find(n => n.id === activeView)?.icon }}
+            <LucideIcon
+              :name="[...FIXED_TOP_NAV, ...FIXED_BOTTOM_NAV].find(n => n.id === activeView)?.icon ?? 'circle'"
+              :size="48"
+            />
           </span>
           <h2>{{ [...FIXED_TOP_NAV, ...FIXED_BOTTOM_NAV].find(n => n.id === activeView)?.label }}</h2>
           <p>Coming soon.</p>
@@ -330,9 +342,10 @@ onMounted(loadEntityTypes)
 }
 
 .nav-item-wrapper .nav-icon {
-  font-size: 14px;
   width: 18px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 

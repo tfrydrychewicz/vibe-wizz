@@ -55,10 +55,12 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `EntityMentionPopup.vue` — fixed-position popup shown when clicking a `@mention` chip; fetches entity via `entities:get`, displays name/type/fields; emits `open-entity` (→ App.vue navigates to entity page) and `close`; `NoteEditor` emits `open-entity: [{ entityId, typeId }]` which App.vue handles by setting `activeView` + `activeEntityId`
 - `EntityList.vue` — generic entity list pane (mirrors NoteList); props: `typeId`, `typeName`, `activeEntityId`; emits `select`, `new-entity`; exposes `refresh()`
 - `EntityDetail.vue` — dynamic entity form; renders fields from entity type schema JSON; explicit Save button; props: `entityId`; emits `saved`
-- `EntityTypeModal.vue` — full entity type creation modal with field builder (name, icon, color swatches, dynamic field list with type/options/entity_ref picker)
+- `EntityTypeModal.vue` — full entity type creation modal with field builder (name, icon picker, color swatches, dynamic field list with type/options/entity_ref picker)
+- `LucideIcon.vue` — dynamic Lucide icon renderer; accepts `name` (kebab-case, e.g. `'user'`, `'bar-chart-2'`), `size`, `color` props; converts to PascalCase to look up the icon component from `lucide-vue-next`; falls back to `Tag` for unknown names
+- `IconPicker.vue` — searchable Lucide icon grid picker (`v-model` stores kebab-case icon name); builds full icon list from `lucide-vue-next` exports at module load; filters by search query; shows up to 96 results; used in `EntityTypeModal`
 - `ToolbarDropdown.vue` is a reusable dropdown used in the editor toolbar
 - Path alias: `@` resolves to `src/renderer/`
-- Icons: **lucide-vue-next** throughout
+- Icons: **lucide-vue-next** throughout; entity type icons stored as kebab-case Lucide names (e.g. `'user'`, `'folder'`); built-in seeds migrated from emoji on startup via idempotent UPDATE statements in `schema.ts`
 
 ### Key Design Decisions
 

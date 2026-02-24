@@ -93,8 +93,10 @@ body {
 }
 
 .nav-icon {
-  font-size: 15px;
-  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
   flex-shrink: 0;
 }
 
@@ -113,8 +115,9 @@ body {
 }
 
 .placeholder-icon {
-  font-size: 48px;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-bottom: 16px;
 }
 

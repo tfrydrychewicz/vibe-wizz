@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import LucideIcon from './LucideIcon.vue'
 
 type FieldDef = { name: string; type: string; options?: string[] }
 type EntityData = {
@@ -105,7 +106,9 @@ function openEntity(): void {
   >
     <template v-if="data">
       <div class="entity-popup-header">
-        <span class="entity-popup-icon">{{ data.entityType.icon }}</span>
+        <span class="entity-popup-icon">
+          <LucideIcon :name="data.entityType.icon" :size="18" :color="data.entityType.color ?? undefined" />
+        </span>
         <div class="entity-popup-titles">
           <span class="entity-popup-name">{{ data.entity.name }}</span>
           <span class="entity-popup-type">{{ data.entityType.name }}</span>
@@ -146,8 +149,8 @@ function openEntity(): void {
 }
 
 .entity-popup-icon {
-  font-size: 18px;
-  line-height: 1;
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
 }
 

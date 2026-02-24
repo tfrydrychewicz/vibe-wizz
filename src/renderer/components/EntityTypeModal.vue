@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { Plus, Trash2, X } from 'lucide-vue-next'
+import IconPicker from './IconPicker.vue'
 
 type FieldType =
   | 'text'
@@ -55,7 +56,7 @@ const isEditMode = computed(() => props.editingType !== undefined)
 const COLORS = ['#5b8def', '#f0a050', '#50c0a0', '#c070f0', '#f06070', '#60c0f0', '#a0d060', '#f0d050']
 
 const typeName = ref('')
-const typeIcon = ref('📌')
+const typeIcon = ref('tag')
 const typeColor = ref(COLORS[0])
 const fields = ref<FieldDef[]>([])
 const existingTypes = ref<ExistingType[]>([])
@@ -118,7 +119,7 @@ async function save(): Promise<void> {
     const result = (await window.api.invoke('entity-types:update', {
       id: props.editingType.id,
       name,
-      icon: typeIcon.value || '📌',
+      icon: typeIcon.value || 'tag',
       color: typeColor.value,
       schema,
     })) as EntityTypeRow
@@ -127,7 +128,7 @@ async function save(): Promise<void> {
   } else {
     const result = (await window.api.invoke('entity-types:create', {
       name,
-      icon: typeIcon.value || '📌',
+      icon: typeIcon.value || 'tag',
       color: typeColor.value,
       schema,
     })) as EntityTypeRow
@@ -169,16 +170,16 @@ onMounted(async () => {
       </div>
 
       <div class="modal-body">
-        <!-- Name + Icon row -->
-        <div class="modal-row">
-          <div class="modal-field" style="flex: 0 0 56px">
-            <label class="modal-label">Icon</label>
-            <input v-model="typeIcon" class="modal-input modal-icon-input" maxlength="2" placeholder="📌" />
-          </div>
-          <div class="modal-field" style="flex: 1">
-            <label class="modal-label">Name</label>
-            <input v-model="typeName" class="modal-input" type="text" placeholder="e.g. Vendor" autofocus />
-          </div>
+        <!-- Name -->
+        <div class="modal-field">
+          <label class="modal-label">Name</label>
+          <input v-model="typeName" class="modal-input" type="text" placeholder="e.g. Vendor" autofocus />
+        </div>
+
+        <!-- Icon picker -->
+        <div class="modal-field">
+          <label class="modal-label">Icon</label>
+          <IconPicker v-model="typeIcon" :color="typeColor" />
         </div>
 
         <!-- Color -->
@@ -239,7 +240,7 @@ onMounted(async () => {
               >
                 <option value="">— any type —</option>
                 <option v-for="et in existingTypes" :key="et.id" :value="et.id">
-                  {{ et.icon }} {{ et.name }}
+                  {{ et.name }}
                 </option>
               </select>
 
@@ -363,12 +364,6 @@ onMounted(async () => {
 
 .modal-input:focus {
   border-color: var(--color-accent);
-}
-
-.modal-icon-input {
-  text-align: center;
-  font-size: 18px;
-  padding: 4px 8px;
 }
 
 .color-swatches {

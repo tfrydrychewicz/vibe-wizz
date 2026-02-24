@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
+import LucideIcon from './LucideIcon.vue'
 
 type FieldDef = {
   name: string
@@ -124,7 +125,8 @@ watch(() => props.entityId, loadEntity)
           class="entity-type-badge"
           :style="entityType.color ? { borderColor: entityType.color, color: entityType.color } : {}"
         >
-          {{ entityType.icon }} {{ entityType.name }}
+          <LucideIcon :name="entityType.icon" :size="12" :color="entityType.color ?? undefined" />
+          {{ entityType.name }}
         </div>
         <div class="entity-detail-save-row">
           <span class="entity-save-status">{{ saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved' : '' }}</span>
@@ -216,6 +218,9 @@ watch(() => props.entityId, loadEntity)
 }
 
 .entity-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   padding: 3px 8px;
   border-radius: 4px;

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS note_templates (
 CREATE TABLE IF NOT EXISTS entity_types (
   id                   TEXT PRIMARY KEY,
   name                 TEXT NOT NULL,
-  icon                 TEXT NOT NULL DEFAULT '📌',
+  icon                 TEXT NOT NULL DEFAULT 'tag',
   schema               TEXT NOT NULL DEFAULT '{}', -- JSON field definitions
   kanban_enabled       INTEGER NOT NULL DEFAULT 0,
   kanban_status_field  TEXT,
@@ -34,21 +34,28 @@ CREATE TABLE IF NOT EXISTS entity_types (
 );
 
 INSERT OR IGNORE INTO entity_types (id, name, icon, schema, kanban_enabled, color) VALUES
-  ('person', 'Person', '👤',
+  ('person', 'Person', 'user',
    '{"fields":[{"name":"role","type":"text"},{"name":"team","type":"text"},{"name":"email","type":"email"},{"name":"manager","type":"entity_ref","entity_type":"person"},{"name":"reports_to","type":"entity_ref","entity_type":"person"}]}',
    0, '#5b8def'),
-  ('project', 'Project', '📁',
+  ('project', 'Project', 'folder',
    '{"fields":[{"name":"status","type":"select","options":["active","paused","done"]},{"name":"lead","type":"entity_ref","entity_type":"person"},{"name":"team","type":"entity_ref","entity_type":"team"},{"name":"priority","type":"select","options":["low","medium","high","critical"]}]}',
    1, '#f0a050'),
-  ('team', 'Team', '👥',
+  ('team', 'Team', 'users',
    '{"fields":[{"name":"lead","type":"entity_ref","entity_type":"person"},{"name":"members","type":"entity_ref_list","entity_type":"person"}]}',
    0, '#50c0a0'),
-  ('decision', 'Decision', '⚖️',
+  ('decision', 'Decision', 'scale',
    '{"fields":[{"name":"date","type":"date"},{"name":"context_note","type":"note_ref"},{"name":"status","type":"select","options":["proposed","accepted","rejected","superseded"]},{"name":"owner","type":"entity_ref","entity_type":"person"}]}',
    0, '#c070f0'),
-  ('okr', 'OKR', '🎯',
+  ('okr', 'OKR', 'target',
    '{"fields":[{"name":"quarter","type":"text"},{"name":"owner","type":"entity_ref","entity_type":"person"},{"name":"key_results","type":"text_list"},{"name":"status","type":"select","options":["on_track","at_risk","off_track","done"]}]}',
    1, '#f06070');
+
+-- Migrate existing emoji icons to Lucide names (idempotent — only updates rows still holding the old emoji)
+UPDATE entity_types SET icon = 'user'   WHERE id = 'person'   AND icon = '👤';
+UPDATE entity_types SET icon = 'folder' WHERE id = 'project'  AND icon = '📁';
+UPDATE entity_types SET icon = 'users'  WHERE id = 'team'     AND icon = '👥';
+UPDATE entity_types SET icon = 'scale'  WHERE id = 'decision' AND icon = '⚖️';
+UPDATE entity_types SET icon = 'target' WHERE id = 'okr'      AND icon = '🎯';
 
 -- ─────────────────────────────────────────────
 -- Notes
