@@ -14,6 +14,16 @@ type NoteRow = {
   archived_at: string | null
 }
 
+type NoteTemplateRow = {
+  id: string
+  name: string
+  icon: string
+  body: string
+  entity_type_id: string | null
+  auto_create_trigger: string | null
+  created_at: string
+}
+
 type EntityTypeRow = {
   id: string
   name: string
@@ -173,14 +183,16 @@ export function registerDbIpcHandlers(): void {
     return { ok: true, sqliteVersion: version, tables }
   })
 
-  /** notes:create — inserts a new note and returns the full row. Accepts optional title. */
-  ipcMain.handle('notes:create', (_event, opts?: { title?: string }) => {
+  /** notes:create — inserts a new note and returns the full row. Accepts optional title, body, and template_id. */
+  ipcMain.handle('notes:create', (_event, opts?: { title?: string; body?: string; template_id?: string }) => {
     const db = getDatabase()
     const id = randomUUID()
     const title = opts?.title ?? 'Untitled'
+    const body = opts?.body ?? '{}'
+    const template_id = opts?.template_id ?? null
     db.prepare(
-      `INSERT INTO notes (id, title, body, body_plain) VALUES (?, ?, ?, ?)`
-    ).run(id, title, '{}', '')
+      `INSERT INTO notes (id, title, body, body_plain, template_id) VALUES (?, ?, ?, ?, ?)`
+    ).run(id, title, body, '', template_id)
     return db.prepare('SELECT * FROM notes WHERE id = ?').get(id) as NoteRow
   })
 
@@ -588,6 +600,52 @@ export function registerDbIpcHandlers(): void {
       result[row.id] = row.trashed_at !== null
     }
     return result
+  })
+
+  // ─── Note Templates ──────────────────────────────────────────────────────────
+
+  /** templates:list — returns all note templates sorted by name. */
+  ipcMain.handle('templates:list', () => {
+    const db = getDatabase()
+    return db
+      .prepare(`SELECT * FROM note_templates ORDER BY name COLLATE NOCASE`)
+      .all() as NoteTemplateRow[]
+  })
+
+  /** templates:create — creates a new note template. */
+  ipcMain.handle(
+    'templates:create',
+    (_event, { name, icon, body }: { name: string; icon: string; body: string }) => {
+      const db = getDatabase()
+      const id = randomUUID()
+      db.prepare(
+        `INSERT INTO note_templates (id, name, icon, body) VALUES (?, ?, ?, ?)`
+      ).run(id, name, icon, body)
+      return db.prepare('SELECT * FROM note_templates WHERE id = ?').get(id) as NoteTemplateRow
+    }
+  )
+
+  /** templates:get — returns a single template by id, or null. */
+  ipcMain.handle('templates:get', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    return (db.prepare('SELECT * FROM note_templates WHERE id = ?').get(id) as NoteTemplateRow) ?? null
+  })
+
+  /** templates:update — updates name, icon, and body for a template. */
+  ipcMain.handle(
+    'templates:update',
+    (_event, { id, name, icon, body }: { id: string; name: string; icon: string; body: string }) => {
+      const db = getDatabase()
+      db.prepare(`UPDATE note_templates SET name = ?, icon = ?, body = ? WHERE id = ?`).run(name, icon, body, id)
+      return { ok: true }
+    }
+  )
+
+  /** templates:delete — permanently deletes a template. */
+  ipcMain.handle('templates:delete', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    db.prepare(`DELETE FROM note_templates WHERE id = ?`).run(id)
+    return { ok: true }
   })
 
   /**

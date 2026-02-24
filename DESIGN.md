@@ -502,15 +502,15 @@ Offline-created notes are queued for embedding/processing and handled automatica
     - `SHIFT+click` on the item opens it in a new pane (support multiple panes in one tab)
     - `Command+click` on the item opens it in a new tab.
 - [x] `[[` mentions in editor, allowing to mention a note, or create new one.
-- [ ] Note templates
+- [x] Note templates
 
 ### Phase 2 — Intelligence 
 - [ ] sqlite-vec integration + embedding pipeline
 - [ ] Chunking + contextual retrieval
-- [ ] Claude integration for note summaries (L2)
+- [ ] Claude integration for note summaries (L2) (alsay available on `/` command in the note)
 - [ ] FTS + vector hybrid search
-- [ ] Auto entity detection (NER)
-- [ ] Action item extraction from notes
+- [ ] Auto entity detection (NER) (alsay available on `/` command in the note)
+- [ ] Action item extraction from notes (alsay available on `/` command in the note)
 - [ ] AI chat sidebar (basic)
 
 ### Phase 3 — Meetings

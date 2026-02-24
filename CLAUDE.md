@@ -32,9 +32,10 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 ### Database Layer
 
 - **better-sqlite3** with SQLite (WAL mode, FTS5, 64MB cache)
-- Schema in `src/main/db/schema.ts` — 13 tables including `notes`, `note_chunks` (future embeddings), `entities`, `entity_mentions`, `note_relations`, `action_items`, `calendar_events`
+- Schema in `src/main/db/schema.ts` — 13 tables including `notes`, `note_templates`, `note_chunks` (future embeddings), `entities`, `entity_mentions`, `note_relations`, `action_items`, `calendar_events`
 - IPC handlers in `src/main/db/ipc.ts`:
   - Notes: `db:status`, `notes:create`, `notes:get`, `notes:update`, `notes:list`, `notes:delete`, `notes:restore`, `notes:delete-forever`, `notes:search`, `notes:get-archived-status`, `notes:get-link-count`
+  - Templates: `templates:list`, `templates:create`, `templates:get`, `templates:update`, `templates:delete`
   - Entity types: `entity-types:list`, `entity-types:create`, `entity-types:update`, `entity-types:delete`
   - Entities: `entities:list`, `entities:create`, `entities:get`, `entities:update`, `entities:delete`, `entities:restore`, `entities:delete-forever`, `entities:search`, `entities:get-mention-count`, `entities:get-trash-status`
   - Trash: `trash:list`
@@ -44,7 +45,8 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `entities:get-mention-count` — `{ id }` → `{ count }`: count of distinct notes mentioning the entity (from `entity_mentions`)
 - `entities:get-trash-status` — `{ ids: string[] }` → `Record<string, boolean>`: batch check which entity IDs are currently trashed
 - `trash:list` — returns `{ notes: [{id, title, archived_at}], entities: [{id, name, trashed_at, type_id, type_name, type_icon, type_color}] }`
-- `notes:create` accepts optional `{ title? }` param (defaults to `'Untitled'`)
+- `notes:create` accepts optional `{ title?, body?, template_id? }` params (defaults to `'Untitled'` blank note); when `template_id` is given, the template's body is copied in
+- `templates:create/update` — `{ name, icon, body }` — templates stored in `note_templates` table; `icon` is a kebab-case Lucide name; `body` is TipTap JSON
 - `notes:search` — `{ query }` → `[{ id, title }]`: up to 20 non-archived notes matching title (LIKE); used by `[[` note-link suggestion
 - `notes:get-archived-status` — `{ ids: string[] }` → `Record<string, boolean>`: batch check which note IDs are archived
 - `notes:update` now syncs both `entity_mentions` and `note_relations` after every save: `entity_mentions` rebuilt from `mention` nodes; `note_relations` (`relation_type = 'references'`) rebuilt from `noteLink` nodes
@@ -57,14 +59,15 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 
 ### Renderer / UI
 
-- `App.vue` shell: sidebar with fixed nav items (Today, Notes) + **dynamic entity type list** (loaded from DB) + fixed items (Actions, Calendar, Search, Trash)
+- `App.vue` shell: sidebar with fixed nav items (Today, Notes, **Templates**) + **dynamic entity type list** (loaded from DB) + fixed items (Actions, Calendar, Search, Trash)
   - Entity type nav is populated from `entity-types:list` on mount; routes `activeView` to entity type IDs
   - "New entity type" button in sidebar opens `EntityTypeModal`
   - Main area uses `tabStore` for multi-tab/multi-pane content; `activeNoteId`/`activeEntityId` are **computed** from `activePane` (not stored as refs)
   - Notes and entity views share the same tab/pane content area on the right; clicking items in the left list opens them in the active pane; `Shift+click` opens a new pane; `Cmd+click` opens a new tab
+  - `noteTemplates` loaded on mount and passed to `NoteList`; refreshed after every `onTemplateSaved`; used to populate the "New Note" template dropdown
 - `src/renderer/stores/tabStore.ts` — tab/pane state for the content area: `OpenMode` (`'default' | 'new-pane' | 'new-tab'`), `ContentPane` (`{ id, type, contentId, typeId?, title }`), `Tab` (`{ id, panes, activePaneId }`); exports `tabs`, `activeTabId`, `activeTab`, `activePane`, `openContent`, `closePane`, `closeTab`, `setActiveTab`, `setActivePaneInTab`, `updatePaneTitle`, `closePanesForContent`
 - `TabBar.vue` — horizontal tab bar rendered above the panes area when ≥2 tabs are open; each tab shows the active pane's title and a close button; emits `set-active-tab`, `close-tab`
-- `NoteList.vue` — note list pane (240px); exposes `refresh()` via `defineExpose`; emits `select`, `open-new-pane`, `open-new-tab`, `new-note`, `trashed`; click handler checks `e.metaKey`/`e.shiftKey` to pick mode; trash button triggers two-step flow (link count check → confirmation overlay → `notes:delete`); sets `noteArchivedStatus.set(id, true)` after archiving; emits `trashed` so `App.vue` can call `closePanesForContent`
+- `NoteList.vue` — note list pane (240px); exposes `refresh()` via `defineExpose`; accepts optional `templates` prop (`{ id, name, icon }[]`); emits `select`, `open-new-pane`, `open-new-tab`, `new-note`, `new-note-from-template: [templateId]`, `trashed`; click handler checks `e.metaKey`/`e.shiftKey` to pick mode; when templates are present the "New Note" button shows a dropdown (blank note + template list); trash button triggers two-step flow (link count check → confirmation overlay → `notes:delete`); sets `noteArchivedStatus.set(id, true)` after archiving; emits `trashed` so `App.vue` can call `closePanesForContent`
 - `NoteEditor.vue` uses **TipTap** (ProseMirror-based) for rich text editing with auto-save (500ms debounce); emits `saved: [title: string]` after each successful save; supports `@` entity mentions and `[[` note-links; both use `@tiptap/extension-mention` (renamed `noteLink` for the second instance) + `VueNodeViewRenderer`; on note load, fetches trash/archived status and populates `entityTrashStatus`/`noteArchivedStatus`; emits `open-entity: [{ entityId, typeId, mode: OpenMode }]`, `open-note: [{ noteId, title, mode: OpenMode }]`
 - `MentionList.vue` — keyboard-navigable entity suggestion dropdown rendered by `VueRenderer` into a fixed-position `document.body` div; exposes `onKeyDown` for TipTap suggestion integration
 - `MentionChip.vue` — TipTap `VueNodeViewRenderer` component for `@mention` nodes; reads `entityTrashStatus` reactively; normal state: blue chip; trashed state: red chip with `Trash2` icon; fires clicks through `fireMentionClick` from mentionStore
@@ -80,12 +83,14 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `EntityTypeModal.vue` — full entity type creation modal with field builder (name, icon picker, color swatches, dynamic field list with type/options/entity_ref picker)
 - `LucideIcon.vue` — dynamic Lucide icon renderer; accepts `name` (kebab-case, e.g. `'user'`, `'bar-chart-2'`), `size`, `color` props; converts to PascalCase to look up the icon component from `lucide-vue-next`; falls back to `Tag` for unknown names
 - `IconPicker.vue` — searchable Lucide icon grid picker (`v-model` stores kebab-case icon name); builds full icon list from `lucide-vue-next` exports at module load; filters by search query; shows up to 96 results; used in `EntityTypeModal`
+- `TemplateList.vue` — template list pane (240px); exposes `refresh()`; emits `select: [id]`, `new-template`; click selects template; inline delete confirmation; shown in the Templates view
+- `TemplateEditor.vue` — TipTap-based template editor; props: `templateId`; emits `saved: [name: string]`, `loaded: [name: string]`; auto-save 500ms debounce to `templates:update`; includes inline icon picker (via `IconPicker.vue`) and name input; same formatting toolbar as `NoteEditor` minus mention/link extensions; shows a hint about template usage
 - `ToolbarDropdown.vue` is a reusable dropdown used in the editor toolbar
 - `src/renderer/stores/mentionStore.ts` — module-level reactive state shared between `NoteEditor` and `MentionChip` (bypasses Vue injection isolation in TipTap NodeViews): `entityTrashStatus: reactive(Map<string, boolean>)`, `registerMentionClickHandler`, `fireMentionClick`
 - `src/renderer/stores/noteLinkStore.ts` — same pattern for note-links: `noteArchivedStatus: reactive(Map<string, boolean>)`, `registerNoteLinkClickHandler`, `fireNoteLinkClick`
 - Path alias: `@` resolves to `src/renderer/`
 - Icons: **lucide-vue-next** throughout; entity type icons stored as kebab-case Lucide names (e.g. `'user'`, `'folder'`); built-in seeds migrated from emoji on startup via idempotent UPDATE statements in `schema.ts`
-- Sidebar nav: fixed top items (Today, Notes) + dynamic entity type list + fixed bottom items (Actions, Calendar, Search, **Trash**)
+- Sidebar nav: fixed top items (Today, Notes, **Templates**) + dynamic entity type list + fixed bottom items (Actions, Calendar, Search, **Trash**)
 
 ### Navigation Shortcut Rule — ALWAYS FOLLOW
 

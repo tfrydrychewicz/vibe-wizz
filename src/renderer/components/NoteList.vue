@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, defineExpose } from 'vue'
-import { Plus, Trash2 } from 'lucide-vue-next'
+import { Plus, Trash2, ChevronDown } from 'lucide-vue-next'
+import LucideIcon from './LucideIcon.vue'
 import { noteArchivedStatus } from '../stores/noteLinkStore'
 
 type NoteListItem = {
@@ -10,14 +11,44 @@ type NoteListItem = {
   created_at: string
 }
 
-const props = defineProps<{ activeNoteId: string | null }>()
+type TemplateRef = {
+  id: string
+  name: string
+  icon: string
+}
+
+const props = defineProps<{
+  activeNoteId: string | null
+  templates?: TemplateRef[]
+}>()
 const emit = defineEmits<{
   select: [id: string]
   'open-new-pane': [id: string]
   'open-new-tab': [id: string]
   'new-note': []
+  'new-note-from-template': [templateId: string]
   trashed: [id: string]
 }>()
+
+const showTemplateDropdown = ref(false)
+
+function onNewNoteClick(): void {
+  if (props.templates && props.templates.length > 0) {
+    showTemplateDropdown.value = !showTemplateDropdown.value
+  } else {
+    emit('new-note')
+  }
+}
+
+function pickTemplate(templateId: string): void {
+  showTemplateDropdown.value = false
+  emit('new-note-from-template', templateId)
+}
+
+function pickBlank(): void {
+  showTemplateDropdown.value = false
+  emit('new-note')
+}
 
 function onItemClick(e: MouseEvent, noteId: string): void {
   if (e.metaKey || e.ctrlKey) {
@@ -86,10 +117,37 @@ defineExpose({ refresh })
 <template>
   <div class="note-list-pane">
     <div class="note-list-header">
-      <button class="note-list-new-btn" @click="emit('new-note')">
-        <Plus :size="14" />
-        New Note
-      </button>
+      <div class="note-list-new-wrapper">
+        <button class="note-list-new-btn" @click="onNewNoteClick">
+          <Plus :size="14" />
+          New Note
+          <ChevronDown v-if="templates && templates.length > 0" :size="12" class="new-btn-chevron" />
+        </button>
+        <div
+          v-if="showTemplateDropdown"
+          class="template-dropdown"
+        >
+          <button class="template-dropdown-item" @click="pickBlank">
+            <LucideIcon name="file-text" :size="13" class="td-icon" />
+            Blank note
+          </button>
+          <div class="template-dropdown-sep" />
+          <button
+            v-for="tmpl in templates"
+            :key="tmpl.id"
+            class="template-dropdown-item"
+            @click="pickTemplate(tmpl.id)"
+          >
+            <LucideIcon :name="tmpl.icon || 'file-text'" :size="13" class="td-icon" />
+            {{ tmpl.name }}
+          </button>
+        </div>
+        <div
+          v-if="showTemplateDropdown"
+          class="template-dropdown-backdrop"
+          @click="showTemplateDropdown = false"
+        />
+      </div>
     </div>
 
     <div class="note-list-scroll">
@@ -137,6 +195,68 @@ defineExpose({ refresh })
 </template>
 
 <style scoped>
+.note-list-new-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.new-btn-chevron {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+.template-dropdown-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 998;
+}
+
+.template-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #252525;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  z-index: 999;
+  overflow: hidden;
+  padding: 3px;
+}
+
+.template-dropdown-sep {
+  height: 1px;
+  background: var(--color-border);
+  margin: 3px 0;
+}
+
+.template-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.template-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text);
+}
+
+.td-icon {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
 .note-list-item.is-confirming {
   cursor: default;
   padding: 0;

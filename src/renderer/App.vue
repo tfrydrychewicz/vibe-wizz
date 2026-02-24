@@ -7,6 +7,8 @@ import EntityList from './components/EntityList.vue'
 import EntityDetail from './components/EntityDetail.vue'
 import EntityTypeModal from './components/EntityTypeModal.vue'
 import TrashView from './components/TrashView.vue'
+import TemplateList from './components/TemplateList.vue'
+import TemplateEditor from './components/TemplateEditor.vue'
 import LucideIcon from './components/LucideIcon.vue'
 import TabBar from './components/TabBar.vue'
 import {
@@ -39,8 +41,9 @@ type EntityTypeRow = {
 }
 
 const FIXED_TOP_NAV: NavItem[] = [
-  { id: 'today',    label: 'Today',    icon: 'sun' },
-  { id: 'notes',    label: 'Notes',    icon: 'file-text' },
+  { id: 'today',     label: 'Today',     icon: 'sun' },
+  { id: 'notes',     label: 'Notes',     icon: 'file-text' },
+  { id: 'templates', label: 'Templates', icon: 'layout-template' },
 ]
 
 const FIXED_BOTTOM_NAV: NavItem[] = [
@@ -55,11 +58,23 @@ const activeView = ref<string>('today')
 // List pane refs
 const noteListRef = ref<InstanceType<typeof NoteList> | null>(null)
 const entityListRef = ref<InstanceType<typeof EntityList> | null>(null)
+const templateListRef = ref<InstanceType<typeof TemplateList> | null>(null)
+
+// Template state
+const activeTemplateId = ref<string | null>(null)
 
 // Entity types
 const entityTypes = ref<EntityTypeRow[]>([])
 const showNewEntityTypeModal = ref(false)
 const editingEntityType = ref<EntityTypeRow | null>(null)
+
+// Templates (for "New note from template" dropdown in NoteList)
+type TemplateRef = { id: string; name: string; icon: string }
+const noteTemplates = ref<TemplateRef[]>([])
+
+async function loadNoteTemplates(): Promise<void> {
+  noteTemplates.value = (await window.api.invoke('templates:list')) as TemplateRef[]
+}
 
 // Derived: which content ID is active in the active pane (for list highlighting)
 const activeNoteId = computed((): string | null => {
@@ -86,9 +101,22 @@ function activeEntityType(): EntityTypeRow | undefined {
 
 // ── Note actions ────────────────────────────────────────────────────────────
 
-async function newNote(): Promise<void> {
-  const note = (await window.api.invoke('notes:create')) as { id: string }
-  openContent('note', note.id, 'Untitled', 'default', undefined, 'file-text')
+async function newNote(templateId?: string): Promise<void> {
+  let body: string | undefined
+  let name: string | undefined
+  if (templateId) {
+    const tmpl = (await window.api.invoke('templates:get', { id: templateId })) as { name: string; body: string } | null
+    if (tmpl) {
+      body = tmpl.body
+      name = tmpl.name !== 'Untitled' ? tmpl.name : undefined
+    }
+  }
+  const note = (await window.api.invoke('notes:create', {
+    title: name,
+    body,
+    template_id: templateId,
+  })) as { id: string }
+  openContent('note', note.id, name ?? 'Untitled', 'default', undefined, 'file-text')
   await noteListRef.value?.refresh()
 }
 
@@ -122,6 +150,23 @@ async function createEntity(): Promise<void> {
 function openEntityFromList(id: string, mode: OpenMode): void {
   const et = activeEntityType()
   openContent('entity', id, 'Untitled', mode, activeView.value, et?.icon ?? 'tag', et?.color ?? undefined)
+}
+
+// ── Template actions ─────────────────────────────────────────────────────────
+
+async function newTemplate(): Promise<void> {
+  const tmpl = (await window.api.invoke('templates:create', {
+    name: 'Untitled',
+    icon: 'file-text',
+    body: '{}',
+  })) as { id: string }
+  activeTemplateId.value = tmpl.id
+  await templateListRef.value?.refresh()
+}
+
+function onTemplateSaved(): void {
+  templateListRef.value?.refresh()
+  loadNoteTemplates()
 }
 
 // ── Navigation ───────────────────────────────────────────────────────────────
@@ -200,7 +245,10 @@ function toggleMaximize(): void {
   window.api.invoke('window:toggle-maximize')
 }
 
-onMounted(loadEntityTypes)
+onMounted(() => {
+  loadEntityTypes()
+  loadNoteTemplates()
+})
 </script>
 
 <template>
@@ -286,10 +334,12 @@ onMounted(loadEntityTypes)
             v-if="activeView === 'notes'"
             ref="noteListRef"
             :active-note-id="activeNoteId"
+            :templates="noteTemplates"
             @select="openNote($event, 'default')"
             @open-new-pane="openNote($event, 'new-pane')"
             @open-new-tab="openNote($event, 'new-tab')"
-            @new-note="newNote"
+            @new-note="newNote()"
+            @new-note-from-template="newNote($event)"
             @trashed="onNoteTrashed"
           />
           <EntityList
@@ -370,7 +420,7 @@ onMounted(loadEntityTypes)
               <template v-if="activeView === 'notes'">
                 <span class="placeholder-icon"><LucideIcon name="file-text" :size="48" /></span>
                 <h2>Notes</h2>
-                <button class="btn-primary" @click="newNote">New Note</button>
+                <button class="btn-primary" @click="newNote()">New Note</button>
               </template>
               <template v-else>
                 <span class="placeholder-icon">
@@ -387,6 +437,31 @@ onMounted(loadEntityTypes)
               </template>
             </div>
 
+          </div>
+        </div>
+      </template>
+
+      <!-- Templates view -->
+      <template v-else-if="activeView === 'templates'">
+        <div class="notes-view">
+          <TemplateList
+            ref="templateListRef"
+            :active-template-id="activeTemplateId"
+            @select="activeTemplateId = $event || null"
+            @new-template="newTemplate"
+          />
+          <div class="content-area">
+            <TemplateEditor
+              v-if="activeTemplateId"
+              :template-id="activeTemplateId"
+              @saved="onTemplateSaved"
+            />
+            <div v-else class="placeholder">
+              <span class="placeholder-icon"><LucideIcon name="layout-template" :size="48" /></span>
+              <h2>Templates</h2>
+              <p>Create reusable note structures.</p>
+              <button class="btn-primary" @click="newTemplate">New Template</button>
+            </div>
           </div>
         </div>
       </template>
