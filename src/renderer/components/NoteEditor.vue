@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
-import { useEditor, EditorContent, VueRenderer } from '@tiptap/vue-3'
+import { useEditor, EditorContent, VueRenderer, VueNodeViewRenderer } from '@tiptap/vue-3'
 import Mention from '@tiptap/extension-mention'
 import StarterKit from '@tiptap/starter-kit'
 import MentionList from './MentionList.vue'
+import MentionChip from './MentionChip.vue'
+import TrashedMentionPopup from './TrashedMentionPopup.vue'
 import type { MentionItem } from './MentionList.vue'
 import type { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion'
 import EntityMentionPopup from './EntityMentionPopup.vue'
+import {
+  entityTrashStatus,
+  registerMentionClickHandler,
+} from '../stores/mentionStore'
 import Placeholder from '@tiptap/extension-placeholder'
 import { TextStyle } from '@tiptap/extension-text-style'
 import { Color } from '@tiptap/extension-color'
@@ -76,16 +82,10 @@ let isLoading = false
 const popupEntityId = ref<string | null>(null)
 const popupAnchorRect = ref<DOMRect | null>(null)
 
-function onMentionClick(e: MouseEvent): void {
-  const mentionEl = (e.target as HTMLElement).closest('.mention') as HTMLElement | null
-  if (mentionEl) {
-    const id = mentionEl.getAttribute('data-id')
-    if (id) {
-      popupEntityId.value = id
-      popupAnchorRect.value = mentionEl.getBoundingClientRect()
-    }
-  }
-}
+registerMentionClickHandler((id, rect) => {
+  popupEntityId.value = id
+  popupAnchorRect.value = rect
+})
 
 function buildMentionSuggestion() {
   return {
@@ -147,8 +147,11 @@ const editor = useEditor({
     TiptapImage,
     TaskList,
     TaskItem.configure({ nested: true }),
-    Mention.configure({
-      HTMLAttributes: { class: 'mention' },
+    Mention.extend({
+      addNodeView() {
+        return VueNodeViewRenderer(MentionChip)
+      },
+    }).configure({
       suggestion: buildMentionSuggestion(),
     }),
   ],
@@ -224,10 +227,44 @@ async function loadNote(noteId: string): Promise<void> {
       // malformed body — use empty doc
     }
     editor.value.commands.setContent(content)
+
+    // Fetch trash status for all entities mentioned in this note
+    const mentionIds = extractMentionIdsFromBody(note.body)
+    if (mentionIds.length > 0) {
+      const statusMap = (await window.api.invoke('entities:get-trash-status', {
+        ids: mentionIds,
+      })) as Record<string, boolean>
+      for (const [id, trashed] of Object.entries(statusMap)) {
+        entityTrashStatus.set(id, trashed)
+      }
+    }
   } finally {
     await nextTick()
     isLoading = false
   }
+}
+
+function extractMentionIdsFromBody(bodyJson: string): string[] {
+  let doc: unknown
+  try {
+    doc = JSON.parse(bodyJson)
+  } catch {
+    return []
+  }
+  const ids: string[] = []
+  function walk(node: unknown): void {
+    if (!node || typeof node !== 'object') return
+    const n = node as Record<string, unknown>
+    if (n['type'] === 'mention' && n['attrs'] && typeof n['attrs'] === 'object') {
+      const id = (n['attrs'] as Record<string, unknown>)['id']
+      if (typeof id === 'string' && id) ids.push(id)
+    }
+    if (Array.isArray(n['content'])) {
+      for (const child of n['content']) walk(child)
+    }
+  }
+  walk(doc)
+  return ids
 }
 
 function setLink(): void {
@@ -523,13 +560,22 @@ onBeforeUnmount(() => {
 
     </div>
 
-    <div class="note-body" @click="onMentionClick">
+    <div class="note-body">
       <EditorContent :editor="editor" />
     </div>
 
+    <TrashedMentionPopup
+      v-if="popupEntityId && popupAnchorRect && entityTrashStatus.get(popupEntityId)"
+      :key="`trashed-${popupEntityId}`"
+      :entity-id="popupEntityId"
+      :anchor-rect="popupAnchorRect"
+      @close="popupEntityId = null"
+      @restored="popupEntityId = null"
+    />
+
     <EntityMentionPopup
-      v-if="popupEntityId && popupAnchorRect"
-      :key="popupEntityId"
+      v-if="popupEntityId && popupAnchorRect && !entityTrashStatus.get(popupEntityId)"
+      :key="`entity-${popupEntityId}`"
       :entity-id="popupEntityId"
       :anchor-rect="popupAnchorRect"
       @close="popupEntityId = null"
@@ -539,17 +585,4 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-:deep(.mention) {
-  background: rgba(91, 141, 239, 0.15);
-  border-radius: 3px;
-  color: var(--color-accent, #5b8def);
-  font-weight: 500;
-  padding: 1px 3px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-:deep(.mention:hover) {
-  background: rgba(91, 141, 239, 0.25);
-}
 </style>

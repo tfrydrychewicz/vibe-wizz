@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
+import { Trash2 } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
+import { entityTrashStatus } from '../stores/mentionStore'
 
 type FieldDef = {
   name: string
@@ -37,7 +39,10 @@ type EntityRow = {
 }
 
 const props = defineProps<{ entityId: string }>()
-const emit = defineEmits<{ saved: [] }>()
+const emit = defineEmits<{
+  saved: []
+  trashed: [entityId: string]
+}>()
 
 const entityName = ref('')
 const fieldValues = ref<Record<string, string>>({})
@@ -102,6 +107,33 @@ async function save(): Promise<void> {
   }, 1500)
 }
 
+const trashMentionCount = ref<number | null>(null)
+const isTrashing = ref(false)
+
+async function requestTrash(): Promise<void> {
+  const { count } = (await window.api.invoke('entities:get-mention-count', {
+    id: props.entityId,
+  })) as { count: number }
+  if (count > 0) {
+    trashMentionCount.value = count
+  } else {
+    await finishTrash()
+  }
+}
+
+async function finishTrash(): Promise<void> {
+  isTrashing.value = true
+  trashMentionCount.value = null
+  await window.api.invoke('entities:delete', { id: props.entityId })
+  entityTrashStatus.set(props.entityId, true)
+  isTrashing.value = false
+  emit('trashed', props.entityId)
+}
+
+function cancelTrash(): void {
+  trashMentionCount.value = null
+}
+
 function isRefField(type: string): boolean {
   return type === 'entity_ref' || type === 'entity_ref_list' || type === 'note_ref'
 }
@@ -130,7 +162,22 @@ watch(() => props.entityId, loadEntity)
         </div>
         <div class="entity-detail-save-row">
           <span class="entity-save-status">{{ saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved' : '' }}</span>
-          <button class="btn-primary" @click="save">Save</button>
+
+          <!-- Trash confirmation inline -->
+          <template v-if="trashMentionCount !== null">
+            <span class="entity-trash-confirm-msg">
+              Mentioned in {{ trashMentionCount }} {{ trashMentionCount === 1 ? 'note' : 'notes' }}. Move to trash?
+            </span>
+            <button class="btn-trash-confirm" @click="finishTrash">Trash</button>
+            <button class="btn-secondary" @click="cancelTrash">Cancel</button>
+          </template>
+
+          <template v-else>
+            <button class="btn-trash" :disabled="isTrashing" title="Move to trash" @click="requestTrash">
+              <Trash2 :size="13" />
+            </button>
+            <button class="btn-primary" @click="save">Save</button>
+          </template>
         </div>
       </div>
 
@@ -287,5 +334,50 @@ watch(() => props.entityId, loadEntity)
 .entity-field-disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.btn-trash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 6px 8px;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.btn-trash:hover:not(:disabled) {
+  background: rgba(240, 96, 112, 0.1);
+  color: #f06070;
+  border-color: rgba(240, 96, 112, 0.4);
+}
+
+.btn-trash:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.entity-trash-confirm-msg {
+  font-size: 12px;
+  color: #f06070;
+}
+
+.btn-trash-confirm {
+  padding: 6px 12px;
+  background: rgba(240, 96, 112, 0.15);
+  border: 1px solid rgba(240, 96, 112, 0.5);
+  border-radius: 5px;
+  color: #f06070;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.btn-trash-confirm:hover {
+  background: rgba(240, 96, 112, 0.25);
 }
 </style>

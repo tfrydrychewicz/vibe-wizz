@@ -25,6 +25,9 @@ export function initDatabase(): Database.Database {
 
   _db.exec(SCHEMA_SQL)
 
+  // Migration: add trashed_at to entities (idempotent — ALTER TABLE fails silently if column exists)
+  try { _db.exec('ALTER TABLE entities ADD COLUMN trashed_at TEXT') } catch { /* already exists */ }
+
   console.log(`[DB] Initialized: ${dbPath}`)
   return _db
 }

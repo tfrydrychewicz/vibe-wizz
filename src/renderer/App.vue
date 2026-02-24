@@ -6,6 +6,7 @@ import NoteList from './components/NoteList.vue'
 import EntityList from './components/EntityList.vue'
 import EntityDetail from './components/EntityDetail.vue'
 import EntityTypeModal from './components/EntityTypeModal.vue'
+import TrashView from './components/TrashView.vue'
 import LucideIcon from './components/LucideIcon.vue'
 
 type NavItem = {
@@ -31,6 +32,7 @@ const FIXED_BOTTOM_NAV: NavItem[] = [
   { id: 'actions',  label: 'Actions',  icon: 'check-square' },
   { id: 'calendar', label: 'Calendar', icon: 'calendar' },
   { id: 'search',   label: 'Search',   icon: 'search' },
+  { id: 'trash',    label: 'Trash',    icon: 'trash-2' },
 ]
 
 const activeView = ref<string>('today')
@@ -104,6 +106,14 @@ function onNoteSaved(): void {
 function onOpenEntity({ entityId, typeId }: { entityId: string; typeId: string }): void {
   activeView.value = typeId
   activeEntityId.value = entityId
+}
+
+function onEntityTrashed(entityId: string): void {
+  // Navigate away from the trashed entity view, back to the entity list
+  if (activeEntityId.value === entityId) {
+    activeEntityId.value = null
+    entityListRef.value?.refresh()
+  }
 }
 
 function openEditModal(et: EntityTypeRow, event: MouseEvent): void {
@@ -250,6 +260,7 @@ onMounted(loadEntityTypes)
             v-if="activeEntityId"
             :entity-id="activeEntityId"
             @saved="entityListRef?.refresh()"
+            @trashed="onEntityTrashed"
           />
           <div v-else class="placeholder">
             <span class="placeholder-icon">
@@ -265,6 +276,11 @@ onMounted(loadEntityTypes)
             </button>
           </div>
         </div>
+      </template>
+
+      <!-- Trash view -->
+      <template v-else-if="activeView === 'trash'">
+        <TrashView />
       </template>
 
       <!-- All other fixed views -->

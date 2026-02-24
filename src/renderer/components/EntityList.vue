@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, defineExpose, watch } from 'vue'
 import { Plus, Trash2 } from 'lucide-vue-next'
+import { entityTrashStatus } from '../stores/mentionStore'
 
 type EntityListItem = {
   id: string
@@ -23,18 +24,38 @@ const emit = defineEmits<{
 
 const entities = ref<EntityListItem[]>([])
 
+// Confirmation state: { id, count } when pending user confirmation
+const pendingTrash = ref<{ id: string; count: number } | null>(null)
+
 async function refresh(): Promise<void> {
   entities.value = (await window.api.invoke('entities:list', {
     type_id: props.typeId,
   })) as EntityListItem[]
 }
 
-async function deleteEntity(id: string): Promise<void> {
+async function requestTrash(id: string): Promise<void> {
+  const { count } = (await window.api.invoke('entities:get-mention-count', { id })) as {
+    count: number
+  }
+  if (count > 0) {
+    pendingTrash.value = { id, count }
+  } else {
+    await finishTrash(id)
+  }
+}
+
+async function finishTrash(id: string): Promise<void> {
+  pendingTrash.value = null
   await window.api.invoke('entities:delete', { id })
+  entityTrashStatus.set(id, true)
   await refresh()
   if (props.activeEntityId === id) {
     emit('select', entities.value.length > 0 ? entities.value[0].id : '')
   }
+}
+
+function cancelTrash(): void {
+  pendingTrash.value = null
 }
 
 function formatDate(isoString: string): string {
@@ -73,20 +94,36 @@ defineExpose({ refresh })
         v-for="entity in entities"
         :key="entity.id"
         class="note-list-item"
-        :class="{ active: entity.id === activeEntityId }"
-        @click="emit('select', entity.id)"
+        :class="{ active: entity.id === activeEntityId, 'is-confirming': pendingTrash?.id === entity.id }"
+        @click="pendingTrash?.id === entity.id ? undefined : emit('select', entity.id)"
       >
-        <div class="note-list-item-body">
-          <div class="note-list-item-title">{{ entity.name || 'Untitled' }}</div>
-          <div class="note-list-item-date">{{ formatDate(entity.updated_at) }}</div>
-        </div>
-        <button
-          class="note-list-item-delete"
-          title="Delete"
-          @click.stop="deleteEntity(entity.id)"
-        >
-          <Trash2 :size="13" />
-        </button>
+        <!-- Trash confirmation overlay -->
+        <template v-if="pendingTrash && pendingTrash.id === entity.id">
+          <div class="trash-confirm" @click.stop>
+            <span class="trash-confirm-msg">
+              Mentioned in {{ pendingTrash.count }} {{ pendingTrash.count === 1 ? 'note' : 'notes' }}.
+              Move to trash?
+            </span>
+            <div class="trash-confirm-btns">
+              <button class="trash-confirm-yes" @click="finishTrash(entity.id)">Move to trash</button>
+              <button class="trash-confirm-no" @click="cancelTrash">Cancel</button>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="note-list-item-body">
+            <div class="note-list-item-title">{{ entity.name || 'Untitled' }}</div>
+            <div class="note-list-item-date">{{ formatDate(entity.updated_at) }}</div>
+          </div>
+          <button
+            class="note-list-item-delete"
+            title="Move to trash"
+            @click.stop="requestTrash(entity.id)"
+          >
+            <Trash2 :size="13" />
+          </button>
+        </template>
       </div>
 
       <div v-if="entities.length === 0" class="note-list-empty">
@@ -95,3 +132,62 @@ defineExpose({ refresh })
     </div>
   </div>
 </template>
+
+<style scoped>
+.note-list-item.is-confirming {
+  cursor: default;
+  padding: 0;
+}
+
+.trash-confirm {
+  width: 100%;
+  padding: 10px 10px 10px 12px;
+  background: var(--color-surface);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trash-confirm-msg {
+  font-size: 12px;
+  color: #f06070;
+  line-height: 1.4;
+}
+
+.trash-confirm-btns {
+  display: flex;
+  gap: 5px;
+}
+
+.trash-confirm-yes,
+.trash-confirm-no {
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.trash-confirm-yes {
+  background: rgba(240, 96, 112, 0.15);
+  border: 1px solid rgba(240, 96, 112, 0.5);
+  color: #f06070;
+}
+
+.trash-confirm-yes:hover {
+  background: rgba(240, 96, 112, 0.25);
+}
+
+.trash-confirm-no {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.trash-confirm-no:hover {
+  color: var(--color-text);
+}
+</style>
