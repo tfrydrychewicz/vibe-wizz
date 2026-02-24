@@ -154,6 +154,11 @@ function onOpenEntity({ entityId, typeId, mode }: { entityId: string; typeId: st
   openContent('entity', entityId, 'Untitled', mode, typeId, et?.icon ?? 'tag', et?.color ?? undefined)
 }
 
+function onOpenNote({ noteId, title, mode }: { noteId: string; title: string; mode: OpenMode }): void {
+  if (mode === 'default') activeView.value = 'notes'
+  openContent('note', noteId, title, mode, undefined, 'file-text')
+}
+
 function onEntityTrashed(entityId: string): void {
   closePanesForContent(entityId)
   entityListRef.value?.refresh()
@@ -343,6 +348,7 @@ onMounted(loadEntityTypes)
                   @loaded="(t) => updatePaneTitle(pane.contentId, t)"
                   @saved="(t) => onNoteSaved(pane.contentId, t)"
                   @open-entity="onOpenEntity"
+                  @open-note="onOpenNote"
                 />
                 <EntityDetail
                   v-else-if="pane.type === 'entity'"

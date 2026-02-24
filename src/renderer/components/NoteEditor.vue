@@ -9,10 +9,18 @@ import TrashedMentionPopup from './TrashedMentionPopup.vue'
 import type { MentionItem } from './MentionList.vue'
 import type { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion'
 import EntityMentionPopup from './EntityMentionPopup.vue'
+import NoteLinkList from './NoteLinkList.vue'
+import NoteLinkChip from './NoteLinkChip.vue'
+import NoteLinkPopup from './NoteLinkPopup.vue'
+import type { NoteLinkItem } from './NoteLinkList.vue'
 import {
   entityTrashStatus,
   registerMentionClickHandler,
 } from '../stores/mentionStore'
+import {
+  noteArchivedStatus,
+  registerNoteLinkClickHandler,
+} from '../stores/noteLinkStore'
 import type { OpenMode } from '../stores/tabStore'
 import Placeholder from '@tiptap/extension-placeholder'
 import { TextStyle } from '@tiptap/extension-text-style'
@@ -48,6 +56,7 @@ const emit = defineEmits<{
   saved: [title: string]
   loaded: [title: string]
   'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
+  'open-note': [{ noteId: string; title: string; mode: OpenMode }]
 }>()
 
 type NoteRow = {
@@ -84,9 +93,17 @@ let isLoading = false
 const popupEntityId = ref<string | null>(null)
 const popupAnchorRect = ref<DOMRect | null>(null)
 
+const popupNoteId = ref<string | null>(null)
+const popupNoteAnchorRect = ref<DOMRect | null>(null)
+
 registerMentionClickHandler((id, rect) => {
   popupEntityId.value = id
   popupAnchorRect.value = rect
+})
+
+registerNoteLinkClickHandler((id, rect) => {
+  popupNoteId.value = id
+  popupNoteAnchorRect.value = rect
 })
 
 function buildMentionSuggestion() {
@@ -134,6 +151,53 @@ function buildMentionSuggestion() {
   }
 }
 
+function buildNoteLinkSuggestion() {
+  return {
+    char: '[[',
+    allowSpaces: true,
+    items: async ({ query }: { query: string }): Promise<NoteLinkItem[]> => {
+      return (await window.api.invoke('notes:search', { query })) as NoteLinkItem[]
+    },
+    render: () => {
+      let renderer: VueRenderer
+      let el: HTMLDivElement
+
+      function positionEl(rect: DOMRect | null | undefined) {
+        if (!el || !rect) return
+        el.style.top = `${rect.bottom + 4}px`
+        el.style.left = `${rect.left}px`
+      }
+
+      return {
+        onStart: (props: SuggestionProps<NoteLinkItem>) => {
+          el = document.createElement('div')
+          el.style.cssText = 'position:fixed;z-index:9999'
+          document.body.appendChild(el)
+          renderer = new VueRenderer(NoteLinkList, { props, editor: props.editor })
+          if (renderer.element) el.appendChild(renderer.element)
+          positionEl(props.clientRect?.())
+        },
+        onUpdate: (props: SuggestionProps<NoteLinkItem>) => {
+          renderer?.updateProps(props)
+          positionEl(props.clientRect?.())
+        },
+        onKeyDown: ({ event }: SuggestionKeyDownProps): boolean => {
+          if (event.key === 'Escape') {
+            el?.remove()
+            renderer?.destroy()
+            return true
+          }
+          return (renderer?.ref as { onKeyDown?: (e: KeyboardEvent) => boolean })?.onKeyDown?.(event) ?? false
+        },
+        onExit: () => {
+          el?.remove()
+          renderer?.destroy()
+        },
+      }
+    },
+  }
+}
+
 const editor = useEditor({
   extensions: [
     StarterKit,
@@ -155,6 +219,14 @@ const editor = useEditor({
       },
     }).configure({
       suggestion: buildMentionSuggestion(),
+    }),
+    Mention.extend({
+      name: 'noteLink',
+      addNodeView() {
+        return VueNodeViewRenderer(NoteLinkChip)
+      },
+    }).configure({
+      suggestion: buildNoteLinkSuggestion(),
     }),
   ],
   content: { type: 'doc', content: [] },
@@ -240,6 +312,17 @@ async function loadNote(noteId: string): Promise<void> {
         entityTrashStatus.set(id, trashed)
       }
     }
+
+    // Fetch archived status for all note-links in this note
+    const noteLinkIds = extractNoteLinkIdsFromBody(note.body)
+    if (noteLinkIds.length > 0) {
+      const archivedMap = (await window.api.invoke('notes:get-archived-status', {
+        ids: noteLinkIds,
+      })) as Record<string, boolean>
+      for (const [id, archived] of Object.entries(archivedMap)) {
+        noteArchivedStatus.set(id, archived)
+      }
+    }
   } finally {
     await nextTick()
     isLoading = false
@@ -259,6 +342,29 @@ function extractMentionIdsFromBody(bodyJson: string): string[] {
     if (!node || typeof node !== 'object') return
     const n = node as Record<string, unknown>
     if (n['type'] === 'mention' && n['attrs'] && typeof n['attrs'] === 'object') {
+      const id = (n['attrs'] as Record<string, unknown>)['id']
+      if (typeof id === 'string' && id) ids.push(id)
+    }
+    if (Array.isArray(n['content'])) {
+      for (const child of n['content']) walk(child)
+    }
+  }
+  walk(doc)
+  return ids
+}
+
+function extractNoteLinkIdsFromBody(bodyJson: string): string[] {
+  let doc: unknown
+  try {
+    doc = JSON.parse(bodyJson)
+  } catch {
+    return []
+  }
+  const ids: string[] = []
+  function walk(node: unknown): void {
+    if (!node || typeof node !== 'object') return
+    const n = node as Record<string, unknown>
+    if (n['type'] === 'noteLink' && n['attrs'] && typeof n['attrs'] === 'object') {
       const id = (n['attrs'] as Record<string, unknown>)['id']
       if (typeof id === 'string' && id) ids.push(id)
     }
@@ -583,6 +689,15 @@ onBeforeUnmount(() => {
       :anchor-rect="popupAnchorRect"
       @close="popupEntityId = null"
       @open-entity="emit('open-entity', $event)"
+    />
+
+    <NoteLinkPopup
+      v-if="popupNoteId && popupNoteAnchorRect"
+      :key="`note-link-${popupNoteId}`"
+      :note-id="popupNoteId"
+      :anchor-rect="popupNoteAnchorRect"
+      @close="popupNoteId = null"
+      @open-note="emit('open-note', $event)"
     />
   </div>
 </template>

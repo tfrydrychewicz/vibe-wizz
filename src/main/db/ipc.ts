@@ -78,6 +78,30 @@ function extractDocPlainText(doc: unknown): string {
   return parts.join(' ')
 }
 
+/** Recursively walk TipTap JSON and collect note IDs from noteLink nodes. */
+function extractNoteLinkIds(bodyJson: string): string[] {
+  let doc: unknown
+  try {
+    doc = JSON.parse(bodyJson)
+  } catch {
+    return []
+  }
+  const ids: string[] = []
+  function walk(node: unknown): void {
+    if (!node || typeof node !== 'object') return
+    const n = node as Record<string, unknown>
+    if (n['type'] === 'noteLink' && n['attrs'] && typeof n['attrs'] === 'object') {
+      const id = (n['attrs'] as Record<string, unknown>)['id']
+      if (typeof id === 'string' && id) ids.push(id)
+    }
+    if (Array.isArray(n['content'])) {
+      for (const child of n['content']) walk(child)
+    }
+  }
+  walk(doc)
+  return ids
+}
+
 /** Recursively walk TipTap JSON and collect entity IDs from mention nodes. */
 function extractMentionIds(bodyJson: string): string[] {
   let doc: unknown
@@ -120,13 +144,14 @@ export function registerDbIpcHandlers(): void {
     return { ok: true, sqliteVersion: version, tables }
   })
 
-  /** notes:create — inserts a new empty note and returns the full row. */
-  ipcMain.handle('notes:create', () => {
+  /** notes:create — inserts a new note and returns the full row. Accepts optional title. */
+  ipcMain.handle('notes:create', (_event, opts?: { title?: string }) => {
     const db = getDatabase()
     const id = randomUUID()
+    const title = opts?.title ?? 'Untitled'
     db.prepare(
       `INSERT INTO notes (id, title, body, body_plain) VALUES (?, ?, ?, ?)`
-    ).run(id, 'Untitled', '{}', '')
+    ).run(id, title, '{}', '')
     return db.prepare('SELECT * FROM notes WHERE id = ?').get(id) as NoteRow
   })
 
@@ -171,6 +196,40 @@ export function registerDbIpcHandlers(): void {
   })
 
   /**
+   * notes:search — searches non-archived notes by title.
+   * Used by the [[ note-link suggestion in the note editor.
+   */
+  ipcMain.handle('notes:search', (_event, { query }: { query: string }) => {
+    const db = getDatabase()
+    return db
+      .prepare(
+        `SELECT id, title FROM notes
+         WHERE title LIKE ? COLLATE NOCASE AND archived_at IS NULL
+         ORDER BY updated_at DESC LIMIT 20`
+      )
+      .all(`%${query}%`)
+  })
+
+  /**
+   * notes:get-archived-status — batch check which note IDs are archived.
+   * Input: { ids: string[] }
+   * Returns: Record<string, boolean> mapping id → is_archived
+   */
+  ipcMain.handle('notes:get-archived-status', (_event, { ids }: { ids: string[] }) => {
+    if (!ids.length) return {}
+    const db = getDatabase()
+    const placeholders = ids.map(() => '?').join(',')
+    const rows = db
+      .prepare(`SELECT id, archived_at FROM notes WHERE id IN (${placeholders})`)
+      .all(...ids) as { id: string; archived_at: string | null }[]
+    const result: Record<string, boolean> = {}
+    for (const row of rows) {
+      result[row.id] = row.archived_at !== null
+    }
+    return result
+  })
+
+  /**
    * notes:update — updates title, body, body_plain, and updated_at for a note.
    * Also syncs entity_mentions from the body JSON.
    * Called by the renderer's auto-save debounce.
@@ -202,6 +261,19 @@ export function registerDbIpcHandlers(): void {
       )
       for (const eid of mentionIds) {
         insertMention.run(id, eid)
+      }
+
+      // Sync note_relations: rebuild manual [[note-link]] references
+      const noteLinkIds = extractNoteLinkIds(body)
+      db.prepare(
+        `DELETE FROM note_relations WHERE source_note_id = ? AND relation_type = 'references'`
+      ).run(id)
+      const insertRelation = db.prepare(
+        `INSERT INTO note_relations (source_note_id, target_note_id, relation_type, strength)
+         VALUES (?, ?, 'references', 1.0)`
+      )
+      for (const targetId of noteLinkIds) {
+        insertRelation.run(id, targetId)
       }
 
       return { ok: true }
