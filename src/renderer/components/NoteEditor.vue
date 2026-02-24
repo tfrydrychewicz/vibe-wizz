@@ -63,6 +63,7 @@ import {
   RemoveFormatting,
   ImagePlus,
   Check, ExternalLink, Trash2,
+  Palette,
 } from 'lucide-vue-next'
 
 const props = defineProps<{ noteId: string }>()
@@ -647,6 +648,27 @@ const unsubscribeActionStatus = window.api.on('action:status-changed', (...args:
   syncTaskItemChecked(actionId, status === 'done')
 })
 
+// Clear the actionId attribute on the linked task item when the action is deleted from the dashboard.
+const unsubscribeActionUnlinked = window.api.on('action:unlinked', (...args: unknown[]) => {
+  const { actionId, noteId } = args[0] as { actionId: string; noteId: string }
+  if (noteId !== props.noteId || !editor.value) return
+  const { state, view } = editor.value
+  const tr = state.tr
+  let found = false
+  state.doc.descendants((node, pos) => {
+    if (node.type.name === 'taskItem' && node.attrs.actionId === actionId) {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, actionId: null })
+      found = true
+      return false
+    }
+    return true
+  })
+  if (found) {
+    view.dispatch(tr)
+    scheduleSave()
+  }
+})
+
 // Called after every loadNote to reconcile task-item checked states with the DB.
 // Handles the case where the user changed action statuses in the dashboard while
 // the note was not mounted (NoteEditor unmounted → push event was never received).
@@ -727,6 +749,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onLinkPopupOutside)
   unsubscribeNer()
   unsubscribeActionStatus()
+  unsubscribeActionUnlinked()
   if (saveTimer) {
     clearTimeout(saveTimer)
     flushSave()
@@ -907,21 +930,27 @@ onBeforeUnmount(() => {
 
       <div class="tb-sep" />
 
-      <!-- Text color -->
-      <div class="tb-group tb-colors">
-        <button
-          v-for="color in TEXT_COLORS"
-          :key="color.value"
-          class="tb-color-swatch"
-          :class="{ active: editor?.isActive('textStyle', { color: color.value }) }"
-          :style="{ '--swatch': color.value }"
-          :title="color.name"
-          @click="editor?.chain().focus().setColor(color.value).run()"
-        />
-        <button class="tb-color-reset" title="Reset color" @click="editor?.chain().focus().unsetColor().run()">
-          <RemoveFormatting :size="10" />
-        </button>
-      </div>
+      <!-- Text color dropdown -->
+      <ToolbarDropdown :active="!!editor?.getAttributes('textStyle').color">
+        <template #label><Palette :size="14" /></template>
+        <div class="tb-color-panel">
+          <button
+            v-for="color in TEXT_COLORS"
+            :key="color.value"
+            class="tb-color-swatch"
+            :class="{ active: editor?.isActive('textStyle', { color: color.value }) }"
+            :style="{ '--swatch': color.value }"
+            :title="color.name"
+            @click="editor?.chain().focus().setColor(color.value).run()"
+          />
+        </div>
+        <div class="tb-color-panel-sep" />
+        <div class="tb-color-panel-reset">
+          <button class="tb-color-reset" title="Reset color" @click="editor?.chain().focus().unsetColor().run()">
+            <RemoveFormatting :size="10" />
+          </button>
+        </div>
+      </ToolbarDropdown>
 
       <div class="tb-sep" />
 

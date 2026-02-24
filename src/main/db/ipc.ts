@@ -883,10 +883,58 @@ export function registerDbIpcHandlers(): void {
     return Object.fromEntries(rows.map((r) => [r.id, r.status]))
   })
 
-  /** action-items:delete — permanently deletes an action item. */
+  /** action-items:delete — permanently deletes an action item.
+   *  If the action was linked to a taskItem node in a note (via actionId attribute),
+   *  clears that attribute in the note body before deleting. */
   ipcMain.handle('action-items:delete', (_event, { id }: { id: string }) => {
     const db = getDatabase()
+
+    // Look up the source note so we can clear the dangling actionId attribute.
+    const actionRow = db
+      .prepare('SELECT source_note_id FROM action_items WHERE id = ?')
+      .get(id) as { source_note_id: string | null } | undefined
+
+    const noteId = actionRow?.source_note_id ?? null
+
+    if (noteId) {
+      const noteRow = db
+        .prepare('SELECT body FROM notes WHERE id = ?')
+        .get(noteId) as { body: string } | undefined
+
+      if (noteRow?.body) {
+        try {
+          const doc = JSON.parse(noteRow.body) as Record<string, unknown>
+          let modified = false
+
+          function clearActionId(node: Record<string, unknown>): void {
+            if (
+              node.type === 'taskItem' &&
+              (node.attrs as Record<string, unknown> | undefined)?.actionId === id
+            ) {
+              ;(node.attrs as Record<string, unknown>).actionId = null
+              modified = true
+            }
+            const children = node.content as Record<string, unknown>[] | undefined
+            if (Array.isArray(children)) children.forEach(clearActionId)
+          }
+
+          clearActionId(doc)
+
+          if (modified) {
+            db.prepare(
+              `UPDATE notes SET body = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`
+            ).run(JSON.stringify(doc), noteId)
+          }
+        } catch {
+          // Malformed body JSON — proceed with deletion anyway.
+        }
+      }
+    }
+
     db.prepare('DELETE FROM action_items WHERE id = ?').run(id)
+
+    if (noteId) pushToRenderer('action:unlinked', { actionId: id, noteId })
+
     return { ok: true }
   })
 
