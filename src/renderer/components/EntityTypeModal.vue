@@ -279,7 +279,7 @@ onMounted(async () => {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 10px;
-  width: 540px;
+  width: 700px;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
@@ -425,7 +425,7 @@ onMounted(async () => {
 }
 
 .field-name-input {
-  flex: 0 0 140px;
+  flex: 0 0 160px;
 }
 
 .field-type-select {
@@ -434,7 +434,7 @@ onMounted(async () => {
 }
 
 .field-extra-input {
-  flex: 0 0 160px;
+  flex: 0 0 180px;
 }
 
 .field-remove-btn {
