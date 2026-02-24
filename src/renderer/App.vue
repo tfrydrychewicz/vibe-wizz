@@ -187,13 +187,17 @@ function onEntityTypeUpdated(entityType: EntityTypeRow): void {
   })
 }
 
+function toggleMaximize(): void {
+  window.api.invoke('window:toggle-maximize')
+}
+
 onMounted(loadEntityTypes)
 </script>
 
 <template>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="sidebar-top" />
+      <div class="sidebar-top" @dblclick="toggleMaximize" />
 
       <nav class="sidebar-nav">
         <!-- Fixed top nav items -->

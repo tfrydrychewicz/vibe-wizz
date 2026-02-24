@@ -1,12 +1,24 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell, ipcMain } from 'electron'
 import { join } from 'path'
 import { initDatabase, closeDatabase } from './db/index'
 import { registerDbIpcHandlers } from './db/ipc'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
+let mainWindow: BrowserWindow | null = null
+
+ipcMain.handle('window:toggle-maximize', () => {
+  const win = mainWindow
+  if (!win) return
+  if (win.isMaximized()) {
+    win.unmaximize()
+  } else {
+    win.maximize()
+  }
+})
+
 function createWindow(): void {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 900,
@@ -22,15 +34,15 @@ function createWindow(): void {
   })
 
   // Open external links in the default browser
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
   })
 
   if (isDev) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL']!)
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']!)
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
 

@@ -45,12 +45,14 @@ body {
   display: flex;
   flex-direction: column;
   user-select: none;
-  /* leave room for native traffic-light buttons on macOS */
-  padding-top: 52px;
 }
 
 .sidebar-top {
-  /* spacer — traffic lights sit here */
+  /* traffic-light area — draggable, double-click to toggle maximize */
+  height: 52px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  cursor: default;
 }
 
 .sidebar-nav {
