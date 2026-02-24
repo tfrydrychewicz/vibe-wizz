@@ -36,10 +36,11 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - IPC handlers in `src/main/db/ipc.ts`:
   - Notes: `db:status`, `notes:create`, `notes:get`, `notes:update`, `notes:list`, `notes:delete`
   - Entity types: `entity-types:list`, `entity-types:create`, `entity-types:delete`
-  - Entities: `entities:list`, `entities:create`, `entities:get`, `entities:update`, `entities:delete`
+  - Entities: `entities:list`, `entities:create`, `entities:get`, `entities:update`, `entities:delete`, `entities:search`
 - `notes:delete` is a soft-delete (sets `archived_at`); `entities:delete` is a hard delete
 - `notes:list` returns only non-archived notes sorted by `updated_at DESC`
 - `entities:list` takes `{type_id}` and returns entities sorted by name
+- `entities:search` takes `{query}` and returns up to 20 entities across all types matching the name (LIKE), joined with entity type name and icon — used by `@` mention suggestion
 - `entity-types:delete` blocks deletion of built-in types (person, project, team, decision, okr)
 - Dev DB: `wizz.dev.db`, Prod DB: `wizz.db` — both in Electron's `userData` directory
 
@@ -49,7 +50,9 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
   - Entity type nav is populated from `entity-types:list` on mount; routes `activeView` to entity type IDs
   - "New entity type" button in sidebar opens `EntityTypeModal`
 - `NoteList.vue` — note list pane (240px); exposes `refresh()` via `defineExpose`; emits `select` and `new-note`
-- `NoteEditor.vue` uses **TipTap** (ProseMirror-based) for rich text editing with auto-save (500ms debounce); emits `saved` after each successful save
+- `NoteEditor.vue` uses **TipTap** (ProseMirror-based) for rich text editing with auto-save (500ms debounce); emits `saved` after each successful save; supports `@` entity mentions via `@tiptap/extension-mention` + `MentionList.vue` suggestion popup
+- `MentionList.vue` — keyboard-navigable entity suggestion dropdown rendered by `VueRenderer` into a fixed-position `document.body` div; exposes `onKeyDown` for TipTap suggestion integration
+- `EntityMentionPopup.vue` — fixed-position popup shown when clicking a `@mention` chip; fetches entity via `entities:get`, displays name/type/fields; emits `open-entity` (→ App.vue navigates to entity page) and `close`; `NoteEditor` emits `open-entity: [{ entityId, typeId }]` which App.vue handles by setting `activeView` + `activeEntityId`
 - `EntityList.vue` — generic entity list pane (mirrors NoteList); props: `typeId`, `typeName`, `activeEntityId`; emits `select`, `new-entity`; exposes `refresh()`
 - `EntityDetail.vue` — dynamic entity form; renders fields from entity type schema JSON; explicit Save button; props: `entityId`; emits `saved`
 - `EntityTypeModal.vue` — full entity type creation modal with field builder (name, icon, color swatches, dynamic field list with type/options/entity_ref picker)

@@ -100,6 +100,11 @@ function onNoteSaved(): void {
   noteListRef.value?.refresh()
 }
 
+function onOpenEntity({ entityId, typeId }: { entityId: string; typeId: string }): void {
+  activeView.value = typeId
+  activeEntityId.value = entityId
+}
+
 function openEditModal(et: EntityTypeRow, event: MouseEvent): void {
   event.stopPropagation()
   editingEntityType.value = et
@@ -217,6 +222,7 @@ onMounted(loadEntityTypes)
             v-if="activeNoteId"
             :note-id="activeNoteId"
             @saved="onNoteSaved"
+            @open-entity="onOpenEntity"
           />
           <div v-else class="placeholder">
             <span class="placeholder-icon">📝</span>

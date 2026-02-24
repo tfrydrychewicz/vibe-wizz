@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
-import { useEditor, EditorContent } from '@tiptap/vue-3'
+import { useEditor, EditorContent, VueRenderer } from '@tiptap/vue-3'
+import Mention from '@tiptap/extension-mention'
 import StarterKit from '@tiptap/starter-kit'
+import MentionList from './MentionList.vue'
+import type { MentionItem } from './MentionList.vue'
+import type { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion'
+import EntityMentionPopup from './EntityMentionPopup.vue'
 import Placeholder from '@tiptap/extension-placeholder'
 import { TextStyle } from '@tiptap/extension-text-style'
 import { Color } from '@tiptap/extension-color'
@@ -32,7 +37,10 @@ import {
 } from 'lucide-vue-next'
 
 const props = defineProps<{ noteId: string }>()
-const emit = defineEmits<{ saved: [] }>()
+const emit = defineEmits<{
+  saved: []
+  'open-entity': [{ entityId: string; typeId: string }]
+}>()
 
 type NoteRow = {
   id: string
@@ -65,6 +73,65 @@ let savedTo = 0
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let isLoading = false
 
+const popupEntityId = ref<string | null>(null)
+const popupAnchorRect = ref<DOMRect | null>(null)
+
+function onMentionClick(e: MouseEvent): void {
+  const mentionEl = (e.target as HTMLElement).closest('.mention') as HTMLElement | null
+  if (mentionEl) {
+    const id = mentionEl.getAttribute('data-id')
+    if (id) {
+      popupEntityId.value = id
+      popupAnchorRect.value = mentionEl.getBoundingClientRect()
+    }
+  }
+}
+
+function buildMentionSuggestion() {
+  return {
+    items: async ({ query }: { query: string }): Promise<MentionItem[]> => {
+      return (await window.api.invoke('entities:search', { query })) as MentionItem[]
+    },
+    render: () => {
+      let renderer: VueRenderer
+      let el: HTMLDivElement
+
+      function positionEl(rect: DOMRect | null | undefined) {
+        if (!el || !rect) return
+        el.style.top = `${rect.bottom + 4}px`
+        el.style.left = `${rect.left}px`
+      }
+
+      return {
+        onStart: (props: SuggestionProps<MentionItem>) => {
+          el = document.createElement('div')
+          el.style.cssText = 'position:fixed;z-index:9999'
+          document.body.appendChild(el)
+          renderer = new VueRenderer(MentionList, { props, editor: props.editor })
+          if (renderer.element) el.appendChild(renderer.element)
+          positionEl(props.clientRect?.())
+        },
+        onUpdate: (props: SuggestionProps<MentionItem>) => {
+          renderer?.updateProps(props)
+          positionEl(props.clientRect?.())
+        },
+        onKeyDown: ({ event }: SuggestionKeyDownProps): boolean => {
+          if (event.key === 'Escape') {
+            el?.remove()
+            renderer?.destroy()
+            return true
+          }
+          return (renderer?.ref as { onKeyDown?: (e: KeyboardEvent) => boolean })?.onKeyDown?.(event) ?? false
+        },
+        onExit: () => {
+          el?.remove()
+          renderer?.destroy()
+        },
+      }
+    },
+  }
+}
+
 const editor = useEditor({
   extensions: [
     StarterKit,
@@ -80,6 +147,10 @@ const editor = useEditor({
     TiptapImage,
     TaskList,
     TaskItem.configure({ nested: true }),
+    Mention.configure({
+      HTMLAttributes: { class: 'mention' },
+      suggestion: buildMentionSuggestion(),
+    }),
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -452,6 +523,33 @@ onBeforeUnmount(() => {
 
     </div>
 
-    <EditorContent :editor="editor" class="note-body" />
+    <div class="note-body" @click="onMentionClick">
+      <EditorContent :editor="editor" />
+    </div>
+
+    <EntityMentionPopup
+      v-if="popupEntityId && popupAnchorRect"
+      :key="popupEntityId"
+      :entity-id="popupEntityId"
+      :anchor-rect="popupAnchorRect"
+      @close="popupEntityId = null"
+      @open-entity="emit('open-entity', $event)"
+    />
   </div>
 </template>
+
+<style scoped>
+:deep(.mention) {
+  background: rgba(91, 141, 239, 0.15);
+  border-radius: 3px;
+  color: var(--color-accent, #5b8def);
+  font-weight: 500;
+  padding: 1px 3px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+:deep(.mention:hover) {
+  background: rgba(91, 141, 239, 0.25);
+}
+</style>

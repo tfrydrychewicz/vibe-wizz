@@ -495,7 +495,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] TipTap note editor with auto-save
 - [x] Basic note CRUD + list view
 - [x] Entity types + entity CRUD
-- [ ] `@` mentions in editor
+- [x] `@` mentions in editor
 - [ ] `[[` mentions in editor
 - [ ] Note templates
 

@@ -188,6 +188,24 @@ export function registerDbIpcHandlers(): void {
 
   // ─── Entities ────────────────────────────────────────────────────────────────
 
+  /**
+   * entities:search — searches entities by name across all types.
+   * Used by the @mention suggestion in the note editor.
+   */
+  ipcMain.handle('entities:search', (_event, { query }: { query: string }) => {
+    const db = getDatabase()
+    return db
+      .prepare(
+        `SELECT e.id, e.name, e.type_id, et.name AS type_name, et.icon AS type_icon
+         FROM entities e
+         JOIN entity_types et ON e.type_id = et.id
+         WHERE e.name LIKE ? COLLATE NOCASE
+         ORDER BY e.name COLLATE NOCASE
+         LIMIT 20`
+      )
+      .all(`%${query}%`)
+  })
+
   /** entities:list — returns all entities of a given type, sorted by name. */
   ipcMain.handle('entities:list', (_event, { type_id }: { type_id: string }) => {
     const db = getDatabase()
