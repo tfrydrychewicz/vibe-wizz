@@ -6,17 +6,26 @@ const emit = defineEmits<{ close: [] }>()
 
 const apiKey = ref('')
 const showKey = ref(false)
+const anthropicKey = ref('')
+const showAnthropicKey = ref(false)
 const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const value = (await window.api.invoke('settings:get', { key: 'openai_api_key' })) as string | null
-  apiKey.value = value ?? ''
+  const [openai, anthropic] = await Promise.all([
+    window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
+  ])
+  apiKey.value = openai ?? ''
+  anthropicKey.value = anthropic ?? ''
 })
 
 async function save(): Promise<void> {
   saving.value = true
-  await window.api.invoke('settings:set', { key: 'openai_api_key', value: apiKey.value.trim() })
+  await Promise.all([
+    window.api.invoke('settings:set', { key: 'openai_api_key', value: apiKey.value.trim() }),
+    window.api.invoke('settings:set', { key: 'anthropic_api_key', value: anthropicKey.value.trim() }),
+  ])
   saving.value = false
   savedFeedback.value = true
   setTimeout(() => { savedFeedback.value = false }, 2000)
@@ -57,6 +66,29 @@ function onBackdropKeydown(e: KeyboardEvent): void {
               />
               <button class="toggle-btn" :title="showKey ? 'Hide' : 'Show'" @click="showKey = !showKey">
                 <EyeOff v-if="showKey" :size="14" />
+                <Eye v-else :size="14" />
+              </button>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label class="modal-label" for="anthropic-key">Anthropic API Key</label>
+            <p class="field-hint">
+              Used for generating note summaries (L2 embeddings) via Claude Haiku.
+              Stored locally on your device only.
+            </p>
+            <div class="key-row">
+              <input
+                id="anthropic-key"
+                v-model="anthropicKey"
+                :type="showAnthropicKey ? 'text' : 'password'"
+                class="modal-input key-input"
+                placeholder="sk-ant-..."
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button class="toggle-btn" :title="showAnthropicKey ? 'Hide' : 'Show'" @click="showAnthropicKey = !showAnthropicKey">
+                <EyeOff v-if="showAnthropicKey" :size="14" />
                 <Eye v-else :size="14" />
               </button>
             </div>

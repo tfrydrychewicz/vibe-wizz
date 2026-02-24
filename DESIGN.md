@@ -507,7 +507,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 ### Phase 2 — Intelligence
 - [x] sqlite-vec integration + embedding pipeline
 - [x] Chunking + contextual retrieval
-- [ ] Claude integration for note summaries (L2)
+- [x] Claude integration for note summaries (L2)
 - [ ] FTS + vector hybrid search
 - [ ] Auto entity detection (NER) 
 - [ ] Action item extraction from notes (alsay available on `/` command in the note)
