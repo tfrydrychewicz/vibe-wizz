@@ -103,6 +103,11 @@ const linkInputValue = ref('')
 const linkInputRef = ref<HTMLInputElement | null>(null)
 const linkPopupRef = ref<HTMLElement | null>(null)
 
+const showDatePicker = ref(false)
+const datePickerValue = ref('')
+const datePickerInputRef = ref<HTMLInputElement | null>(null)
+const datePickerPopupRef = ref<HTMLDivElement | null>(null)
+
 type AutoDetectionRow = {
   entity_id: string
   entity_name: string
@@ -238,6 +243,7 @@ function buildNoteLinkSuggestion() {
 
 const SLASH_COMMANDS: SlashCommandItem[] = [
   { id: 'action', label: 'Extract action items', description: 'AI-extract tasks and insert as a list', icon: 'sparkles' },
+  { id: 'date', label: 'Insert date', description: 'Pick a date to insert at cursor', icon: 'calendar' },
 ]
 
 async function extractAndInsertActions(
@@ -266,6 +272,47 @@ async function extractAndInsertActions(
   }
 }
 
+function openDatePicker(): void {
+  const today = new Date()
+  const yyyy = today.getFullYear()
+  const mm = String(today.getMonth() + 1).padStart(2, '0')
+  const dd = String(today.getDate()).padStart(2, '0')
+  datePickerValue.value = `${yyyy}-${mm}-${dd}`
+  showDatePicker.value = true
+  nextTick(() => {
+    datePickerInputRef.value?.focus()
+    datePickerInputRef.value?.showPicker?.()
+  })
+}
+
+function confirmDate(): void {
+  if (!datePickerValue.value || !editor.value) { closeDatePicker(); return }
+  const [yyyy, mm, dd] = datePickerValue.value.split('-').map(Number)
+  const formatted = new Date(yyyy, mm - 1, dd).toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  })
+  editor.value.chain().focus().insertContent(formatted).run()
+  closeDatePicker()
+}
+
+function closeDatePicker(): void {
+  showDatePicker.value = false
+}
+
+function onDatePickerOutside(e: MouseEvent): void {
+  if (datePickerPopupRef.value && !datePickerPopupRef.value.contains(e.target as Node)) {
+    closeDatePicker()
+  }
+}
+
+watch(showDatePicker, (open) => {
+  if (open) {
+    document.addEventListener('mousedown', onDatePickerOutside)
+  } else {
+    document.removeEventListener('mousedown', onDatePickerOutside)
+  }
+})
+
 function buildSlashCommandSuggestion() {
   return {
     char: '/',
@@ -281,6 +328,8 @@ function buildSlashCommandSuggestion() {
           ed as unknown as { chain(): { focus(): { insertContent(c: unknown): { run(): void } } } },
           bodyPlain
         )
+      } else if (item.id === 'date') {
+        openDatePicker()
       }
     },
     render: () => {
@@ -747,6 +796,7 @@ watch(title, scheduleSave)
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onLinkPopupOutside)
+  document.removeEventListener('mousedown', onDatePickerOutside)
   unsubscribeNer()
   unsubscribeActionStatus()
   unsubscribeActionUnlinked()
@@ -1008,6 +1058,25 @@ onBeforeUnmount(() => {
       @insert="onInsertAutoMention"
     />
 
+    <!-- Date picker popup (shown when /date slash command is used) -->
+    <div v-if="showDatePicker" class="date-picker-overlay">
+      <div ref="datePickerPopupRef" class="date-picker-popup">
+        <span class="date-picker-label">Insert date</span>
+        <input
+          ref="datePickerInputRef"
+          v-model="datePickerValue"
+          type="date"
+          class="date-picker-input"
+          @keydown.enter.prevent="confirmDate"
+          @keydown.esc="closeDatePicker"
+        />
+        <div class="date-picker-actions">
+          <button class="date-picker-cancel" @mousedown.prevent @click="closeDatePicker">Cancel</button>
+          <button class="date-picker-confirm" @mousedown.prevent @click="confirmDate">Insert</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Extracting actions indicator (shown while /action slash command calls Claude) -->
     <div v-if="isExtractingActions" class="actions-extracting">
       <span class="actions-extracting-spinner" />
@@ -1017,6 +1086,87 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.date-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.date-picker-popup {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 220px;
+}
+
+.date-picker-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.date-picker-input {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text);
+  font-size: 13px;
+  padding: 6px 8px;
+  width: 100%;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.date-picker-input:focus {
+  border-color: var(--color-accent);
+}
+
+.date-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.date-picker-cancel,
+.date-picker-confirm {
+  border: none;
+  border-radius: 5px;
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.date-picker-cancel {
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.date-picker-cancel:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text);
+}
+
+.date-picker-confirm {
+  background: var(--color-accent, #5b8def);
+  color: #fff;
+}
+
+.date-picker-confirm:hover {
+  opacity: 0.88;
+}
+
 .actions-extracting {
   position: fixed;
   bottom: 24px;
