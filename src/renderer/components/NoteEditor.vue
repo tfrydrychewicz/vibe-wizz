@@ -39,6 +39,13 @@ const TEXT_COLORS = [
 const title = ref('Untitled')
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
 
+const showLinkPopup = ref(false)
+const linkInputValue = ref('')
+const linkInputRef = ref<HTMLInputElement | null>(null)
+const linkPopupRef = ref<HTMLElement | null>(null)
+
+let savedFrom = 0
+let savedTo = 0
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let isLoading = false
 
@@ -138,26 +145,58 @@ async function loadNote(noteId: string): Promise<void> {
 
 function setLink(): void {
   if (!editor.value) return
-
-  // Capture selection before window.prompt causes the editor to lose focus
-  // (ProseMirror clears the DOM selection on blur; saving from/to lets us restore it)
   const { from, to, empty } = editor.value.state.selection
   const isInLink = editor.value.isActive('link')
-
-  // Nothing to link: no selected text and cursor is not inside an existing link
   if (empty && !isInLink) return
 
-  const prev = editor.value.getAttributes('link').href as string | undefined
-  const url = window.prompt('Enter URL', prev ?? 'https://')
-  if (url === null) return
+  savedFrom = from
+  savedTo = to
+  const existing = editor.value.getAttributes('link').href as string | undefined
+  linkInputValue.value = existing ?? ''
+  showLinkPopup.value = true
+  nextTick(() => linkInputRef.value?.focus())
+}
 
-  // Restore the selection that was lost when the prompt opened, then apply
+function confirmLink(): void {
+  if (!editor.value) return
+  const url = linkInputValue.value.trim()
+  closeLinkPopup()
   if (url === '') {
-    editor.value.chain().focus().setTextSelection({ from, to }).extendMarkRange('link').unsetLink().run()
+    editor.value.chain().focus().setTextSelection({ from: savedFrom, to: savedTo }).extendMarkRange('link').unsetLink().run()
   } else {
-    editor.value.chain().focus().setTextSelection({ from, to }).extendMarkRange('link').setLink({ href: url }).run()
+    editor.value.chain().focus().setTextSelection({ from: savedFrom, to: savedTo }).extendMarkRange('link').setLink({ href: url }).run()
   }
 }
+
+function removeLinkAndClose(): void {
+  if (!editor.value) return
+  closeLinkPopup()
+  editor.value.chain().focus().setTextSelection({ from: savedFrom, to: savedTo }).extendMarkRange('link').unsetLink().run()
+}
+
+function openLink(): void {
+  const url = linkInputValue.value.trim() || (editor.value?.getAttributes('link').href as string | undefined)
+  if (url) window.open(url, '_blank')
+}
+
+function closeLinkPopup(): void {
+  showLinkPopup.value = false
+  linkInputValue.value = ''
+}
+
+function onLinkPopupOutside(e: MouseEvent): void {
+  if (linkPopupRef.value && !linkPopupRef.value.contains(e.target as Node)) {
+    closeLinkPopup()
+  }
+}
+
+watch(showLinkPopup, (open) => {
+  if (open) {
+    document.addEventListener('mousedown', onLinkPopupOutside)
+  } else {
+    document.removeEventListener('mousedown', onLinkPopupOutside)
+  }
+})
 
 function insertImage(): void {
   const url = window.prompt('Enter image URL')
@@ -189,6 +228,7 @@ watch(
 watch(title, scheduleSave)
 
 onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onLinkPopupOutside)
   if (saveTimer) {
     clearTimeout(saveTimer)
     flushSave()
@@ -348,7 +388,48 @@ onBeforeUnmount(() => {
         <button class="tb-btn tb-code"      :class="{ active: editor?.isActive('code') }"      title="Inline code"       @click="editor?.chain().focus().toggleCode().run()">&lt;/&gt;</button>
         <button class="tb-btn tb-underline" :class="{ active: editor?.isActive('underline') }" title="Underline (Cmd+U)" @click="editor?.chain().focus().toggleUnderline().run()">U</button>
         <button class="tb-btn tb-highlight" :class="{ active: editor?.isActive('highlight') }" title="Highlight"         @click="editor?.chain().focus().toggleHighlight().run()">▐</button>
-        <button class="tb-btn"              :class="{ active: editor?.isActive('link') }"       title="Link"              @click="setLink()">⛓</button>
+        <div ref="linkPopupRef" class="tb-link-wrapper">
+          <button class="tb-btn" :class="{ active: editor?.isActive('link') || showLinkPopup }" title="Link" @mousedown.prevent @click="setLink()">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6.5 9.5a4.5 4.5 0 0 0 6.364 0l1.768-1.768a4.5 4.5 0 0 0-6.364-6.364L7.5 2.636"/>
+              <path d="M9.5 6.5a4.5 4.5 0 0 0-6.364 0L1.368 8.268a4.5 4.5 0 0 0 6.364 6.364L8.5 13.364"/>
+            </svg>
+          </button>
+          <div v-if="showLinkPopup" class="tb-link-popup">
+            <input
+              ref="linkInputRef"
+              v-model="linkInputValue"
+              class="tb-link-input"
+              placeholder="Paste a link..."
+              type="url"
+              spellcheck="false"
+              @keydown.enter.prevent="confirmLink"
+              @keydown.esc="closeLinkPopup"
+            />
+            <div class="tb-link-sep" />
+            <button class="tb-link-action" title="Apply (Enter)" @mousedown.prevent @click="confirmLink">
+              <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="2,7 5.5,10.5 12,3"/>
+              </svg>
+            </button>
+            <button class="tb-link-action" title="Open link" @mousedown.prevent @click="openLink">
+              <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5.5 2H2a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V8.5"/>
+                <polyline points="8.5,1 13,1 13,5.5"/>
+                <line x1="6" y1="8" x2="13" y2="1"/>
+              </svg>
+            </button>
+            <button class="tb-link-action tb-link-remove" title="Remove link" @mousedown.prevent @click="removeLinkAndClose">
+              <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1.5,3.5 2.5,3.5 12.5,3.5"/>
+                <path d="M4.5 3.5V2.5h5v1"/>
+                <path d="M11 3.5l-.6 8H3.6l-.6-8"/>
+                <line x1="5.5" y1="6.5" x2="5.5" y2="10"/>
+                <line x1="8.5" y1="6.5" x2="8.5" y2="10"/>
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="tb-sep" />
