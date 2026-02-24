@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, onMounted } from 'vue'
 import { marked } from 'marked'
 import { X, Trash2, Send, MessageSquare } from 'lucide-vue-next'
 import { messages, isLoading, clearMessages, type ChatMessage } from '../stores/chatStore'
@@ -16,6 +16,10 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // Configure marked: no GFM tables/extensions needed beyond basic, keep it safe
 marked.setOptions({ breaks: true })
+
+onMounted(() => {
+  nextTick(() => textareaRef.value?.focus())
+})
 
 function scrollToBottom(): void {
   nextTick(() => {
