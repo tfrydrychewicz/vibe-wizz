@@ -137,13 +137,25 @@ async function loadNote(noteId: string): Promise<void> {
 }
 
 function setLink(): void {
-  const prev = editor.value?.getAttributes('link').href as string | undefined
+  if (!editor.value) return
+
+  // Capture selection before window.prompt causes the editor to lose focus
+  // (ProseMirror clears the DOM selection on blur; saving from/to lets us restore it)
+  const { from, to, empty } = editor.value.state.selection
+  const isInLink = editor.value.isActive('link')
+
+  // Nothing to link: no selected text and cursor is not inside an existing link
+  if (empty && !isInLink) return
+
+  const prev = editor.value.getAttributes('link').href as string | undefined
   const url = window.prompt('Enter URL', prev ?? 'https://')
   if (url === null) return
+
+  // Restore the selection that was lost when the prompt opened, then apply
   if (url === '') {
-    editor.value?.chain().focus().extendMarkRange('link').unsetLink().run()
+    editor.value.chain().focus().setTextSelection({ from, to }).extendMarkRange('link').unsetLink().run()
   } else {
-    editor.value?.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
+    editor.value.chain().focus().setTextSelection({ from, to }).extendMarkRange('link').setLink({ href: url }).run()
   }
 }
 
