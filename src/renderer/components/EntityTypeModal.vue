@@ -48,6 +48,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   created: [entityType: EntityTypeRow]
   updated: [entityType: EntityTypeRow]
+  deleted: [id: string]
   cancel: []
 }>()
 
@@ -62,6 +63,23 @@ const fields = ref<FieldDef[]>([])
 const existingTypes = ref<ExistingType[]>([])
 const error = ref('')
 const isSaving = ref(false)
+const confirmingDelete = ref(false)
+const isDeleting = ref(false)
+const deleteError = ref('')
+
+async function deleteType(): Promise<void> {
+  if (!props.editingType) return
+  isDeleting.value = true
+  deleteError.value = ''
+  const result = (await window.api.invoke('entity-types:delete', { id: props.editingType.id })) as { ok: boolean; error?: string }
+  isDeleting.value = false
+  if (result?.error) {
+    deleteError.value = result.error
+    confirmingDelete.value = false
+  } else {
+    emit('deleted', props.editingType.id)
+  }
+}
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: 'text', label: 'Text' },
@@ -255,10 +273,29 @@ onMounted(async () => {
       </div>
 
       <div class="modal-footer">
-        <button class="btn-secondary" @click="emit('cancel')">Cancel</button>
-        <button class="btn-primary" :disabled="isSaving" @click="save">
-          {{ isSaving ? (isEditMode ? 'Saving…' : 'Creating…') : (isEditMode ? 'Save' : 'Create') }}
-        </button>
+        <!-- Delete (edit mode only) -->
+        <template v-if="isEditMode">
+          <template v-if="confirmingDelete">
+            <span class="delete-confirm-msg">Delete this entity type?</span>
+            <button class="btn-delete-confirm" :disabled="isDeleting" @click="deleteType">
+              {{ isDeleting ? 'Deleting…' : 'Delete' }}
+            </button>
+            <button class="btn-secondary" @click="confirmingDelete = false">Cancel</button>
+          </template>
+          <template v-else>
+            <button class="btn-delete" @click="confirmingDelete = true">
+              <Trash2 :size="13" /> Delete type
+            </button>
+          </template>
+          <p v-if="deleteError" class="modal-error delete-error">{{ deleteError }}</p>
+        </template>
+
+        <div class="modal-footer-right">
+          <button class="btn-secondary" @click="emit('cancel')">Cancel</button>
+          <button class="btn-primary" :disabled="isSaving" @click="save">
+            {{ isSaving ? (isEditMode ? 'Saving…' : 'Creating…') : (isEditMode ? 'Save' : 'Create') }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -462,9 +499,67 @@ onMounted(async () => {
   padding: 12px 20px;
   border-top: 1px solid var(--color-border);
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.modal-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.btn-delete {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.btn-delete:hover {
+  background: rgba(240, 96, 112, 0.1);
+  color: #f06070;
+  border-color: rgba(240, 96, 112, 0.4);
+}
+
+.delete-confirm-msg {
+  font-size: 12px;
+  color: #f06070;
+}
+
+.btn-delete-confirm {
+  padding: 6px 12px;
+  background: rgba(240, 96, 112, 0.15);
+  border: 1px solid rgba(240, 96, 112, 0.5);
+  border-radius: 5px;
+  color: #f06070;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.btn-delete-confirm:hover:not(:disabled) {
+  background: rgba(240, 96, 112, 0.25);
+}
+
+.btn-delete-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-error {
+  margin: 0;
 }
 
 /* btn-primary has global margin-top: 16px — reset it in modal footer */

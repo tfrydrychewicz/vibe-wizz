@@ -251,6 +251,14 @@ function onEntityTypeUpdated(entityType: EntityTypeRow): void {
   })
 }
 
+function onEntityTypeDeleted(id: string): void {
+  closeModal()
+  if (activeView.value === id) {
+    activeView.value = 'notes'
+  }
+  loadEntityTypes()
+}
+
 function toggleMaximize(): void {
   window.api.invoke('window:toggle-maximize')
 }
@@ -541,6 +549,7 @@ onBeforeUnmount(() => {
       v-if="editingEntityType"
       :editing-type="editingEntityType"
       @updated="onEntityTypeUpdated"
+      @deleted="onEntityTypeDeleted"
       @cancel="closeModal"
     />
 
