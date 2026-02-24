@@ -3,8 +3,12 @@ import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { useEditor, EditorContent, VueRenderer, VueNodeViewRenderer } from '@tiptap/vue-3'
 import Mention from '@tiptap/extension-mention'
 import StarterKit from '@tiptap/starter-kit'
+import { Extension } from '@tiptap/core'
+import Suggestion from '@tiptap/suggestion'
 import MentionList from './MentionList.vue'
 import MentionChip from './MentionChip.vue'
+import SlashCommandList from './SlashCommandList.vue'
+import type { SlashCommandItem } from './SlashCommandList.vue'
 import TrashedMentionPopup from './TrashedMentionPopup.vue'
 import type { MentionItem } from './MentionList.vue'
 import type { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion'
@@ -35,6 +39,8 @@ import { Link } from '@tiptap/extension-link'
 import { Image as TiptapImage } from '@tiptap/extension-image'
 import { TaskList } from '@tiptap/extension-task-list'
 import { TaskItem } from '@tiptap/extension-task-item'
+import ActionTaskItem from './ActionTaskItem.vue'
+import { setCurrentNoteId, registerPromoteHandler } from '../stores/taskActionStore'
 import ToolbarDropdown from './ToolbarDropdown.vue'
 import AutoMentionPopup from './AutoMentionPopup.vue'
 import { AutoMentionDecoration } from '../extensions/AutoMentionDecoration'
@@ -87,6 +93,9 @@ const TEXT_COLORS = [
 
 const title = ref('Untitled')
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
+
+// Loading state while /action slash command calls Claude to extract actions
+const isExtractingActions = ref(false)
 
 const showLinkPopup = ref(false)
 const linkInputValue = ref('')
@@ -226,6 +235,93 @@ function buildNoteLinkSuggestion() {
   }
 }
 
+const SLASH_COMMANDS: SlashCommandItem[] = [
+  { id: 'action', label: 'Extract action items', description: 'AI-extract tasks and insert as a list', icon: 'sparkles' },
+]
+
+async function extractAndInsertActions(
+  ed: { chain(): { focus(): { insertContent(c: unknown): { run(): void } } } },
+  bodyPlain: string
+): Promise<void> {
+  isExtractingActions.value = true
+  try {
+    const result = (await window.api.invoke('notes:extract-actions', { body_plain: bodyPlain })) as {
+      items: string[]
+    }
+    if (!result.items.length) return
+    ed.chain().focus().insertContent([
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Action Items' }] },
+      {
+        type: 'taskList',
+        content: result.items.map((t) => ({
+          type: 'taskItem',
+          attrs: { checked: false, actionId: null },
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }],
+        })),
+      },
+    ]).run()
+  } finally {
+    isExtractingActions.value = false
+  }
+}
+
+function buildSlashCommandSuggestion() {
+  return {
+    char: '/',
+    allowSpaces: false,
+    startOfLine: false,
+    items: ({ query }: { query: string }): SlashCommandItem[] =>
+      SLASH_COMMANDS.filter((c) => c.label.toLowerCase().includes(query.toLowerCase())),
+    command: ({ editor: ed, range, props: item }: { editor: { chain(): { focus(): { deleteRange(r: { from: number; to: number }): { run(): void } } } }; range: { from: number; to: number }; props: SlashCommandItem }) => {
+      ed.chain().focus().deleteRange(range).run()
+      if (item.id === 'action') {
+        const bodyPlain = (editor.value?.getText()) ?? ''
+        void extractAndInsertActions(
+          ed as unknown as { chain(): { focus(): { insertContent(c: unknown): { run(): void } } } },
+          bodyPlain
+        )
+      }
+    },
+    render: () => {
+      let renderer: VueRenderer
+      let el: HTMLDivElement
+
+      function positionEl(rect: DOMRect | null | undefined) {
+        if (!el || !rect) return
+        el.style.top = `${rect.bottom + 4}px`
+        el.style.left = `${rect.left}px`
+      }
+
+      return {
+        onStart: (p: SuggestionProps<SlashCommandItem>) => {
+          el = document.createElement('div')
+          el.style.cssText = 'position:fixed;z-index:9999'
+          document.body.appendChild(el)
+          renderer = new VueRenderer(SlashCommandList, { props: p, editor: p.editor })
+          if (renderer.element) el.appendChild(renderer.element)
+          positionEl(p.clientRect?.())
+        },
+        onUpdate: (p: SuggestionProps<SlashCommandItem>) => {
+          renderer?.updateProps(p)
+          positionEl(p.clientRect?.())
+        },
+        onKeyDown: ({ event }: SuggestionKeyDownProps): boolean => {
+          if (event.key === 'Escape') { el?.remove(); renderer?.destroy(); return true }
+          return (renderer?.ref as { onKeyDown?: (e: KeyboardEvent) => boolean })?.onKeyDown?.(event) ?? false
+        },
+        onExit: () => { el?.remove(); renderer?.destroy() },
+      }
+    },
+  }
+}
+
+const SlashCommandExtension = Extension.create({
+  name: 'slashCommand',
+  addProseMirrorPlugins() {
+    return [Suggestion({ editor: this.editor, ...buildSlashCommandSuggestion() })]
+  },
+})
+
 const editor = useEditor({
   extensions: [
     StarterKit,
@@ -240,7 +336,21 @@ const editor = useEditor({
     Link.configure({ openOnClick: false }),
     TiptapImage,
     TaskList,
-    TaskItem.configure({ nested: true }),
+    TaskItem.extend({
+      addAttributes() {
+        return {
+          ...this.parent?.(),
+          actionId: {
+            default: null,
+            parseHTML: (el) => el.getAttribute('data-action-id') ?? null,
+            renderHTML: (attrs) => (attrs.actionId ? { 'data-action-id': attrs.actionId } : {}),
+          },
+        }
+      },
+      addNodeView() {
+        return VueNodeViewRenderer(ActionTaskItem)
+      },
+    }).configure({ nested: true }),
     Mention.extend({
       addNodeView() {
         return VueNodeViewRenderer(MentionChip)
@@ -257,6 +367,7 @@ const editor = useEditor({
       suggestion: buildNoteLinkSuggestion(),
     }),
     AutoMentionDecoration,
+    SlashCommandExtension,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -338,6 +449,7 @@ async function loadNote(noteId: string): Promise<void> {
     const note = (await window.api.invoke('notes:get', { id: noteId })) as NoteRow | null
     if (!note || !editor.value) return
     title.value = note.title
+    setCurrentNoteId(noteId)
     let content: object = { type: 'doc', content: [] }
     try {
       if (note.body && note.body !== '{}') {
@@ -376,6 +488,8 @@ async function loadNote(noteId: string): Promise<void> {
   emit('loaded', title.value || 'Untitled')
   // Load NER-detected entity mentions for decoration hints
   void fetchAndSetAutoDetections(noteId)
+  // Reconcile task-item checked states against live action item statuses
+  void syncTaskItemsWithDB()
 }
 
 function extractMentionIdsFromBody(bodyJson: string): string[] {
@@ -505,6 +619,88 @@ function onInsertAutoMention(payload: {
   scheduleHideAutoDetection(0)
 }
 
+// Register the promote handler — called when the ActionTaskItem "Add to dashboard" button is clicked.
+// Uses the module-level store so the NodeView (which runs outside Vue's component tree) can call it.
+registerPromoteHandler(async (taskText: string, pos: number) => {
+  const created = (await window.api.invoke('action-items:create', {
+    title: taskText,
+    source_note_id: props.noteId,
+    extraction_type: 'manual',
+  })) as { id: string }
+  if (!editor.value) return
+  const { state, view } = editor.value
+  const tr = state.tr
+  state.doc.descendants((node, nodePos) => {
+    if (node.type.name === 'taskItem' && nodePos === pos) {
+      tr.setNodeMarkup(nodePos, undefined, { ...node.attrs, actionId: created.id })
+      return false
+    }
+    return true
+  })
+  view.dispatch(tr)
+  scheduleSave()
+})
+
+// Sync task item checked state when an action item's status changes from the dashboard.
+const unsubscribeActionStatus = window.api.on('action:status-changed', (...args: unknown[]) => {
+  const { actionId, status } = args[0] as { actionId: string; status: string }
+  syncTaskItemChecked(actionId, status === 'done')
+})
+
+// Called after every loadNote to reconcile task-item checked states with the DB.
+// Handles the case where the user changed action statuses in the dashboard while
+// the note was not mounted (NoteEditor unmounted → push event was never received).
+async function syncTaskItemsWithDB(): Promise<void> {
+  if (!editor.value) return
+  const linked: { pos: number; actionId: string; checked: boolean }[] = []
+  editor.value.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'taskItem' && node.attrs.actionId) {
+      linked.push({ pos, actionId: node.attrs.actionId as string, checked: node.attrs.checked as boolean })
+    }
+    return true
+  })
+  if (!linked.length) return
+  const statuses = (await window.api.invoke('action-items:get-statuses', {
+    ids: linked.map((l) => l.actionId),
+  })) as Record<string, string>
+  const { state, view } = editor.value
+  const tr = state.tr
+  let changed = false
+  for (const { pos, actionId, checked } of linked) {
+    const shouldBeChecked = statuses[actionId] === 'done'
+    if (shouldBeChecked !== checked) {
+      const node = state.doc.nodeAt(pos)
+      if (node) {
+        tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: shouldBeChecked })
+        changed = true
+      }
+    }
+  }
+  if (changed) {
+    view.dispatch(tr)
+    scheduleSave()
+  }
+}
+
+function syncTaskItemChecked(actionId: string, checked: boolean): void {
+  if (!editor.value) return
+  const { state, view } = editor.value
+  const tr = state.tr
+  let found = false
+  state.doc.descendants((node, pos) => {
+    if (node.type.name === 'taskItem' && node.attrs.actionId === actionId) {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked })
+      found = true
+      return false
+    }
+    return true
+  })
+  if (found) {
+    view.dispatch(tr)
+    scheduleSave()
+  }
+}
+
 watch(
   () => props.noteId,
   async (newId, oldId) => {
@@ -530,6 +726,7 @@ watch(title, scheduleSave)
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onLinkPopupOutside)
   unsubscribeNer()
+  unsubscribeActionStatus()
   if (saveTimer) {
     clearTimeout(saveTimer)
     flushSave()
@@ -781,8 +978,46 @@ onBeforeUnmount(() => {
       :detection="hoveredAutoDetection"
       @insert="onInsertAutoMention"
     />
+
+    <!-- Extracting actions indicator (shown while /action slash command calls Claude) -->
+    <div v-if="isExtractingActions" class="actions-extracting">
+      <span class="actions-extracting-spinner" />
+      Extracting action items…
+    </div>
   </div>
 </template>
 
 <style scoped>
+.actions-extracting {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 9000;
+  pointer-events: none;
+}
+
+.actions-extracting-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 </style>

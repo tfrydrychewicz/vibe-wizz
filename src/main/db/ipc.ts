@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto'
 import { getDatabase, isVecLoaded } from './index'
 import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
+import { extractActionItems } from '../embedding/actionExtractor'
+import { pushToRenderer } from '../push'
 
 type NoteRow = {
   id: string
@@ -714,6 +716,177 @@ export function registerDbIpcHandlers(): void {
       }[]
 
     return { notes, entities }
+  })
+
+  // ─── Action Items ─────────────────────────────────────────────────────────────
+
+  /**
+   * action-items:list — returns action items, optionally filtered by status or source note.
+   * Non-cancelled items are returned by default. Includes source note title and assignee name.
+   */
+  ipcMain.handle('action-items:list', (_event, opts?: { status?: string; source_note_id?: string }) => {
+    const db = getDatabase()
+    const SELECT = `
+      SELECT ai.id, ai.title, ai.status, ai.extraction_type, ai.confidence,
+             ai.created_at, ai.completed_at, ai.source_note_id, ai.assigned_entity_id, ai.due_date,
+             n.title AS source_note_title, e.name AS assigned_entity_name
+      FROM action_items ai
+      LEFT JOIN notes n ON ai.source_note_id = n.id
+      LEFT JOIN entities e ON ai.assigned_entity_id = e.id`
+
+    if (opts?.source_note_id) {
+      return db
+        .prepare(`${SELECT} WHERE ai.source_note_id = ? AND ai.status != 'cancelled' ORDER BY ai.created_at DESC`)
+        .all(opts.source_note_id)
+    }
+    if (opts?.status) {
+      return db
+        .prepare(`${SELECT} WHERE ai.status = ? ORDER BY ai.created_at DESC`)
+        .all(opts.status)
+    }
+    return db
+      .prepare(`${SELECT} WHERE ai.status != 'cancelled' ORDER BY ai.created_at DESC`)
+      .all()
+  })
+
+  /** action-items:create — creates a new action item and returns the full row with joins. */
+  ipcMain.handle(
+    'action-items:create',
+    (
+      _event,
+      opts: {
+        title: string
+        source_note_id?: string | null
+        assigned_entity_id?: string | null
+        due_date?: string | null
+        extraction_type?: string
+        confidence?: number
+      }
+    ) => {
+      const db = getDatabase()
+      const id = randomUUID()
+      db.prepare(
+        `INSERT INTO action_items (id, title, source_note_id, assigned_entity_id, due_date, extraction_type, confidence)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        id,
+        opts.title,
+        opts.source_note_id ?? null,
+        opts.assigned_entity_id ?? null,
+        opts.due_date ?? null,
+        opts.extraction_type ?? 'manual',
+        opts.confidence ?? 1.0
+      )
+      const row = db
+        .prepare(
+          `SELECT ai.id, ai.title, ai.status, ai.extraction_type, ai.confidence,
+                  ai.created_at, ai.completed_at, ai.source_note_id, ai.assigned_entity_id, ai.due_date,
+                  n.title AS source_note_title, e.name AS assigned_entity_name
+           FROM action_items ai
+           LEFT JOIN notes n ON ai.source_note_id = n.id
+           LEFT JOIN entities e ON ai.assigned_entity_id = e.id
+           WHERE ai.id = ?`
+        )
+        .get(id)
+      pushToRenderer('action:created', { actionId: id })
+      return row
+    }
+  )
+
+  /** action-items:update — updates status, title, assignee, or due date. */
+  ipcMain.handle(
+    'action-items:update',
+    (
+      _event,
+      opts: {
+        id: string
+        title?: string
+        status?: string
+        assigned_entity_id?: string | null
+        due_date?: string | null
+      }
+    ) => {
+      const db = getDatabase()
+      const sets: string[] = []
+      const params: unknown[] = []
+
+      if (opts.title !== undefined) {
+        sets.push('title = ?')
+        params.push(opts.title)
+      }
+      if (opts.status !== undefined) {
+        sets.push('status = ?')
+        params.push(opts.status)
+        if (opts.status === 'done' || opts.status === 'cancelled') {
+          sets.push("completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')")
+        } else {
+          sets.push('completed_at = NULL')
+        }
+      }
+      if ('assigned_entity_id' in opts) {
+        sets.push('assigned_entity_id = ?')
+        params.push(opts.assigned_entity_id ?? null)
+      }
+      if ('due_date' in opts) {
+        sets.push('due_date = ?')
+        params.push(opts.due_date ?? null)
+      }
+
+      if (!sets.length) return { ok: true }
+      params.push(opts.id)
+      db.prepare(`UPDATE action_items SET ${sets.join(', ')} WHERE id = ?`).run(...(params as (string | number | null)[]))
+
+      if (opts.status !== undefined) {
+        const row = db
+          .prepare('SELECT source_note_id FROM action_items WHERE id = ?')
+          .get(opts.id) as { source_note_id: string | null } | undefined
+        pushToRenderer('action:status-changed', {
+          actionId: opts.id,
+          status: opts.status,
+          sourceNoteId: row?.source_note_id ?? null,
+        })
+      }
+
+      return { ok: true }
+    }
+  )
+
+  /**
+   * notes:extract-actions — uses Claude Haiku to extract action items from note body_plain.
+   * Called on-demand by the /action slash command in the editor.
+   * Returns { items: string[] } — the caller inserts them as a TaskList in the note.
+   */
+  ipcMain.handle('notes:extract-actions', async (_event, { body_plain }: { body_plain: string }) => {
+    const db = getDatabase()
+    const setting = db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get('anthropic_api_key') as { value: string } | undefined
+    const apiKey = setting?.value ?? ''
+    if (!apiKey) return { items: [] }
+    try {
+      const extracted = await extractActionItems('', body_plain, apiKey)
+      return { items: extracted.map((e) => e.title) }
+    } catch {
+      return { items: [] }
+    }
+  })
+
+  /** action-items:get-statuses — batch-fetch status for a list of action item IDs. */
+  ipcMain.handle('action-items:get-statuses', (_event, { ids }: { ids: string[] }) => {
+    if (!ids.length) return {}
+    const db = getDatabase()
+    const placeholders = ids.map(() => '?').join(',')
+    const rows = db
+      .prepare(`SELECT id, status FROM action_items WHERE id IN (${placeholders})`)
+      .all(...(ids as (string | number | null)[])) as { id: string; status: string }[]
+    return Object.fromEntries(rows.map((r) => [r.id, r.status]))
+  })
+
+  /** action-items:delete — permanently deletes an action item. */
+  ipcMain.handle('action-items:delete', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    db.prepare('DELETE FROM action_items WHERE id = ?').run(id)
+    return { ok: true }
   })
 
   // ─── Settings ────────────────────────────────────────────────────────────────

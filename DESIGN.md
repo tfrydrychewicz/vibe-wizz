@@ -510,7 +510,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Claude integration for note summaries (L2)
 - [x] FTS + vector hybrid search
 - [x] Auto entity detection (NER)
-- [ ] Action item extraction from notes (alsay available on `/` command in the note)
+- [x] Action item extraction from notes (also available on `/` command in the note)
 - [ ] AI chat sidebar (basic)
 
 ### Phase 3 — Meetings
