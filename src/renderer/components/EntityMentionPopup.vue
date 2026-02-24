@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import LucideIcon from './LucideIcon.vue'
+import type { OpenMode } from '../stores/tabStore'
 
 type FieldDef = { name: string; type: string; options?: string[] }
 type EntityData = {
@@ -15,7 +16,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
-  'open-entity': [{ entityId: string; typeId: string }]
+  'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
 }>()
 
 const data = ref<EntityData | null>(null)
@@ -91,9 +92,10 @@ function onEscKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') emit('close')
 }
 
-function openEntity(): void {
+function openEntity(e: MouseEvent): void {
   if (!data.value) return
-  emit('open-entity', { entityId: props.entityId, typeId: data.value.entityType.id })
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-entity', { entityId: props.entityId, typeId: data.value.entityType.id, mode })
   emit('close')
 }
 </script>
@@ -113,7 +115,7 @@ function openEntity(): void {
           <span class="entity-popup-name">{{ data.entity.name }}</span>
           <span class="entity-popup-type">{{ data.entityType.name }}</span>
         </div>
-        <button class="entity-popup-open-btn" @click="openEntity">Open →</button>
+        <button class="entity-popup-open-btn" @click="openEntity($event)">Open →</button>
       </div>
       <div v-if="fields.length" class="entity-popup-fields">
         <div v-for="field in fields" :key="field.label" class="entity-popup-field">

@@ -13,6 +13,7 @@ import {
   entityTrashStatus,
   registerMentionClickHandler,
 } from '../stores/mentionStore'
+import type { OpenMode } from '../stores/tabStore'
 import Placeholder from '@tiptap/extension-placeholder'
 import { TextStyle } from '@tiptap/extension-text-style'
 import { Color } from '@tiptap/extension-color'
@@ -44,8 +45,9 @@ import {
 
 const props = defineProps<{ noteId: string }>()
 const emit = defineEmits<{
-  saved: []
-  'open-entity': [{ entityId: string; typeId: string }]
+  saved: [title: string]
+  loaded: [title: string]
+  'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
 }>()
 
 type NoteRow = {
@@ -205,7 +207,7 @@ async function flushSave(overrideId?: string): Promise<void> {
       body_plain: editor.value.getText(),
     })
     saveStatus.value = 'saved'
-    emit('saved')
+    emit('saved', title.value || 'Untitled')
   } catch {
     saveStatus.value = 'unsaved'
   }
@@ -242,6 +244,7 @@ async function loadNote(noteId: string): Promise<void> {
     await nextTick()
     isLoading = false
   }
+  emit('loaded', title.value || 'Untitled')
 }
 
 function extractMentionIdsFromBody(bodyJson: string): string[] {

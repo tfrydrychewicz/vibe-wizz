@@ -12,8 +12,20 @@ type NoteListItem = {
 const props = defineProps<{ activeNoteId: string | null }>()
 const emit = defineEmits<{
   select: [id: string]
+  'open-new-pane': [id: string]
+  'open-new-tab': [id: string]
   'new-note': []
 }>()
+
+function onItemClick(e: MouseEvent, noteId: string): void {
+  if (e.metaKey || e.ctrlKey) {
+    emit('open-new-tab', noteId)
+  } else if (e.shiftKey) {
+    emit('open-new-pane', noteId)
+  } else {
+    emit('select', noteId)
+  }
+}
 
 const notes = ref<NoteListItem[]>([])
 
@@ -70,7 +82,7 @@ defineExpose({ refresh })
         :key="note.id"
         class="note-list-item"
         :class="{ active: note.id === activeNoteId }"
-        @click="emit('select', note.id)"
+        @click="onItemClick($event, note.id)"
       >
         <div class="note-list-item-body">
           <div class="note-list-item-title">{{ note.title || 'Untitled' }}</div>

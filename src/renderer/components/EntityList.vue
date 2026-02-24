@@ -19,8 +19,20 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [id: string]
+  'open-new-pane': [id: string]
+  'open-new-tab': [id: string]
   'new-entity': []
 }>()
+
+function onItemClick(e: MouseEvent, entityId: string): void {
+  if (e.metaKey || e.ctrlKey) {
+    emit('open-new-tab', entityId)
+  } else if (e.shiftKey) {
+    emit('open-new-pane', entityId)
+  } else {
+    emit('select', entityId)
+  }
+}
 
 const entities = ref<EntityListItem[]>([])
 
@@ -95,7 +107,7 @@ defineExpose({ refresh })
         :key="entity.id"
         class="note-list-item"
         :class="{ active: entity.id === activeEntityId, 'is-confirming': pendingTrash?.id === entity.id }"
-        @click="pendingTrash?.id === entity.id ? undefined : emit('select', entity.id)"
+        @click="pendingTrash?.id === entity.id ? undefined : onItemClick($event, entity.id)"
       >
         <!-- Trash confirmation overlay -->
         <template v-if="pendingTrash && pendingTrash.id === entity.id">

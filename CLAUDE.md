@@ -53,18 +53,22 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 
 ### Renderer / UI
 
-- `App.vue` shell: sidebar with fixed nav items (Today, Notes) + **dynamic entity type list** (loaded from DB) + fixed items (Actions, Calendar, Search)
+- `App.vue` shell: sidebar with fixed nav items (Today, Notes) + **dynamic entity type list** (loaded from DB) + fixed items (Actions, Calendar, Search, Trash)
   - Entity type nav is populated from `entity-types:list` on mount; routes `activeView` to entity type IDs
   - "New entity type" button in sidebar opens `EntityTypeModal`
-- `NoteList.vue` — note list pane (240px); exposes `refresh()` via `defineExpose`; emits `select` and `new-note`
-- `NoteEditor.vue` uses **TipTap** (ProseMirror-based) for rich text editing with auto-save (500ms debounce); emits `saved` after each successful save; supports `@` entity mentions via `@tiptap/extension-mention` + `MentionList.vue` suggestion popup; mention extension uses `VueNodeViewRenderer(MentionChip)` instead of `renderHTML`; on note load, fetches trash status for all mention IDs and populates `entityTrashStatus`
+  - Main area uses `tabStore` for multi-tab/multi-pane content; `activeNoteId`/`activeEntityId` are **computed** from `activePane` (not stored as refs)
+  - Notes and entity views share the same tab/pane content area on the right; clicking items in the left list opens them in the active pane; `Shift+click` opens a new pane; `Cmd+click` opens a new tab
+- `src/renderer/stores/tabStore.ts` — tab/pane state for the content area: `OpenMode` (`'default' | 'new-pane' | 'new-tab'`), `ContentPane` (`{ id, type, contentId, typeId?, title }`), `Tab` (`{ id, panes, activePaneId }`); exports `tabs`, `activeTabId`, `activeTab`, `activePane`, `openContent`, `closePane`, `closeTab`, `setActiveTab`, `setActivePaneInTab`, `updatePaneTitle`, `closePanesForContent`
+- `TabBar.vue` — horizontal tab bar rendered above the panes area when ≥2 tabs are open; each tab shows the active pane's title and a close button; emits `set-active-tab`, `close-tab`
+- `NoteList.vue` — note list pane (240px); exposes `refresh()` via `defineExpose`; emits `select`, `open-new-pane`, `open-new-tab`, `new-note`; click handler checks `e.metaKey`/`e.shiftKey` to pick mode
+- `NoteEditor.vue` uses **TipTap** (ProseMirror-based) for rich text editing with auto-save (500ms debounce); emits `saved: [title: string]` after each successful save (title used to update pane label); supports `@` entity mentions via `@tiptap/extension-mention` + `MentionList.vue` suggestion popup; mention extension uses `VueNodeViewRenderer(MentionChip)` instead of `renderHTML`; on note load, fetches trash status for all mention IDs and populates `entityTrashStatus`; emits `open-entity: [{ entityId, typeId, mode: OpenMode }]`
 - `MentionList.vue` — keyboard-navigable entity suggestion dropdown rendered by `VueRenderer` into a fixed-position `document.body` div; exposes `onKeyDown` for TipTap suggestion integration
 - `MentionChip.vue` — TipTap `VueNodeViewRenderer` component for `@mention` nodes; reads `entityTrashStatus` reactively; normal state: blue chip; trashed state: red chip with `Trash2` icon; fires clicks through `fireMentionClick` from mentionStore
-- `EntityMentionPopup.vue` — fixed-position popup shown when clicking a non-trashed `@mention` chip; fetches entity via `entities:get`, displays name/type/fields; emits `open-entity` (→ App.vue navigates to entity page) and `close`; `NoteEditor` emits `open-entity: [{ entityId, typeId }]` which App.vue handles by setting `activeView` + `activeEntityId`
+- `EntityMentionPopup.vue` — fixed-position popup shown when clicking a non-trashed `@mention` chip; fetches entity via `entities:get`, displays name/type/fields; "Open →" button checks click modifiers and emits `open-entity: [{ entityId, typeId, mode: OpenMode }]`; default mode switches sidebar to entity type view
 - `TrashedMentionPopup.vue` — fixed-position popup shown when clicking a trashed `@mention` chip; shows entity name + "in trash" message; Restore button calls `entities:restore` and updates `entityTrashStatus`; emits `close`, `restored`
 - `TrashView.vue` — full-screen trash management view; calls `trash:list` on mount; Notes section + Entities section; Restore and Delete Forever actions for each; Delete Forever entity shows mention count confirmation before proceeding; replaces main content area when `activeView === 'trash'`
-- `EntityList.vue` — generic entity list pane (mirrors NoteList); props: `typeId`, `typeName`, `activeEntityId`; emits `select`, `new-entity`; exposes `refresh()`; trash button triggers two-step flow (count check → confirmation overlay → `entities:delete`)
-- `EntityDetail.vue` — dynamic entity form; renders fields from entity type schema JSON; explicit Save button; props: `entityId`; emits `saved`, `trashed: [entityId]`; includes trash button with two-step confirmation
+- `EntityList.vue` — generic entity list pane (mirrors NoteList); props: `typeId`, `typeName`, `activeEntityId`; emits `select`, `open-new-pane`, `open-new-tab`, `new-entity`; exposes `refresh()`; click handler checks modifiers; trash button triggers two-step flow (count check → confirmation overlay → `entities:delete`)
+- `EntityDetail.vue` — dynamic entity form; renders fields from entity type schema JSON; explicit Save button; props: `entityId`; emits `saved: [name: string]`, `trashed: [entityId]`; includes trash button with two-step confirmation
 - `EntityTypeModal.vue` — full entity type creation modal with field builder (name, icon picker, color swatches, dynamic field list with type/options/entity_ref picker)
 - `LucideIcon.vue` — dynamic Lucide icon renderer; accepts `name` (kebab-case, e.g. `'user'`, `'bar-chart-2'`), `size`, `color` props; converts to PascalCase to look up the icon component from `lucide-vue-next`; falls back to `Tag` for unknown names
 - `IconPicker.vue` — searchable Lucide icon grid picker (`v-model` stores kebab-case icon name); builds full icon list from `lucide-vue-next` exports at module load; filters by search query; shows up to 96 results; used in `EntityTypeModal`
@@ -74,6 +78,26 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - Icons: **lucide-vue-next** throughout; entity type icons stored as kebab-case Lucide names (e.g. `'user'`, `'folder'`); built-in seeds migrated from emoji on startup via idempotent UPDATE statements in `schema.ts`
 - Sidebar nav: fixed top items (Today, Notes) + dynamic entity type list + fixed bottom items (Actions, Calendar, Search, **Trash**)
 
+### Navigation Shortcut Rule — ALWAYS FOLLOW
+
+**Every button, link, or clickable element that opens a note or entity in the view pane MUST support all three open modes:**
+
+| Modifier | Behaviour | Implementation |
+|----------|-----------|----------------|
+| Plain click | Open in current active pane | `openContent(..., 'default')` |
+| `Shift+click` | Open in a new pane (split) in current tab | `openContent(..., 'new-pane')` |
+| `Cmd+click` (macOS) / `Ctrl+click` (other) | Open in a new tab | `openContent(..., 'new-tab')` |
+
+Pattern for any click handler that opens content:
+```typescript
+function onOpenSomething(e: MouseEvent, id: string): void {
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  openContent('note' /* or 'entity' */, id, 'Untitled', mode, typeId?)
+}
+```
+
+This applies to: list item clicks (`NoteList`, `EntityList`), "Open →" buttons in popups (`EntityMentionPopup`), any future "Go to" links, search result items, backlink entries, etc. **Do not add a new content-opening entry point without wiring up all three modes.**
+
 ### Key Design Decisions
 
 - **Local-first**: All data on-device in SQLite; no cloud backend currently
@@ -82,4 +106,5 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - Entity graph: `entities` + `entity_mentions` + `note_relations` form a knowledge graph linking notes to people/projects/teams/decisions/OKRs; `entity_mentions` is now kept in sync on every note save
 - **Trash pattern**: entities use `trashed_at` (soft-delete); notes use `archived_at` (soft-delete); both have restore and delete-forever actions; `TrashView` in sidebar manages both
 - **Reactive mention chips**: `entityTrashStatus` (module-level `reactive(Map)`) drives chip appearance without re-loading notes — set on note load, on trash/restore anywhere in the app
+- **Tab/pane system**: `tabStore` holds all content navigation state; `tabs` is a global (not per-view) array of `Tab` objects each with one or more `ContentPane`s; `Shift+click` adds a pane to the current tab (split view), `Cmd+click` opens a new tab; pane titles are updated on save via `updatePaneTitle`; trashing an entity closes all panes for it via `closePanesForContent`
 - Context isolation + sandbox enabled; no Node integration in renderer

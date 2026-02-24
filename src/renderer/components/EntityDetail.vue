@@ -40,7 +40,8 @@ type EntityRow = {
 
 const props = defineProps<{ entityId: string }>()
 const emit = defineEmits<{
-  saved: []
+  saved: [name: string]
+  loaded: [name: string]
   trashed: [entityId: string]
 }>()
 
@@ -86,6 +87,7 @@ async function loadEntity(id: string): Promise<void> {
   }
   fieldValues.value = values
   isLoading.value = false
+  emit('loaded', entityName.value || 'Untitled')
 }
 
 async function save(): Promise<void> {
@@ -101,7 +103,7 @@ async function save(): Promise<void> {
     fields,
   })
   saveStatus.value = 'saved'
-  emit('saved')
+  emit('saved', entityName.value || 'Untitled')
   setTimeout(() => {
     saveStatus.value = ''
   }, 1500)
