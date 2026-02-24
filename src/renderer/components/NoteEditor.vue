@@ -12,6 +12,7 @@ import EntityMentionPopup from './EntityMentionPopup.vue'
 import NoteLinkList from './NoteLinkList.vue'
 import NoteLinkChip from './NoteLinkChip.vue'
 import NoteLinkPopup from './NoteLinkPopup.vue'
+import TrashedNoteLinkPopup from './TrashedNoteLinkPopup.vue'
 import type { NoteLinkItem } from './NoteLinkList.vue'
 import {
   entityTrashStatus,
@@ -691,8 +692,16 @@ onBeforeUnmount(() => {
       @open-entity="emit('open-entity', $event)"
     />
 
+    <TrashedNoteLinkPopup
+      v-if="popupNoteId && popupNoteAnchorRect && noteArchivedStatus.get(popupNoteId)"
+      :key="`archived-note-${popupNoteId}`"
+      :note-id="popupNoteId"
+      :anchor-rect="popupNoteAnchorRect"
+      @close="popupNoteId = null"
+      @restored="popupNoteId = null"
+    />
     <NoteLinkPopup
-      v-if="popupNoteId && popupNoteAnchorRect"
+      v-else-if="popupNoteId && popupNoteAnchorRect && !noteArchivedStatus.get(popupNoteId)"
       :key="`note-link-${popupNoteId}`"
       :note-id="popupNoteId"
       :anchor-rect="popupNoteAnchorRect"

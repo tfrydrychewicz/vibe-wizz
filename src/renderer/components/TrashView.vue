@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import LucideIcon from './LucideIcon.vue'
 import { Trash2, RotateCcw } from 'lucide-vue-next'
 import { entityTrashStatus } from '../stores/mentionStore'
+import { noteArchivedStatus } from '../stores/noteLinkStore'
 
 type TrashedNote = {
   id: string
@@ -27,6 +28,9 @@ type TrashList = {
 
 const data = ref<TrashList>({ notes: [], entities: [] })
 
+// { id, linkCount } when awaiting confirmation before deleting a note forever
+const pendingDeleteNoteForever = ref<{ id: string; linkCount: number } | null>(null)
+
 // { id, mentionCount } when awaiting confirmation before deleting an entity forever
 const pendingDeleteForever = ref<{ id: string; mentionCount: number } | null>(null)
 
@@ -36,12 +40,28 @@ async function load(): Promise<void> {
 
 async function restoreNote(id: string): Promise<void> {
   await window.api.invoke('notes:restore', { id })
+  noteArchivedStatus.set(id, false)
   await load()
 }
 
-async function deleteNoteForever(id: string): Promise<void> {
+async function requestDeleteNoteForever(id: string): Promise<void> {
+  const { count } = (await window.api.invoke('notes:get-link-count', { id })) as { count: number }
+  if (count > 0) {
+    pendingDeleteNoteForever.value = { id, linkCount: count }
+  } else {
+    await finishDeleteNoteForever(id)
+  }
+}
+
+async function finishDeleteNoteForever(id: string): Promise<void> {
+  pendingDeleteNoteForever.value = null
   await window.api.invoke('notes:delete-forever', { id })
+  noteArchivedStatus.delete(id)
   await load()
+}
+
+function cancelDeleteNoteForever(): void {
+  pendingDeleteNoteForever.value = null
 }
 
 async function restoreEntity(id: string): Promise<void> {
@@ -100,19 +120,47 @@ onMounted(load)
         <!-- Notes section -->
         <div v-if="data.notes.length > 0" class="trash-section">
           <div class="trash-section-label">Notes</div>
-          <div v-for="note in data.notes" :key="note.id" class="trash-row">
-            <LucideIcon name="file-text" :size="14" class="trash-row-icon" />
-            <span class="trash-row-name">{{ note.title || 'Untitled' }}</span>
-            <span class="trash-row-date">{{ formatDate(note.archived_at) }}</span>
-            <div class="trash-row-actions">
-              <button class="trash-action-btn" title="Restore" @click="restoreNote(note.id)">
-                <RotateCcw :size="12" /> Restore
-              </button>
-              <button class="trash-action-btn trash-action-delete" title="Delete forever" @click="deleteNoteForever(note.id)">
-                <Trash2 :size="12" /> Delete forever
-              </button>
+
+          <template v-for="note in data.notes" :key="note.id">
+            <!-- Delete-forever confirmation row -->
+            <div
+              v-if="pendingDeleteNoteForever && pendingDeleteNoteForever.id === note.id"
+              class="trash-row delete-confirm-row"
+            >
+              <LucideIcon name="file-text" :size="14" class="trash-row-icon" />
+              <div class="delete-confirm-body">
+                <span class="delete-confirm-name">{{ note.title || 'Untitled' }}</span>
+                <span class="delete-confirm-msg">
+                  Linked from {{ pendingDeleteNoteForever.linkCount }}
+                  {{ pendingDeleteNoteForever.linkCount === 1 ? 'note' : 'notes' }}.
+                  Those links will appear as archived. Delete forever?
+                </span>
+              </div>
+              <div class="trash-row-actions">
+                <button class="trash-action-btn trash-action-delete" @click="finishDeleteNoteForever(note.id)">
+                  <Trash2 :size="12" /> Delete forever
+                </button>
+                <button class="trash-action-btn" @click="cancelDeleteNoteForever">
+                  Cancel
+                </button>
+              </div>
             </div>
-          </div>
+
+            <!-- Normal note row -->
+            <div v-else class="trash-row">
+              <LucideIcon name="file-text" :size="14" class="trash-row-icon" />
+              <span class="trash-row-name">{{ note.title || 'Untitled' }}</span>
+              <span class="trash-row-date">{{ formatDate(note.archived_at) }}</span>
+              <div class="trash-row-actions">
+                <button class="trash-action-btn" title="Restore" @click="restoreNote(note.id)">
+                  <RotateCcw :size="12" /> Restore
+                </button>
+                <button class="trash-action-btn trash-action-delete" title="Delete forever" @click="requestDeleteNoteForever(note.id)">
+                  <Trash2 :size="12" /> Delete forever
+                </button>
+              </div>
+            </div>
+          </template>
         </div>
 
         <!-- Entities section -->

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, defineExpose } from 'vue'
 import { Plus, Trash2 } from 'lucide-vue-next'
+import { noteArchivedStatus } from '../stores/noteLinkStore'
 
 type NoteListItem = {
   id: string
@@ -15,6 +16,7 @@ const emit = defineEmits<{
   'open-new-pane': [id: string]
   'open-new-tab': [id: string]
   'new-note': []
+  trashed: [id: string]
 }>()
 
 function onItemClick(e: MouseEvent, noteId: string): void {
@@ -29,21 +31,35 @@ function onItemClick(e: MouseEvent, noteId: string): void {
 
 const notes = ref<NoteListItem[]>([])
 
+// Confirmation state: { id, count } when pending user confirmation
+const pendingTrash = ref<{ id: string; count: number } | null>(null)
+
 async function refresh(): Promise<void> {
   notes.value = (await window.api.invoke('notes:list')) as NoteListItem[]
 }
 
-async function deleteNote(id: string): Promise<void> {
-  await window.api.invoke('notes:delete', { id })
-  await refresh()
-  // If the deleted note was active, select the first remaining note
-  if (props.activeNoteId === id) {
-    if (notes.value.length > 0) {
-      emit('select', notes.value[0].id)
-    } else {
-      emit('select', '')
-    }
+async function requestTrash(id: string): Promise<void> {
+  const { count } = (await window.api.invoke('notes:get-link-count', { id })) as { count: number }
+  if (count > 0) {
+    pendingTrash.value = { id, count }
+  } else {
+    await finishTrash(id)
   }
+}
+
+async function finishTrash(id: string): Promise<void> {
+  pendingTrash.value = null
+  await window.api.invoke('notes:delete', { id })
+  noteArchivedStatus.set(id, true)
+  await refresh()
+  emit('trashed', id)
+  if (props.activeNoteId === id) {
+    emit('select', notes.value.length > 0 ? notes.value[0].id : '')
+  }
+}
+
+function cancelTrash(): void {
+  pendingTrash.value = null
 }
 
 function formatDate(isoString: string): string {
@@ -81,20 +97,36 @@ defineExpose({ refresh })
         v-for="note in notes"
         :key="note.id"
         class="note-list-item"
-        :class="{ active: note.id === activeNoteId }"
-        @click="onItemClick($event, note.id)"
+        :class="{ active: note.id === activeNoteId, 'is-confirming': pendingTrash?.id === note.id }"
+        @click="pendingTrash?.id === note.id ? undefined : onItemClick($event, note.id)"
       >
-        <div class="note-list-item-body">
-          <div class="note-list-item-title">{{ note.title || 'Untitled' }}</div>
-          <div class="note-list-item-date">{{ formatDate(note.updated_at) }}</div>
-        </div>
-        <button
-          class="note-list-item-delete"
-          title="Delete note"
-          @click.stop="deleteNote(note.id)"
-        >
-          <Trash2 :size="13" />
-        </button>
+        <!-- Trash confirmation overlay -->
+        <template v-if="pendingTrash && pendingTrash.id === note.id">
+          <div class="trash-confirm" @click.stop>
+            <span class="trash-confirm-msg">
+              Linked from {{ pendingTrash.count }} {{ pendingTrash.count === 1 ? 'note' : 'notes' }}.
+              Move to trash?
+            </span>
+            <div class="trash-confirm-btns">
+              <button class="trash-confirm-yes" @click="finishTrash(note.id)">Move to trash</button>
+              <button class="trash-confirm-no" @click="cancelTrash">Cancel</button>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="note-list-item-body">
+            <div class="note-list-item-title">{{ note.title || 'Untitled' }}</div>
+            <div class="note-list-item-date">{{ formatDate(note.updated_at) }}</div>
+          </div>
+          <button
+            class="note-list-item-delete"
+            title="Move to trash"
+            @click.stop="requestTrash(note.id)"
+          >
+            <Trash2 :size="13" />
+          </button>
+        </template>
       </div>
 
       <div v-if="notes.length === 0" class="note-list-empty">
@@ -103,3 +135,62 @@ defineExpose({ refresh })
     </div>
   </div>
 </template>
+
+<style scoped>
+.note-list-item.is-confirming {
+  cursor: default;
+  padding: 0;
+}
+
+.trash-confirm {
+  width: 100%;
+  padding: 10px 10px 10px 12px;
+  background: var(--color-surface);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trash-confirm-msg {
+  font-size: 12px;
+  color: #f06070;
+  line-height: 1.4;
+}
+
+.trash-confirm-btns {
+  display: flex;
+  gap: 5px;
+}
+
+.trash-confirm-yes,
+.trash-confirm-no {
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.trash-confirm-yes {
+  background: rgba(240, 96, 112, 0.15);
+  border: 1px solid rgba(240, 96, 112, 0.5);
+  color: #f06070;
+}
+
+.trash-confirm-yes:hover {
+  background: rgba(240, 96, 112, 0.25);
+}
+
+.trash-confirm-no {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.trash-confirm-no:hover {
+  color: var(--color-text);
+}
+</style>

@@ -65,6 +65,35 @@ function replaceMentionsWithText(
   return { result: walk(doc), changed }
 }
 
+/**
+ * Replace all noteLink nodes for a given note ID with plain text nodes.
+ * Returns the new doc and whether any replacements were made.
+ */
+function replaceNoteLinksWithText(
+  doc: unknown,
+  noteId: string,
+  fallbackTitle: string
+): { result: unknown; changed: boolean } {
+  let changed = false
+  function walk(node: unknown): unknown {
+    if (!node || typeof node !== 'object') return node
+    const n = node as Record<string, unknown>
+    if (n['type'] === 'noteLink' && n['attrs'] && typeof n['attrs'] === 'object') {
+      const attrs = n['attrs'] as Record<string, unknown>
+      if (attrs['id'] === noteId) {
+        changed = true
+        return { type: 'text', text: (attrs['label'] as string) || fallbackTitle }
+      }
+      return node
+    }
+    if (Array.isArray(n['content'])) {
+      return { ...n, content: n['content'].map(walk) }
+    }
+    return node
+  }
+  return { result: walk(doc), changed }
+}
+
 /** Extract plain text from a TipTap JSON doc (for FTS body_plain). */
 function extractDocPlainText(doc: unknown): string {
   const parts: string[] = []
@@ -188,9 +217,41 @@ export function registerDbIpcHandlers(): void {
     return { ok: true }
   })
 
-  /** notes:delete-forever — hard-deletes a note permanently. */
+  /**
+   * notes:delete-forever — hard-deletes a note permanently.
+   * Before deleting, replaces all [[noteLink]] chips in other notes with plain text of the note's title.
+   */
   ipcMain.handle('notes:delete-forever', (_event, { id }: { id: string }) => {
     const db = getDatabase()
+
+    const noteRow = db.prepare('SELECT title FROM notes WHERE id = ?').get(id) as { title: string } | undefined
+    const noteTitle = noteRow?.title ?? ''
+
+    // Replace noteLink nodes with plain text in every note that links to this note
+    const linkingNotes = db
+      .prepare(
+        `SELECT DISTINCT source_note_id FROM note_relations
+         WHERE target_note_id = ? AND relation_type = 'references'`
+      )
+      .all(id) as { source_note_id: string }[]
+
+    for (const { source_note_id } of linkingNotes) {
+      const sourceRow = db.prepare('SELECT body FROM notes WHERE id = ?').get(source_note_id) as { body: string } | undefined
+      if (!sourceRow) continue
+      let doc: unknown
+      try { doc = JSON.parse(sourceRow.body) } catch { continue }
+      const { result, changed } = replaceNoteLinksWithText(doc, id, noteTitle)
+      if (changed) {
+        const newBody = JSON.stringify(result)
+        const newPlain = extractDocPlainText(result)
+        db.prepare(
+          `UPDATE notes SET body = ?, body_plain = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`
+        ).run(newBody, newPlain, source_note_id)
+      }
+    }
+
+    // Clean up note_relations involving this note, then hard-delete
+    db.prepare(`DELETE FROM note_relations WHERE source_note_id = ? OR target_note_id = ?`).run(id, id)
     db.prepare(`DELETE FROM notes WHERE id = ?`).run(id)
     return { ok: true }
   })
@@ -227,6 +288,21 @@ export function registerDbIpcHandlers(): void {
       result[row.id] = row.archived_at !== null
     }
     return result
+  })
+
+  /**
+   * notes:get-link-count — returns how many distinct notes link to a given note.
+   * Used to show a confirmation before archiving/trashing.
+   */
+  ipcMain.handle('notes:get-link-count', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    const { count } = db
+      .prepare(
+        `SELECT COUNT(DISTINCT source_note_id) AS count
+         FROM note_relations WHERE target_note_id = ? AND relation_type = 'references'`
+      )
+      .get(id) as { count: number }
+    return { count }
   })
 
   /**

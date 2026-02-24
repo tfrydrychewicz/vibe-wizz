@@ -159,6 +159,10 @@ function onOpenNote({ noteId, title, mode }: { noteId: string; title: string; mo
   openContent('note', noteId, title, mode, undefined, 'file-text')
 }
 
+function onNoteTrashed(noteId: string): void {
+  closePanesForContent(noteId)
+}
+
 function onEntityTrashed(entityId: string): void {
   closePanesForContent(entityId)
   entityListRef.value?.refresh()
@@ -286,6 +290,7 @@ onMounted(loadEntityTypes)
             @open-new-pane="openNote($event, 'new-pane')"
             @open-new-tab="openNote($event, 'new-tab')"
             @new-note="newNote"
+            @trashed="onNoteTrashed"
           />
           <EntityList
             v-else-if="isEntityView(activeView)"
