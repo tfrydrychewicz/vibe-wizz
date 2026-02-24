@@ -508,7 +508,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] sqlite-vec integration + embedding pipeline
 - [x] Chunking + contextual retrieval
 - [x] Claude integration for note summaries (L2)
-- [ ] FTS + vector hybrid search
+- [x] FTS + vector hybrid search
 - [ ] Auto entity detection (NER) 
 - [ ] Action item extraction from notes (alsay available on `/` command in the note)
 - [ ] AI chat sidebar (basic)

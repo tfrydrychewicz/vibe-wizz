@@ -722,13 +722,14 @@ export function registerDbIpcHandlers(): void {
   // ─── Semantic search ──────────────────────────────────────────────────────────
 
   /**
-   * notes:semantic-search — search notes by meaning using stored chunk embeddings.
+   * notes:semantic-search — hybrid FTS5 + vector search with Reciprocal Rank Fusion.
    *
-   * Flow:
-   *   1. If sqlite-vec is loaded and an OpenAI API key is configured: embed the query,
-   *      run a KNN search on chunk_embeddings, deduplicate by note, return top results
-   *      with the matching chunk as an excerpt.
-   *   2. Fallback: FTS5 full-text search on notes_fts (title + body_plain).
+   * Flow (when sqlite-vec loaded + OpenAI key configured):
+   *   1. Run FTS5 keyword search (top 20) and KNN vector search (top 20) in parallel
+   *   2. Merge via RRF: score = Σ 1/(60 + rank) across both lists
+   *   3. Sort by combined score, return top 15 with best-matching chunk as excerpt
+   *
+   * Fallback (no vec / no API key / error): FTS5-only, up to 15 results, no excerpt.
    *
    * Input:  { query: string }
    * Output: { id, title, excerpt: string | null }[]  (up to 15 notes)
@@ -737,6 +738,30 @@ export function registerDbIpcHandlers(): void {
     'notes:semantic-search',
     async (_event, { query }: { query: string }): Promise<{ id: string; title: string; excerpt: string | null }[]> => {
       const db = getDatabase()
+
+      // Sanitize query for FTS5 — strip operators/special chars that cause parse errors
+      const ftsQuery = query
+        .replace(/["\(\)\^\*\+\-]/g, ' ')
+        .replace(/\b(AND|OR|NOT)\b/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ')
+
+      const runFts = (limit: number): { id: string; title: string }[] => {
+        if (!ftsQuery) return []
+        try {
+          return db
+            .prepare(
+              `SELECT n.id, n.title
+               FROM notes_fts
+               JOIN notes n ON n.rowid = notes_fts.rowid
+               WHERE notes_fts MATCH ? AND n.archived_at IS NULL
+               ORDER BY rank LIMIT ${limit}`
+            )
+            .all(ftsQuery) as { id: string; title: string }[]
+        } catch {
+          return []
+        }
+      }
 
       if (isVecLoaded()) {
         const setting = db
@@ -750,14 +775,14 @@ export function registerDbIpcHandlers(): void {
             const [embed] = await embedTexts([query])
             const queryBuf = Buffer.from(embed.embedding.buffer)
 
-            // KNN: returns rows ordered by ascending cosine distance (most similar first)
+            // KNN: top 20 chunks by cosine similarity
             const knnRows = db
-              .prepare('SELECT rowid, distance FROM chunk_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT 30')
+              .prepare('SELECT rowid, distance FROM chunk_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT 20')
               .all(queryBuf) as { rowid: number; distance: number }[]
 
-            const seen = new Set<string>()
-            const results: { id: string; title: string; excerpt: string | null }[] = []
-
+            // Resolve chunks → notes (keep first/best chunk per note)
+            const vectorHits: { id: string; title: string; excerpt: string }[] = []
+            const seenVec = new Set<string>()
             for (const { rowid } of knnRows) {
               const row = db
                 .prepare(
@@ -767,31 +792,44 @@ export function registerDbIpcHandlers(): void {
                    WHERE nc.id = ? AND n.archived_at IS NULL`
                 )
                 .get(rowid) as { note_id: string; title: string; chunk_text: string } | undefined
-
-              if (!row || seen.has(row.note_id)) continue
-              seen.add(row.note_id)
-              results.push({ id: row.note_id, title: row.title, excerpt: row.chunk_text })
-              if (results.length >= 15) break
+              if (!row || seenVec.has(row.note_id)) continue
+              seenVec.add(row.note_id)
+              vectorHits.push({ id: row.note_id, title: row.title, excerpt: row.chunk_text })
             }
 
-            return results
+            const ftsHits = runFts(20)
+
+            // Reciprocal Rank Fusion (k = 60 is the standard constant)
+            const K = 60
+            const candidates = new Map<string, { id: string; title: string; excerpt: string | null; score: number }>()
+
+            ftsHits.forEach((row, idx) => {
+              candidates.set(row.id, { id: row.id, title: row.title, excerpt: null, score: 1 / (K + idx + 1) })
+            })
+
+            vectorHits.forEach((hit, idx) => {
+              const s = 1 / (K + idx + 1)
+              const existing = candidates.get(hit.id)
+              if (existing) {
+                existing.score += s
+                existing.excerpt ??= hit.excerpt
+              } else {
+                candidates.set(hit.id, { id: hit.id, title: hit.title, excerpt: hit.excerpt, score: s })
+              }
+            })
+
+            return [...candidates.values()]
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 15)
+              .map(({ id, title, excerpt }) => ({ id, title, excerpt }))
           } catch (err) {
-            console.error('[Search] Semantic search error — falling back to FTS:', err)
-            // fall through to FTS
+            console.error('[Search] Hybrid search error — falling back to FTS:', err)
           }
         }
       }
 
-      // FTS5 fallback: searches both title and body_plain
-      return db
-        .prepare(
-          `SELECT n.id, n.title, NULL as excerpt
-           FROM notes_fts
-           JOIN notes n ON n.rowid = notes_fts.rowid
-           WHERE notes_fts MATCH ? AND n.archived_at IS NULL
-           ORDER BY rank LIMIT 15`
-        )
-        .all(query) as { id: string; title: string; excerpt: null }[]
+      // FTS-only fallback (no vec / no API key / error above)
+      return runFts(15).map((r) => ({ ...r, excerpt: null }))
     }
   )
 }

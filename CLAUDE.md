@@ -58,7 +58,7 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `entity-types:delete` blocks deletion of built-in types (person, project, team, decision, okr)
 - `settings:get` — `{ key }` → stored value string or null; `settings:set` — `{ key, value }` → upserts; used for `openai_api_key` and `anthropic_api_key` storage
 - `notes:update` triggers `scheduleEmbedding(id)` fire-and-forget after save (no await); generates L1 chunk embeddings + L2 note summary in background if sqlite-vec is loaded and the respective API keys are configured
-- `notes:semantic-search` — `{ query }` → `[{ id, title, excerpt: string | null }]` (up to 15 notes): embeds the query via OpenAI and runs KNN on `chunk_embeddings` (deduped by note); falls back to FTS5 full-text search if vec not loaded or no API key
+- `notes:semantic-search` — `{ query }` → `[{ id, title, excerpt: string | null }]` (up to 15 notes): **hybrid FTS5 + vector search with Reciprocal Rank Fusion** — runs FTS5 keyword search (top 20) and KNN on `chunk_embeddings` (top 20) in parallel, merges via RRF (k=60), returns top 15 sorted by combined score; excerpt comes from the best-matching chunk; falls back to FTS5-only if vec not loaded or no API key
 - Migration on startup: `ALTER TABLE entities ADD COLUMN trashed_at TEXT` (idempotent try/catch)
 - Dev DB: `wizz.dev.db`, Prod DB: `wizz.db` — both in Electron's `userData` directory
 
