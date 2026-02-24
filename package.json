@@ -8,7 +8,8 @@
     "build": "env -u ELECTRON_RUN_AS_NODE electron-vite build && electron-builder",
     "preview": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
     "typecheck": "vue-tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
-    "rebuild": "electron-rebuild -f -w better-sqlite3"
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "build:swift": "swiftc swift/MicMonitor/Sources/main.swift -o resources/MicMonitor -O"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -57,6 +58,9 @@
       "target": "dmg",
       "category": "public.app-category.productivity"
     },
+    "extraResources": [
+      { "from": "resources/MicMonitor", "to": "MicMonitor" }
+    ],
     "files": [
       "out/**/*",
       "node_modules/better-sqlite3/**/*",

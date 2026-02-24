@@ -7,10 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev        # Start Electron app in dev mode with Vite HMR
-npm run build      # Bundle with electron-vite and create macOS DMG
-npm run typecheck  # Run vue-tsc + tsc for both renderer and main/preload
-npm run rebuild    # Rebuild native modules (better-sqlite3) after Node/Electron version changes
+npm run dev          # Start Electron app in dev mode with Vite HMR
+npm run build        # Bundle with electron-vite and create macOS DMG
+npm run typecheck    # Run vue-tsc + tsc for both renderer and main/preload
+npm run rebuild      # Rebuild native modules (better-sqlite3) after Node/Electron version changes
+npm run build:swift  # Compile Swift MicMonitor binary → resources/MicMonitor (macOS only)
 ```
 
 There is no test suite currently. TypeScript strict mode is enforced across both renderer and main/preload processes.
@@ -141,4 +142,7 @@ This applies to: list item clicks (`NoteList`, `EntityList`), "Open →" buttons
 - **Trash pattern**: entities use `trashed_at` (soft-delete); notes use `archived_at` (soft-delete); both have restore and delete-forever actions; `TrashView` in sidebar manages both; trashing from the list triggers a two-step confirmation flow when the item is linked/mentioned (entities: `entities:get-mention-count`; notes: `notes:get-link-count`); restore updates the module-level reactive status map (`entityTrashStatus` / `noteArchivedStatus`) so chips update without reloading notes; `closePanesForContent` is called on trash so open panes close immediately
 - **Reactive mention chips**: `entityTrashStatus` (module-level `reactive(Map)`) drives chip appearance without re-loading notes — set on note load, on trash/restore anywhere in the app
 - **Tab/pane system**: `tabStore` holds all content navigation state; `tabs` is a global (not per-view) array of `Tab` objects each with one or more `ContentPane`s; `Shift+click` adds a pane to the current tab (split view), `Cmd+click` opens a new tab; pane titles are updated on save via `updatePaneTitle`; trashing an entity closes all panes for it via `closePanesForContent`
+- **Mic monitor** (`src/main/mic/monitor.ts`): spawns `resources/MicMonitor` Swift binary as a child process; reads JSON events line-by-line from stdout; on state change pushes `mic:active` / `mic:inactive` to renderer via `pushToRenderer()`; exports `startMicMonitor()`, `stopMicMonitor()`, `getMicStatus()`; auto-restarts on crash (max 5 attempts, 3s backoff); graceful no-op if binary missing. Binary path: `resources/MicMonitor` (dev) / `process.resourcesPath/MicMonitor` (prod). Build: `npm run build:swift` (compiles `swift/MicMonitor/Sources/main.swift` with `swiftc`). Binary is in `extraResources` in electron-builder config and `.gitignore`d.
+- **MeetingPrompt.vue**: fixed bottom-right overlay; listens to `mic:active` / `mic:inactive` push events; shows after 5s debounce of continuous mic activity; three actions: Transcribe (no-op, Phase 3 step 2), Always transcribe (saves `auto_transcribe_meetings=true` to settings, then triggers), Skip; auto-transcribes on `mic:active` if `auto_transcribe_meetings=true` in settings; auto-dismisses on `mic:inactive`
+- `mic:active` (push) → `{ deviceName: string | null, timestamp: string }`; `mic:inactive` (push) → same; `mic:status` (invoke) → `{ isActive: boolean }`
 - Context isolation + sandbox enabled; no Node integration in renderer

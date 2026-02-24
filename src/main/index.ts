@@ -3,6 +3,8 @@ import { join } from 'path'
 import { initDatabase, closeDatabase } from './db/index'
 import { registerDbIpcHandlers } from './db/ipc'
 import { setMainWindow } from './push'
+import { startMicMonitor, stopMicMonitor, getMicStatus } from './mic/monitor'
+import { createMeetingWindow, destroyMeetingWindow } from './mic/meetingWindow'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
@@ -48,10 +50,14 @@ function createWindow(): void {
   }
 }
 
+ipcMain.handle('mic:status', () => ({ isActive: getMicStatus() }))
+
 app.whenReady().then(() => {
   initDatabase()
   registerDbIpcHandlers()
   createWindow()
+  startMicMonitor()
+  createMeetingWindow()
 
   app.on('activate', () => {
     // On macOS re-create a window when the dock icon is clicked and no windows are open
@@ -60,6 +66,8 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
+  stopMicMonitor()
+  destroyMeetingWindow()
   closeDatabase()
 })
 

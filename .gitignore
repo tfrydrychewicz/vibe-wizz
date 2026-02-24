@@ -3,3 +3,5 @@ out/
 dist/
 *.tsbuildinfo
 .DS_Store
+resources/MicMonitor
+swift/MicMonitor/.build/

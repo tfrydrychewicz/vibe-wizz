@@ -514,13 +514,13 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] AI chat sidebar (basic)
 
 ### Phase 3 — Meetings
-- [ ] Swift mic detection binary
+- [x] Swift mic detection binary
 - [ ] Deepgram streaming transcription
-- [ ] Calendar sync (Google Calendar)
 - [ ] Transcript → structured note pipeline
 - [ ] Speaker diarization + entity matching
 - [ ] Post-meeting summary + action extraction
 - [ ] Meeting prep notifications
+- [ ] Calendar sync (Google Calendar)
 
 ### Phase 4 — Proactive AI
 - [ ] Daily Brief generation
