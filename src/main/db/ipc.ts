@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { randomUUID } from 'crypto'
 import { getDatabase } from './index'
+import { scheduleEmbedding } from '../embedding/pipeline'
 
 type NoteRow = {
   id: string
@@ -364,6 +365,9 @@ export function registerDbIpcHandlers(): void {
         insertRelation.run(id, targetId)
       }
 
+      // Fire-and-forget: generate embeddings in the background (never blocks the save)
+      scheduleEmbedding(id)
+
       return { ok: true }
     }
   )
@@ -680,5 +684,37 @@ export function registerDbIpcHandlers(): void {
       }[]
 
     return { notes, entities }
+  })
+
+  // ─── Settings ────────────────────────────────────────────────────────────────
+
+  /** settings:get — returns the stored value for a key, or null if unset. */
+  ipcMain.handle('settings:get', (_event, { key }: { key: string }) => {
+    const db = getDatabase()
+    const row = db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get(key) as { value: string } | undefined
+    return row?.value ?? null
+  })
+
+  /**
+   * settings:set — upserts a key/value pair.
+   * When the OpenAI API key is updated, also refreshes the embedder client
+   * so the next embedding run picks up the new key immediately.
+   */
+  ipcMain.handle('settings:set', (_event, { key, value }: { key: string; value: string }) => {
+    const db = getDatabase()
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(key, value)
+
+    if (key === 'openai_api_key') {
+      import('../embedding/embedder')
+        .then(({ setOpenAIKey }) => setOpenAIKey(value))
+        .catch(() => { /* embedder not yet loaded — pipeline will read key on next run */ })
+    }
+
+    return { ok: true }
   })
 }

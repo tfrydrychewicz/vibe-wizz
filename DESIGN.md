@@ -504,8 +504,8 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] `[[` mentions in editor, allowing to mention a note, or create new one.
 - [x] Note templates
 
-### Phase 2 — Intelligence 
-- [ ] sqlite-vec integration + embedding pipeline
+### Phase 2 — Intelligence
+- [x] sqlite-vec integration + embedding pipeline
 - [ ] Chunking + contextual retrieval
 - [ ] Claude integration for note summaries (L2) (alsay available on `/` command in the note)
 - [ ] FTS + vector hybrid search

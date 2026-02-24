@@ -31,14 +31,15 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 
 ### Database Layer
 
-- **better-sqlite3** with SQLite (WAL mode, FTS5, 64MB cache)
-- Schema in `src/main/db/schema.ts` — 13 tables including `notes`, `note_templates`, `note_chunks` (future embeddings), `entities`, `entity_mentions`, `note_relations`, `action_items`, `calendar_events`
+- **better-sqlite3** with SQLite (WAL mode, FTS5, 64MB cache) + **sqlite-vec** for vector similarity search
+- Schema in `src/main/db/schema.ts` — 14 tables including `notes`, `note_templates`, `note_chunks`, `entities`, `entity_mentions`, `note_relations`, `action_items`, `calendar_events`, `settings` + vec0 virtual tables `chunk_embeddings`, `summary_embeddings`, `cluster_embeddings`
 - IPC handlers in `src/main/db/ipc.ts`:
   - Notes: `db:status`, `notes:create`, `notes:get`, `notes:update`, `notes:list`, `notes:delete`, `notes:restore`, `notes:delete-forever`, `notes:search`, `notes:get-archived-status`, `notes:get-link-count`
   - Templates: `templates:list`, `templates:create`, `templates:get`, `templates:update`, `templates:delete`
   - Entity types: `entity-types:list`, `entity-types:create`, `entity-types:update`, `entity-types:delete`
   - Entities: `entities:list`, `entities:create`, `entities:get`, `entities:update`, `entities:delete`, `entities:restore`, `entities:delete-forever`, `entities:search`, `entities:get-mention-count`, `entities:get-trash-status`
   - Trash: `trash:list`
+  - Settings: `settings:get`, `settings:set`
 - `notes:delete` is a soft-delete (sets `archived_at`); `notes:restore` clears `archived_at`; `notes:delete-forever` replaces all `[[noteLink]]` nodes in other notes' bodies with plain text of the note title, cleans up `note_relations`, then hard-deletes
 - `notes:get-link-count` — `{ id }` → `{ count }`: count of distinct notes that `[[link]]` to this note (from `note_relations`); used for trash confirmation in `NoteList` and delete-forever confirmation in `TrashView`
 - `entities:delete` is a soft-delete (sets `trashed_at`, returns `{ ok, mentionNoteCount }`); `entities:restore` clears `trashed_at`; `entities:delete-forever` replaces all `@mention` nodes in note bodies with plain text before hard-deleting
@@ -54,6 +55,8 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `entities:list` takes `{type_id}` and returns non-trashed entities sorted by name
 - `entities:search` takes `{query}` and returns up to 20 non-trashed entities across all types matching the name (LIKE)
 - `entity-types:delete` blocks deletion of built-in types (person, project, team, decision, okr)
+- `settings:get` — `{ key }` → stored value string or null; `settings:set` — `{ key, value }` → upserts; used for OpenAI API key storage (`openai_api_key`)
+- `notes:update` triggers `scheduleEmbedding(id)` fire-and-forget after save (no await); generates L1 chunk embeddings in background if sqlite-vec is loaded and API key is configured
 - Migration on startup: `ALTER TABLE entities ADD COLUMN trashed_at TEXT` (idempotent try/catch)
 - Dev DB: `wizz.dev.db`, Prod DB: `wizz.db` — both in Electron's `userData` directory
 
@@ -81,6 +84,7 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `EntityList.vue` — generic entity list pane (mirrors NoteList); props: `typeId`, `typeName`, `activeEntityId`; emits `select`, `open-new-pane`, `open-new-tab`, `new-entity`; exposes `refresh()`; click handler checks modifiers; trash button triggers two-step flow (count check → confirmation overlay → `entities:delete`)
 - `EntityDetail.vue` — dynamic entity form; renders fields from entity type schema JSON; explicit Save button; props: `entityId`; emits `saved: [name: string]`, `trashed: [entityId]`; includes trash button with two-step confirmation
 - `EntityTypeModal.vue` — full entity type creation modal with field builder (name, icon picker, color swatches, dynamic field list with type/options/entity_ref picker)
+- `SettingsModal.vue` — simple settings modal (opened from sidebar Settings button); password input for OpenAI API key with show/hide toggle; loads current key on mount via `settings:get`; saves via `settings:set`
 - `LucideIcon.vue` — dynamic Lucide icon renderer; accepts `name` (kebab-case, e.g. `'user'`, `'bar-chart-2'`), `size`, `color` props; converts to PascalCase to look up the icon component from `lucide-vue-next`; falls back to `Tag` for unknown names
 - `IconPicker.vue` — searchable Lucide icon grid picker (`v-model` stores kebab-case icon name); builds full icon list from `lucide-vue-next` exports at module load; filters by search query; shows up to 96 results; used in `EntityTypeModal`
 - `TemplateList.vue` — template list pane (240px); exposes `refresh()`; emits `select: [id]`, `new-template`; click selects template; inline delete confirmation; shown in the Templates view
@@ -90,7 +94,7 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `src/renderer/stores/noteLinkStore.ts` — same pattern for note-links: `noteArchivedStatus: reactive(Map<string, boolean>)`, `registerNoteLinkClickHandler`, `fireNoteLinkClick`
 - Path alias: `@` resolves to `src/renderer/`
 - Icons: **lucide-vue-next** throughout; entity type icons stored as kebab-case Lucide names (e.g. `'user'`, `'folder'`); built-in seeds migrated from emoji on startup via idempotent UPDATE statements in `schema.ts`
-- Sidebar nav: fixed top items (Today, Notes, **Templates**) + dynamic entity type list + fixed bottom items (Actions, Calendar, Search, **Trash**)
+- Sidebar nav: fixed top items (Today, Notes, **Templates**) + dynamic entity type list + fixed bottom items (Actions, Calendar, Search, **Trash**, **Settings**)
 
 ### Navigation Shortcut Rule — ALWAYS FOLLOW
 
@@ -115,7 +119,9 @@ This applies to: list item clicks (`NoteList`, `EntityList`), "Open →" buttons
 ### Key Design Decisions
 
 - **Local-first**: All data on-device in SQLite; no cloud backend currently
-- **Chunked note storage**: `note_chunks` table is pre-built for a future 3-layer embedding hierarchy (raw → summary → cluster) for semantic search
+- **Embedding pipeline** (`src/main/embedding/`): `chunker.ts` splits `body_plain` into ~1600-char sentence-bounded chunks with ~200-char overlap; `embedder.ts` lazy-initialises an OpenAI client (text-embedding-3-small, 1536d) keyed by API key from `settings`; `pipeline.ts` orchestrates fire-and-forget chunking + embedding + storage after every note save; vec0 tables (`chunk_embeddings`, `summary_embeddings`, `cluster_embeddings`) store FLOAT[1536] embeddings as BLOBs; `note_chunks.id` (INTEGER PRIMARY KEY AUTOINCREMENT) = `chunk_embeddings.rowid`; vec0 has NO ON DELETE CASCADE — `pipeline.ts` deletes from `chunk_embeddings` before `note_chunks`; `isVecLoaded()` exported from `db/index.ts` — all embedding paths return early if false
+- **sqlite-vec loading**: `sqliteVec.load(db)` called after schema init in `db/index.ts`; both `sqlite-vec` and `sqlite-vec-darwin-arm64` (and other platform packages) are in `asarUnpack` so the dylib resolves to the real filesystem path in packaged app; graceful fallback on load failure (warning log, app continues without semantic search)
+- **Chunked note storage**: `note_chunks` table stores L1 raw chunks (layer=1), L2 note summaries (layer=2), L3 cluster summaries (layer=3) for a future 3-layer embedding hierarchy (raw → summary → cluster) for semantic search
 - **FTS5** is already wired up on `notes` for full-text search
 - Entity graph: `entities` + `entity_mentions` + `note_relations` form a knowledge graph linking notes to people/projects/teams/decisions/OKRs; `entity_mentions` is now kept in sync on every note save
 - **Trash pattern**: entities use `trashed_at` (soft-delete); notes use `archived_at` (soft-delete); both have restore and delete-forever actions; `TrashView` in sidebar manages both; trashing from the list triggers a two-step confirmation flow when the item is linked/mentioned (entities: `entities:get-mention-count`; notes: `notes:get-link-count`); restore updates the module-level reactive status map (`entityTrashStatus` / `noteArchivedStatus`) so chips update without reloading notes; `closePanesForContent` is called on trash so open panes close immediately

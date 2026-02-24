@@ -228,4 +228,12 @@ CREATE INDEX IF NOT EXISTS idx_action_items_assigned    ON action_items(assigned
 
 CREATE INDEX IF NOT EXISTS idx_calendar_events_start    ON calendar_events(start_at);
 
+-- ─────────────────────────────────────────────
+-- Settings (key/value store for user preferences, e.g. API keys)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
+
 `

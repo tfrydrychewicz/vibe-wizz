@@ -6,6 +6,7 @@ import NoteList from './components/NoteList.vue'
 import EntityList from './components/EntityList.vue'
 import EntityDetail from './components/EntityDetail.vue'
 import EntityTypeModal from './components/EntityTypeModal.vue'
+import SettingsModal from './components/SettingsModal.vue'
 import TrashView from './components/TrashView.vue'
 import TemplateList from './components/TemplateList.vue'
 import TemplateEditor from './components/TemplateEditor.vue'
@@ -67,6 +68,9 @@ const activeTemplateId = ref<string | null>(null)
 const entityTypes = ref<EntityTypeRow[]>([])
 const showNewEntityTypeModal = ref(false)
 const editingEntityType = ref<EntityTypeRow | null>(null)
+
+// Settings
+const showSettings = ref(false)
 
 // Templates (for "New note from template" dropdown in NoteList)
 type TemplateRef = { id: string; name: string; icon: string }
@@ -316,7 +320,7 @@ onMounted(() => {
       </nav>
 
       <div class="sidebar-bottom">
-        <button class="nav-item">
+        <button class="nav-item" @click="showSettings = true">
           <span class="nav-icon"><LucideIcon name="settings" :size="14" /></span>
           <span class="nav-label">Settings</span>
         </button>
@@ -502,6 +506,9 @@ onMounted(() => {
       @updated="onEntityTypeUpdated"
       @cancel="closeModal"
     />
+
+    <!-- Settings modal -->
+    <SettingsModal v-if="showSettings" @close="showSettings = false" />
   </div>
 </template>
 
