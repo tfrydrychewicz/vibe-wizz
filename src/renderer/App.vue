@@ -418,19 +418,21 @@ onMounted(() => {
             <!-- Placeholder when no panes are open -->
             <div v-else class="placeholder">
               <template v-if="activeView === 'notes'">
-                <span class="placeholder-icon"><LucideIcon name="file-text" :size="48" /></span>
-                <h2>Notes</h2>
+                <span class="placeholder-icon"><LucideIcon name="file-text" :size="22" /></span>
+                <h2>Select a note</h2>
+                <p>Choose from the list or create a new one to start writing.</p>
                 <button class="btn-primary" @click="newNote()">New Note</button>
               </template>
               <template v-else>
                 <span class="placeholder-icon">
                   <LucideIcon
                     :name="activeEntityType()?.icon ?? 'tag'"
-                    :size="48"
+                    :size="22"
                     :color="activeEntityType()?.color ?? undefined"
                   />
                 </span>
-                <h2>{{ activeEntityType()?.name }}</h2>
+                <h2>No {{ activeEntityType()?.name }} selected</h2>
+                <p>Pick one from the list or create your first {{ activeEntityType()?.name?.toLowerCase() }}.</p>
                 <button class="btn-primary" @click="createEntity">
                   New {{ activeEntityType()?.name }}
                 </button>
@@ -457,9 +459,9 @@ onMounted(() => {
               @saved="onTemplateSaved"
             />
             <div v-else class="placeholder">
-              <span class="placeholder-icon"><LucideIcon name="layout-template" :size="48" /></span>
-              <h2>Templates</h2>
-              <p>Create reusable note structures.</p>
+              <span class="placeholder-icon"><LucideIcon name="layout-template" :size="22" /></span>
+              <h2>No template selected</h2>
+              <p>Templates let you start notes with pre-set structure and content.</p>
               <button class="btn-primary" @click="newTemplate">New Template</button>
             </div>
           </div>
@@ -477,11 +479,11 @@ onMounted(() => {
           <span class="placeholder-icon">
             <LucideIcon
               :name="[...FIXED_TOP_NAV, ...FIXED_BOTTOM_NAV].find(n => n.id === activeView)?.icon ?? 'circle'"
-              :size="48"
+              :size="22"
             />
           </span>
           <h2>{{ [...FIXED_TOP_NAV, ...FIXED_BOTTOM_NAV].find(n => n.id === activeView)?.label }}</h2>
-          <p>Coming soon.</p>
+          <p>This feature is coming soon.</p>
         </div>
       </template>
     </main>
