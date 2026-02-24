@@ -94,7 +94,7 @@ defineExpose({ refresh })
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--color-border);
-  background: var(--color-surface);
+  background: var(--color-sidebar);
   overflow: hidden;
 }
 
