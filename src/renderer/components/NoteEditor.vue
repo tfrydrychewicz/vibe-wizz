@@ -5,6 +5,13 @@ import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import { TextStyle } from '@tiptap/extension-text-style'
 import { Color } from '@tiptap/extension-color'
+import { Underline } from '@tiptap/extension-underline'
+import { Highlight } from '@tiptap/extension-highlight'
+import { Superscript } from '@tiptap/extension-superscript'
+import { Subscript } from '@tiptap/extension-subscript'
+import { TextAlign } from '@tiptap/extension-text-align'
+import { Link } from '@tiptap/extension-link'
+import { Image as TiptapImage } from '@tiptap/extension-image'
 
 const props = defineProps<{ noteId: string }>()
 
@@ -38,6 +45,13 @@ const editor = useEditor({
     Placeholder.configure({ placeholder: 'Start writing…' }),
     TextStyle,
     Color,
+    Underline,
+    Highlight.configure({ multicolor: false }),
+    Superscript,
+    Subscript,
+    TextAlign.configure({ types: ['heading', 'paragraph'] }),
+    Link.configure({ openOnClick: false }),
+    TiptapImage,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -92,10 +106,27 @@ async function loadNote(noteId: string): Promise<void> {
   }
 }
 
+function setLink(): void {
+  const prev = editor.value?.getAttributes('link').href as string | undefined
+  const url = window.prompt('Enter URL', prev ?? 'https://')
+  if (url === null) return
+  if (url === '') {
+    editor.value?.chain().focus().extendMarkRange('link').unsetLink().run()
+  } else {
+    editor.value?.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
+  }
+}
+
+function insertImage(): void {
+  const url = window.prompt('Enter image URL')
+  if (url) {
+    editor.value?.chain().focus().setImage({ src: url }).run()
+  }
+}
+
 watch(
   () => props.noteId,
   async (newId, oldId) => {
-    // Flush any pending changes for the outgoing note
     if (saveTimer && oldId) {
       clearTimeout(saveTimer)
       saveTimer = null
@@ -141,7 +172,18 @@ onBeforeUnmount(() => {
 
     <!-- Formatting toolbar -->
     <div class="format-toolbar">
-      <!-- Paragraph style -->
+
+      <!-- History -->
+      <div class="tb-group">
+        <button class="tb-btn" title="Undo (Cmd+Z)"
+          @click="editor?.chain().focus().undo().run()">↩</button>
+        <button class="tb-btn" title="Redo (Cmd+Shift+Z)"
+          @click="editor?.chain().focus().redo().run()">↪</button>
+      </div>
+
+      <div class="tb-sep" />
+
+      <!-- Block type -->
       <div class="tb-group">
         <button
           class="tb-btn"
@@ -171,6 +213,36 @@ onBeforeUnmount(() => {
 
       <div class="tb-sep" />
 
+      <!-- Lists & blocks -->
+      <div class="tb-group">
+        <button
+          class="tb-btn"
+          :class="{ active: editor?.isActive('bulletList') }"
+          title="Bullet list"
+          @click="editor?.chain().focus().toggleBulletList().run()"
+        >≡•</button>
+        <button
+          class="tb-btn"
+          :class="{ active: editor?.isActive('orderedList') }"
+          title="Ordered list"
+          @click="editor?.chain().focus().toggleOrderedList().run()"
+        >1.</button>
+        <button
+          class="tb-btn"
+          :class="{ active: editor?.isActive('blockquote') }"
+          title="Blockquote"
+          @click="editor?.chain().focus().toggleBlockquote().run()"
+        >❝</button>
+        <button
+          class="tb-btn"
+          :class="{ active: editor?.isActive('codeBlock') }"
+          title="Code block"
+          @click="editor?.chain().focus().toggleCodeBlock().run()"
+        >{ }</button>
+      </div>
+
+      <div class="tb-sep" />
+
       <!-- Inline formatting -->
       <div class="tb-group">
         <button
@@ -192,41 +264,77 @@ onBeforeUnmount(() => {
           @click="editor?.chain().focus().toggleStrike().run()"
         >S</button>
         <button
+          class="tb-btn tb-underline"
+          :class="{ active: editor?.isActive('underline') }"
+          title="Underline (Cmd+U)"
+          @click="editor?.chain().focus().toggleUnderline().run()"
+        >U</button>
+        <button
           class="tb-btn tb-code"
           :class="{ active: editor?.isActive('code') }"
-          title="Inline Code"
+          title="Inline code"
           @click="editor?.chain().focus().toggleCode().run()"
         >&lt;/&gt;</button>
+        <button
+          class="tb-btn tb-highlight"
+          :class="{ active: editor?.isActive('highlight') }"
+          title="Highlight"
+          @click="editor?.chain().focus().toggleHighlight().run()"
+        >▐</button>
+        <button
+          class="tb-btn"
+          :class="{ active: editor?.isActive('link') }"
+          title="Link"
+          @click="setLink()"
+        >⛓</button>
       </div>
 
       <div class="tb-sep" />
 
-      <!-- Block elements -->
+      <!-- Superscript / Subscript -->
       <div class="tb-group">
         <button
           class="tb-btn"
-          :class="{ active: editor?.isActive('bulletList') }"
-          title="Bullet List"
-          @click="editor?.chain().focus().toggleBulletList().run()"
-        >≡•</button>
+          :class="{ active: editor?.isActive('superscript') }"
+          title="Superscript"
+          @click="editor?.chain().focus().toggleSuperscript().run()"
+        >x²</button>
         <button
           class="tb-btn"
-          :class="{ active: editor?.isActive('orderedList') }"
-          title="Ordered List"
-          @click="editor?.chain().focus().toggleOrderedList().run()"
-        >1.</button>
+          :class="{ active: editor?.isActive('subscript') }"
+          title="Subscript"
+          @click="editor?.chain().focus().toggleSubscript().run()"
+        >x₂</button>
+      </div>
+
+      <div class="tb-sep" />
+
+      <!-- Text alignment -->
+      <div class="tb-group">
         <button
-          class="tb-btn"
-          :class="{ active: editor?.isActive('blockquote') }"
-          title="Blockquote"
-          @click="editor?.chain().focus().toggleBlockquote().run()"
-        >❝</button>
+          class="tb-btn tb-align"
+          :class="{ active: editor?.isActive({ textAlign: 'left' }) }"
+          title="Align left"
+          @click="editor?.chain().focus().setTextAlign('left').run()"
+        ><span class="align-icon align-left" /></button>
         <button
-          class="tb-btn"
-          :class="{ active: editor?.isActive('codeBlock') }"
-          title="Code Block"
-          @click="editor?.chain().focus().toggleCodeBlock().run()"
-        >{ }</button>
+          class="tb-btn tb-align"
+          :class="{ active: editor?.isActive({ textAlign: 'center' }) }"
+          title="Align center"
+          @click="editor?.chain().focus().setTextAlign('center').run()"
+        ><span class="align-icon align-center" /></button>
+        <button
+          class="tb-btn tb-align"
+          :class="{ active: editor?.isActive({ textAlign: 'right' }) }"
+          title="Align right"
+          @click="editor?.chain().focus().setTextAlign('right').run()"
+        ><span class="align-icon align-right" /></button>
+        <button
+          class="tb-btn tb-align"
+          :class="{ active: editor?.isActive({ textAlign: 'justify' }) }"
+          title="Justify"
+          @click="editor?.chain().focus().setTextAlign('justify').run()"
+        ><span class="align-icon align-justify" /></button>
       </div>
 
       <div class="tb-sep" />
@@ -248,6 +356,14 @@ onBeforeUnmount(() => {
           @click="editor?.chain().focus().unsetColor().run()"
         >✕</button>
       </div>
+
+      <div class="tb-sep" />
+
+      <!-- Insert image -->
+      <div class="tb-group">
+        <button class="tb-btn" title="Insert image" @click="insertImage()">⊞ Add</button>
+      </div>
+
     </div>
 
     <EditorContent :editor="editor" class="note-body" />
