@@ -1,5 +1,18 @@
 import { ipcMain } from 'electron'
+import { randomUUID } from 'crypto'
 import { getDatabase } from './index'
+
+type NoteRow = {
+  id: string
+  title: string
+  body: string
+  body_plain: string
+  source: string
+  language: string
+  created_at: string
+  updated_at: string
+  archived_at: string | null
+}
 
 export function registerDbIpcHandlers(): void {
   /**
@@ -18,4 +31,46 @@ export function registerDbIpcHandlers(): void {
     ).map((r) => r.name)
     return { ok: true, sqliteVersion: version, tables }
   })
+
+  /** notes:create — inserts a new empty note and returns the full row. */
+  ipcMain.handle('notes:create', () => {
+    const db = getDatabase()
+    const id = randomUUID()
+    db.prepare(
+      `INSERT INTO notes (id, title, body, body_plain) VALUES (?, ?, ?, ?)`
+    ).run(id, 'Untitled', '{}', '')
+    return db.prepare('SELECT * FROM notes WHERE id = ?').get(id) as NoteRow
+  })
+
+  /** notes:get — returns a single note by id, or null if not found. */
+  ipcMain.handle('notes:get', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    return (db.prepare('SELECT * FROM notes WHERE id = ?').get(id) as NoteRow) ?? null
+  })
+
+  /**
+   * notes:update — updates title, body, body_plain, and updated_at for a note.
+   * Called by the renderer's auto-save debounce.
+   */
+  ipcMain.handle(
+    'notes:update',
+    (
+      _event,
+      {
+        id,
+        title,
+        body,
+        body_plain,
+      }: { id: string; title: string; body: string; body_plain: string }
+    ) => {
+      const db = getDatabase()
+      db.prepare(
+        `UPDATE notes
+         SET title = ?, body = ?, body_plain = ?,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?`
+      ).run(title, body, body_plain, id)
+      return { ok: true }
+    }
+  )
 }

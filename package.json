@@ -11,6 +11,10 @@
     "rebuild": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {
+    "@tiptap/extension-placeholder": "^3.20.0",
+    "@tiptap/pm": "^3.20.0",
+    "@tiptap/starter-kit": "^3.20.0",
+    "@tiptap/vue-3": "^3.20.0",
     "better-sqlite3": "^12.6.2",
     "vue": "^3.4.21"
   },
