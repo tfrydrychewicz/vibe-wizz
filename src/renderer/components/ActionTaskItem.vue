@@ -20,8 +20,22 @@ function toggleChecked(): void {
   }
 }
 
+// Walk the node tree to extract text, substituting mention/noteLink atoms
+// with their label attribute (node.textContent returns "" for atom nodes).
+type PMNode = { isText?: boolean; text?: string; type: { name: string }; attrs: Record<string, unknown>; forEach: (fn: (child: PMNode) => void) => void }
+function extractText(node: PMNode): string {
+  if (node.isText) return node.text ?? ''
+  if (node.type.name === 'mention' || node.type.name === 'noteLink') {
+    return (node.attrs.label as string | undefined) ?? ''
+  }
+  let out = ''
+  node.forEach((child) => { out += extractText(child) })
+  return out
+}
+
 async function promote(): Promise<void> {
-  await firePromote(props.node.textContent, props.getPos?.() ?? 0)
+  const text = extractText(props.node as unknown as PMNode).trim()
+  await firePromote(text, props.getPos?.() ?? 0)
 }
 </script>
 
