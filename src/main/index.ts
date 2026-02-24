@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell, ipcMain } from 'electron'
 import { join } from 'path'
 import { initDatabase, closeDatabase } from './db/index'
 import { registerDbIpcHandlers } from './db/ipc'
+import { setMainWindow } from './push'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
@@ -32,6 +33,7 @@ function createWindow(): void {
       sandbox: false
     }
   })
+  setMainWindow(mainWindow)
 
   // Open external links in the default browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

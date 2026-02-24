@@ -36,6 +36,13 @@ import { Image as TiptapImage } from '@tiptap/extension-image'
 import { TaskList } from '@tiptap/extension-task-list'
 import { TaskItem } from '@tiptap/extension-task-item'
 import ToolbarDropdown from './ToolbarDropdown.vue'
+import AutoMentionPopup from './AutoMentionPopup.vue'
+import { AutoMentionDecoration } from '../extensions/AutoMentionDecoration'
+import type { AutoDetection } from '../extensions/AutoMentionDecoration'
+import {
+  hoveredAutoDetection,
+  scheduleHideAutoDetection,
+} from '../stores/autoMentionStore'
 import {
   Undo2, Redo2,
   Pilcrow, Heading1, Heading2, Heading3,
@@ -86,10 +93,30 @@ const linkInputValue = ref('')
 const linkInputRef = ref<HTMLInputElement | null>(null)
 const linkPopupRef = ref<HTMLElement | null>(null)
 
+type AutoDetectionRow = {
+  entity_id: string
+  entity_name: string
+  type_id: string
+  type_name: string
+  type_icon: string
+  type_color: string | null
+  confidence: number
+}
+
 let savedFrom = 0
 let savedTo = 0
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let isLoading = false
+
+// Immediately refresh decorations when the NER pipeline completes.
+// The main process pushes 'note:ner-complete' as soon as runNer() finishes,
+// so there is no fixed polling delay — decorations appear within ~2-4s of saving.
+const unsubscribeNer = window.api.on('note:ner-complete', (...args: unknown[]) => {
+  const payload = args[0] as { noteId: string }
+  if (payload.noteId === props.noteId) {
+    void fetchAndSetAutoDetections(payload.noteId)
+  }
+})
 
 const popupEntityId = ref<string | null>(null)
 const popupAnchorRect = ref<DOMRect | null>(null)
@@ -229,6 +256,7 @@ const editor = useEditor({
     }).configure({
       suggestion: buildNoteLinkSuggestion(),
     }),
+    AutoMentionDecoration,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -286,6 +314,23 @@ async function flushSave(overrideId?: string): Promise<void> {
   }
 }
 
+async function fetchAndSetAutoDetections(noteId: string): Promise<void> {
+  if (!editor.value) return
+  const rows = (await window.api.invoke('notes:get-auto-detections', {
+    id: noteId,
+  })) as AutoDetectionRow[]
+  const detections: AutoDetection[] = rows.map((r) => ({
+    entityId: r.entity_id,
+    entityName: r.entity_name,
+    typeId: r.type_id,
+    typeName: r.type_name,
+    typeIcon: r.type_icon,
+    typeColor: r.type_color,
+    confidence: r.confidence,
+  }))
+  editor.value.commands.setAutoDetections(detections)
+}
+
 async function loadNote(noteId: string): Promise<void> {
   isLoading = true
   saveStatus.value = 'saved'
@@ -329,6 +374,8 @@ async function loadNote(noteId: string): Promise<void> {
     isLoading = false
   }
   emit('loaded', title.value || 'Untitled')
+  // Load NER-detected entity mentions for decoration hints
+  void fetchAndSetAutoDetections(noteId)
 }
 
 function extractMentionIdsFromBody(bodyJson: string): string[] {
@@ -439,6 +486,25 @@ function insertImage(): void {
   }
 }
 
+function onInsertAutoMention(payload: {
+  entityId: string
+  entityName: string
+  from: number
+  to: number
+}): void {
+  if (!editor.value) return
+  editor.value
+    .chain()
+    .focus()
+    .deleteRange({ from: payload.from, to: payload.to })
+    .insertContentAt(payload.from, {
+      type: 'mention',
+      attrs: { id: payload.entityId, label: payload.entityName },
+    })
+    .run()
+  scheduleHideAutoDetection(0)
+}
+
 watch(
   () => props.noteId,
   async (newId, oldId) => {
@@ -463,6 +529,7 @@ watch(title, scheduleSave)
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onLinkPopupOutside)
+  unsubscribeNer()
   if (saveTimer) {
     clearTimeout(saveTimer)
     flushSave()
@@ -707,6 +774,12 @@ onBeforeUnmount(() => {
       :anchor-rect="popupNoteAnchorRect"
       @close="popupNoteId = null"
       @open-note="emit('open-note', $event)"
+    />
+
+    <AutoMentionPopup
+      v-if="hoveredAutoDetection"
+      :detection="hoveredAutoDetection"
+      @insert="onInsertAutoMention"
     />
   </div>
 </template>

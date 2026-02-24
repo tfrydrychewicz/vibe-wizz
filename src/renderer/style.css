@@ -814,3 +814,14 @@ body {
 .tb-link-remove:hover {
   color: #ef4444;
 }
+
+/* ─── NER decoration — auto-detected entity name hints ──────────────────── */
+.auto-mention-suggestion {
+  border-bottom: 1.5px dashed rgba(91, 141, 239, 0.55);
+  cursor: default;
+}
+
+.auto-mention-suggestion:hover {
+  background: rgba(91, 141, 239, 0.08);
+  border-radius: 2px;
+}

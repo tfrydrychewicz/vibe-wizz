@@ -343,11 +343,14 @@ export function registerDbIpcHandlers(): void {
          WHERE id = ?`
       ).run(title, body, body_plain, id)
 
-      // Sync entity_mentions: rebuild from current body
+      // Sync entity_mentions: rebuild manual mentions from current body.
+      // auto_detected mentions are managed separately by the NER pipeline step.
       const mentionIds = extractMentionIds(body)
-      db.prepare(`DELETE FROM entity_mentions WHERE note_id = ?`).run(id)
+      db.prepare(`DELETE FROM entity_mentions WHERE note_id = ? AND mention_type = 'manual'`).run(
+        id
+      )
       const insertMention = db.prepare(
-        `INSERT OR IGNORE INTO entity_mentions (note_id, entity_id) VALUES (?, ?)`
+        `INSERT INTO entity_mentions (note_id, entity_id, mention_type, confidence) VALUES (?, ?, 'manual', 1.0)`
       )
       for (const eid of mentionIds) {
         insertMention.run(id, eid)
@@ -372,6 +375,32 @@ export function registerDbIpcHandlers(): void {
       return { ok: true }
     }
   )
+
+  /**
+   * notes:get-auto-detections — returns NER-detected entities for a note.
+   * Used by the editor to render decoration hints for untagged entity mentions.
+   */
+  ipcMain.handle('notes:get-auto-detections', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    return db
+      .prepare(
+        `SELECT
+           em.entity_id,
+           e.name        AS entity_name,
+           e.type_id,
+           et.name       AS type_name,
+           et.icon       AS type_icon,
+           et.color      AS type_color,
+           em.confidence
+         FROM entity_mentions em
+         JOIN entities    e  ON em.entity_id = e.id
+         JOIN entity_types et ON e.type_id    = et.id
+         WHERE em.note_id        = ?
+           AND em.mention_type   = 'auto_detected'
+           AND e.trashed_at IS NULL`
+      )
+      .all(id)
+  })
 
   // ─── Entity Types ───────────────────────────────────────────────────────────
 

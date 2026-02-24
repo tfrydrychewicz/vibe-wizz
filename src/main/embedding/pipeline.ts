@@ -3,13 +3,11 @@
  * Called fire-and-forget after every notes:update save.
  *
  * Flow:
- *   1. Skip early if sqlite-vec isn't loaded or no OpenAI API key is configured
- *   2. Delete existing L1 chunks + embeddings for the note (vec0 has no CASCADE)
- *   3. Chunk the note's body_plain text
- *   4. Embed all chunk contexts in a single batched OpenAI API call
- *   5. Store chunks in note_chunks and embeddings in chunk_embeddings
- *   6. (L2) If Anthropic API key is set, generate a note summary via Claude Haiku,
- *      embed it via OpenAI, and store in note_chunks (layer=2) + summary_embeddings
+ *   1. Skip early if neither OpenAI nor Anthropic API keys are configured
+ *   2. NER and L1+L2 run concurrently (Promise.all) — independent DB tables and API clients
+ *   3. (NER) If Anthropic key: detect entity mentions; pushes note:ner-complete when done
+ *   4. (L1) If sqlite-vec loaded and OpenAI key: chunk and embed note body
+ *   5. (L2) If sqlite-vec loaded, OpenAI and Anthropic keys: generate + embed note summary
  *
  * Errors are caught and logged — pipeline failures never surface to the user.
  */
@@ -18,6 +16,8 @@ import { getDatabase, isVecLoaded } from '../db/index'
 import { chunkText } from './chunker'
 import { setOpenAIKey, embedTexts } from './embedder'
 import { setAnthropicKey, summarizeNote } from './summarizer'
+import { detectEntityMentions, type NerDetection } from './ner'
+import { pushToRenderer } from '../push'
 
 /** Fire-and-forget entry point. Call after notes:update without await. */
 export function scheduleEmbedding(noteId: string): void {
@@ -27,8 +27,6 @@ export function scheduleEmbedding(noteId: string): void {
 }
 
 async function runPipeline(noteId: string): Promise<void> {
-  if (!isVecLoaded()) return
-
   const db = getDatabase()
 
   // Read API keys at runtime so key changes take effect without restart
@@ -36,25 +34,57 @@ async function runPipeline(noteId: string): Promise<void> {
     .prepare('SELECT value FROM settings WHERE key = ?')
     .get('openai_api_key') as { value: string } | undefined
   const openaiKey = openaiSetting?.value ?? ''
-  if (!openaiKey) return
 
-  setOpenAIKey(openaiKey)
+  const anthropicSetting = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('anthropic_api_key') as { value: string } | undefined
+  const anthropicKey = anthropicSetting?.value ?? ''
+
+  if (!openaiKey && !anthropicKey) return
 
   // Load current note content
   const note = db
     .prepare('SELECT title, body_plain FROM notes WHERE id = ?')
     .get(noteId) as { title: string; body_plain: string } | undefined
 
-  // Always clear stale L1 chunks first (even if the note is now empty or deleted)
-  deleteL1Chunks(db, noteId)
+  // NER and L1+L2 are independent — run them concurrently.
+  await Promise.all([
+    // --- NER: entity detection (Anthropic only) ---
+    (async () => {
+      if (!anthropicKey || !note?.body_plain.trim()) return
+      await runNer(noteId, note.title, note.body_plain, anthropicKey, db)
+      pushToRenderer('note:ner-complete', { noteId })
+    })(),
 
-  if (!note?.body_plain.trim()) {
-    deleteL2Summary(db, noteId)
-    return
-  }
+    // --- L1 + L2: chunk embeddings and note summary (sqlite-vec + OpenAI) ---
+    (async () => {
+      if (!isVecLoaded() || !openaiKey) return
+      setOpenAIKey(openaiKey)
 
-  // --- L1: Raw chunks ---
-  const chunks = chunkText(note.body_plain, note.title)
+      // Always clear stale L1 chunks first (even if the note is now empty or deleted)
+      deleteL1Chunks(db, noteId)
+
+      if (!note?.body_plain.trim()) {
+        deleteL2Summary(db, noteId)
+        return
+      }
+
+      await runL1Chunks(noteId, note.title, note.body_plain, db)
+      if (anthropicKey) {
+        setAnthropicKey(anthropicKey)
+        await runL2Summary(noteId, note.title, note.body_plain, db)
+      }
+    })(),
+  ])
+}
+
+async function runL1Chunks(
+  noteId: string,
+  title: string,
+  bodyPlain: string,
+  db: ReturnType<typeof getDatabase>
+): Promise<void> {
+  const chunks = chunkText(bodyPlain, title)
   if (chunks.length === 0) return
 
   // Insert chunks and capture the autoincrement rowids (= chunk_embeddings foreign key).
@@ -93,16 +123,6 @@ async function runPipeline(noteId: string): Promise<void> {
   })()
 
   console.log(`[Embedding] Stored ${chunks.length} L1 chunk(s) for note ${noteId}`)
-
-  // --- L2: Note summary (requires Anthropic API key) ---
-  const anthropicSetting = db
-    .prepare('SELECT value FROM settings WHERE key = ?')
-    .get('anthropic_api_key') as { value: string } | undefined
-  const anthropicKey = anthropicSetting?.value ?? ''
-  if (!anthropicKey) return
-
-  setAnthropicKey(anthropicKey)
-  await runL2Summary(noteId, note.title, note.body_plain, db)
 }
 
 async function runL2Summary(
@@ -148,6 +168,62 @@ async function runL2Summary(
   )
 
   console.log(`[Embedding] Stored L2 summary for note ${noteId}`)
+}
+
+async function runNer(
+  noteId: string,
+  title: string,
+  bodyPlain: string,
+  anthropicKey: string,
+  db: ReturnType<typeof getDatabase>
+): Promise<void> {
+  // Get all non-trashed entities to scan for
+  const entities = db
+    .prepare('SELECT id, name FROM entities WHERE trashed_at IS NULL ORDER BY name COLLATE NOCASE')
+    .all() as { id: string; name: string }[]
+
+  if (!entities.length) return
+
+  // Exclude entities already manually tagged in this note — no need to double-detect them
+  const manualRows = db
+    .prepare(
+      `SELECT entity_id FROM entity_mentions WHERE note_id = ? AND mention_type = 'manual'`
+    )
+    .all(noteId) as { entity_id: string }[]
+  const manualIds = new Set(manualRows.map((r) => r.entity_id))
+  const candidates = entities.filter((e) => !manualIds.has(e.id))
+
+  if (!candidates.length) return
+
+  let detected: NerDetection[]
+  try {
+    detected = await detectEntityMentions(title, bodyPlain, candidates, anthropicKey)
+  } catch (err) {
+    console.error('[NER] Claude API error:', err)
+    return
+  }
+
+  // Replace previous auto-detected mentions for this note with fresh results
+  db.prepare(
+    `DELETE FROM entity_mentions WHERE note_id = ? AND mention_type = 'auto_detected'`
+  ).run(noteId)
+
+  if (!detected.length) {
+    console.log(`[NER] No entity mentions detected for note ${noteId}`)
+    return
+  }
+
+  const insertMention = db.prepare(
+    `INSERT INTO entity_mentions (note_id, entity_id, mention_type, confidence)
+     VALUES (?, ?, 'auto_detected', ?)`
+  )
+  db.transaction(() => {
+    for (const { entityId, confidence } of detected) {
+      insertMention.run(noteId, entityId, confidence)
+    }
+  })()
+
+  console.log(`[NER] Detected ${detected.length} entity mention(s) for note ${noteId}`)
 }
 
 /**
