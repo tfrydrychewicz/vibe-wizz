@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import NoteEditor from './components/NoteEditor.vue'
+import NoteList from './components/NoteList.vue'
 
 type NavItem = {
   id: string
@@ -20,17 +21,40 @@ const navItems: NavItem[] = [
 
 const activeView = ref<string>('today')
 const activeNoteId = ref<string | null>(null)
+const noteListRef = ref<InstanceType<typeof NoteList> | null>(null)
 
 async function newNote(): Promise<void> {
   const note = (await window.api.invoke('notes:create')) as { id: string }
   activeNoteId.value = note.id
+  await noteListRef.value?.refresh()
 }
 
-function onNavClick(id: string): void {
+async function openFirstOrNewNote(): Promise<void> {
+  const list = (await window.api.invoke('notes:list')) as { id: string }[]
+  if (list.length > 0) {
+    activeNoteId.value = list[0].id
+  } else {
+    await newNote()
+  }
+}
+
+async function onNavClick(id: string): Promise<void> {
   activeView.value = id
   if (id === 'notes' && !activeNoteId.value) {
-    newNote()
+    await openFirstOrNewNote()
   }
+}
+
+function onNoteSelect(id: string): void {
+  if (id === '') {
+    activeNoteId.value = null
+  } else {
+    activeNoteId.value = id
+  }
+}
+
+function onNoteSaved(): void {
+  noteListRef.value?.refresh()
 }
 </script>
 
@@ -63,16 +87,23 @@ function onNavClick(id: string): void {
     <main class="main-area">
       <!-- Notes view -->
       <template v-if="activeView === 'notes'">
-        <div v-if="activeNoteId" class="note-view">
-          <div class="note-toolbar">
-            <button class="toolbar-btn" @click="newNote">+ New Note</button>
+        <div class="notes-view">
+          <NoteList
+            ref="noteListRef"
+            :active-note-id="activeNoteId"
+            @select="onNoteSelect"
+            @new-note="newNote"
+          />
+          <NoteEditor
+            v-if="activeNoteId"
+            :note-id="activeNoteId"
+            @saved="onNoteSaved"
+          />
+          <div v-else class="placeholder">
+            <span class="placeholder-icon">📝</span>
+            <h2>Notes</h2>
+            <button class="btn-primary" @click="newNote">New Note</button>
           </div>
-          <NoteEditor :note-id="activeNoteId" />
-        </div>
-        <div v-else class="placeholder">
-          <span class="placeholder-icon">📝</span>
-          <h2>Notes</h2>
-          <button class="btn-primary" @click="newNote">New Note</button>
         </div>
       </template>
 

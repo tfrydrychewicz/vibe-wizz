@@ -33,13 +33,15 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 
 - **better-sqlite3** with SQLite (WAL mode, FTS5, 64MB cache)
 - Schema in `src/main/db/schema.ts` — 13 tables including `notes`, `note_chunks` (future embeddings), `entities`, `entity_mentions`, `note_relations`, `action_items`, `calendar_events`
-- IPC handlers in `src/main/db/ipc.ts` (channels: `db:status`, `notes:create`, `notes:get`, `notes:update`)
+- IPC handlers in `src/main/db/ipc.ts` (channels: `db:status`, `notes:create`, `notes:get`, `notes:update`, `notes:list`, `notes:delete`)
+- `notes:delete` is a soft-delete (sets `archived_at`); `notes:list` returns only non-archived notes sorted by `updated_at DESC`
 - Dev DB: `wizz.dev.db`, Prod DB: `wizz.db` — both in Electron's `userData` directory
 
 ### Renderer / UI
 
-- Single `App.vue` shell with sidebar nav and lazy-loaded view components
-- `NoteEditor.vue` uses **TipTap** (ProseMirror-based) for rich text editing with auto-save (500ms debounce)
+- `App.vue` shell: sidebar nav + two-pane notes view (`NoteList` + `NoteEditor` side by side)
+- `NoteList.vue` — note list pane (240px); exposes `refresh()` via `defineExpose`; emits `select` and `new-note`
+- `NoteEditor.vue` uses **TipTap** (ProseMirror-based) for rich text editing with auto-save (500ms debounce); emits `saved` after each successful save
 - `ToolbarDropdown.vue` is a reusable dropdown used in the editor toolbar
 - Path alias: `@` resolves to `src/renderer/`
 - Icons: **lucide-vue-next** throughout

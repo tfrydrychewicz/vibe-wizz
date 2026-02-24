@@ -32,6 +32,7 @@ import {
 } from 'lucide-vue-next'
 
 const props = defineProps<{ noteId: string }>()
+const emit = defineEmits<{ saved: [] }>()
 
 type NoteRow = {
   id: string
@@ -130,6 +131,7 @@ async function flushSave(overrideId?: string): Promise<void> {
       body_plain: editor.value.getText(),
     })
     saveStatus.value = 'saved'
+    emit('saved')
   } catch {
     saveStatus.value = 'unsaved'
   }

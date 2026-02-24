@@ -493,7 +493,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Electron + Vue + Vite scaffold
 - [x] SQLite database with FTS5
 - [x] TipTap note editor with auto-save
-- [ ] Basic note CRUD + list view
+- [x] Basic note CRUD + list view
 - [ ] Entity types + entity CRUD
 - [ ] `@` mentions in editor
 - [ ] `[[` mentions in editor
