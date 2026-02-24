@@ -19,17 +19,23 @@ export interface ExtractedAction {
   title: string
 }
 
+export interface ExtractedActions {
+  heading: string
+  items: ExtractedAction[]
+}
+
 /**
  * Extract action items from a note body using Claude Haiku.
- * Returns up to MAX_ACTIONS items with concise, imperative titles.
+ * Returns a localized heading and up to MAX_ACTIONS items with concise, imperative titles.
+ * The heading and titles are in the same language as the note content.
  * Throws on API error — callers should handle and treat as non-fatal.
  */
 export async function extractActionItems(
   noteTitle: string,
   bodyPlain: string,
   apiKey: string
-): Promise<ExtractedAction[]> {
-  if (!bodyPlain.trim()) return []
+): Promise<ExtractedActions> {
+  if (!bodyPlain.trim()) return { heading: 'Action Items', items: [] }
 
   const client = new Anthropic({ apiKey })
 
@@ -49,27 +55,36 @@ Note title: ${noteTitle}
 Note content:
 ${truncated}
 
-Respond with ONLY a JSON array. Each element must have:
-- "title": short, imperative description (e.g. "Schedule 1:1 with Sarah", "Review Q3 OKRs", "Send meeting recap")
+Respond with ONLY a JSON object with two keys:
+- "heading": the phrase "Action Items" translated into the same language as the note content
+- "items": array where each element has:
+  - "title": short, imperative description (e.g. "Schedule 1:1 with Sarah", "Review Q3 OKRs", "Send meeting recap")
 
 Rules:
+- Respond in the same language as the note content
 - Only extract explicit tasks, not general information or observations
 - Keep titles concise (under 80 characters)
-- If there are no clear action items, respond with []
+- If there are no clear action items, respond with { "heading": "<translated heading>", "items": [] }
 - Do not extract the same action twice`,
       },
     ],
   })
 
   const block = response.content[0]
-  if (block.type !== 'text') return []
+  if (block.type !== 'text') return { heading: 'Action Items', items: [] }
 
   try {
     const text = block.text.trim().replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '')
     const parsed: unknown = JSON.parse(text)
-    if (!Array.isArray(parsed)) return []
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { heading: 'Action Items', items: [] }
 
-    return (parsed as unknown[])
+    const obj = parsed as Record<string, unknown>
+    const heading = typeof obj['heading'] === 'string' && obj['heading'].trim()
+      ? obj['heading'].trim()
+      : 'Action Items'
+    const rawItems = Array.isArray(obj['items']) ? obj['items'] : []
+
+    const items = (rawItems as unknown[])
       .filter((item): item is { title: string } => {
         if (!item || typeof item !== 'object') return false
         const r = item as Record<string, unknown>
@@ -77,7 +92,9 @@ Rules:
       })
       .map((item) => ({ title: item.title.trim() }))
       .slice(0, MAX_ACTIONS)
+
+    return { heading, items }
   } catch {
-    return []
+    return { heading: 'Action Items', items: [] }
   }
 }

@@ -855,7 +855,7 @@ export function registerDbIpcHandlers(): void {
   /**
    * notes:extract-actions — uses Claude Haiku to extract action items from note body_plain.
    * Called on-demand by the /action slash command in the editor.
-   * Returns { items: string[] } — the caller inserts them as a TaskList in the note.
+   * Returns { heading: string, items: string[] } — heading and titles are in the note's language.
    */
   ipcMain.handle('notes:extract-actions', async (_event, { body_plain }: { body_plain: string }) => {
     const db = getDatabase()
@@ -863,12 +863,12 @@ export function registerDbIpcHandlers(): void {
       .prepare('SELECT value FROM settings WHERE key = ?')
       .get('anthropic_api_key') as { value: string } | undefined
     const apiKey = setting?.value ?? ''
-    if (!apiKey) return { items: [] }
+    if (!apiKey) return { heading: 'Action Items', items: [] }
     try {
       const extracted = await extractActionItems('', body_plain, apiKey)
-      return { items: extracted.map((e) => e.title) }
+      return { heading: extracted.heading, items: extracted.items.map((e) => e.title) }
     } catch {
-      return { items: [] }
+      return { heading: 'Action Items', items: [] }
     }
   })
 

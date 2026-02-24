@@ -253,11 +253,12 @@ async function extractAndInsertActions(
   isExtractingActions.value = true
   try {
     const result = (await window.api.invoke('notes:extract-actions', { body_plain: bodyPlain })) as {
+      heading: string
       items: string[]
     }
     if (!result.items.length) return
     ed.chain().focus().insertContent([
-      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Action Items' }] },
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: result.heading }] },
       {
         type: 'taskList',
         content: result.items.map((t) => ({
