@@ -490,12 +490,13 @@ Offline-created notes are queued for embedding/processing and handled automatica
 ## Implementation Phases
 
 ### Phase 1 — Foundation 
-- [ ] Electron + Vue + Vite scaffold
-- [ ] SQLite database with FTS5
+- [x] Electron + Vue + Vite scaffold
+- [x] SQLite database with FTS5
 - [ ] TipTap note editor with auto-save
 - [ ] Basic note CRUD + list view
 - [ ] Entity types + entity CRUD
 - [ ] `@` mentions in editor
+- [ ] `[[` mentions in editor
 - [ ] Note templates
 
 ### Phase 2 — Intelligence 

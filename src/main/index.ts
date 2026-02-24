@@ -1,5 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
+import { initDatabase, closeDatabase } from './db/index'
+import { registerDbIpcHandlers } from './db/ipc'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
@@ -33,12 +35,18 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  initDatabase()
+  registerDbIpcHandlers()
   createWindow()
 
   app.on('activate', () => {
     // On macOS re-create a window when the dock icon is clicked and no windows are open
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('before-quit', () => {
+  closeDatabase()
 })
 
 app.on('window-all-closed', () => {
