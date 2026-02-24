@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Plus, Pencil, X } from 'lucide-vue-next'
 import NoteEditor from './components/NoteEditor.vue'
 import NoteList from './components/NoteList.vue'
@@ -14,6 +14,7 @@ import TemplateList from './components/TemplateList.vue'
 import TemplateEditor from './components/TemplateEditor.vue'
 import LucideIcon from './components/LucideIcon.vue'
 import TabBar from './components/TabBar.vue'
+import ChatSidebar from './components/ChatSidebar.vue'
 import {
   tabs,
   activeTabId,
@@ -73,6 +74,9 @@ const editingEntityType = ref<EntityTypeRow | null>(null)
 
 // Settings
 const showSettings = ref(false)
+
+// AI Chat sidebar
+const showChat = ref(false)
 
 // Templates (for "New note from template" dropdown in NoteList)
 type TemplateRef = { id: string; name: string; icon: string }
@@ -251,9 +255,21 @@ function toggleMaximize(): void {
   window.api.invoke('window:toggle-maximize')
 }
 
+function onChatKeydown(e: KeyboardEvent): void {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+    e.preventDefault()
+    showChat.value = !showChat.value
+  }
+}
+
 onMounted(() => {
   loadEntityTypes()
   loadNoteTemplates()
+  window.addEventListener('keydown', onChatKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onChatKeydown)
 })
 </script>
 
@@ -322,6 +338,15 @@ onMounted(() => {
       </nav>
 
       <div class="sidebar-bottom">
+        <button
+          class="nav-item"
+          :class="{ active: showChat }"
+          title="AI Chat (⌘J)"
+          @click="showChat = !showChat"
+        >
+          <span class="nav-icon"><LucideIcon name="message-square" :size="14" /></span>
+          <span class="nav-label">Ask Wizz</span>
+        </button>
         <button class="nav-item" @click="showSettings = true">
           <span class="nav-icon"><LucideIcon name="settings" :size="14" /></span>
           <span class="nav-label">Settings</span>
@@ -521,6 +546,9 @@ onMounted(() => {
 
     <!-- Settings modal -->
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
+
+    <!-- AI Chat sidebar -->
+    <ChatSidebar v-if="showChat" @close="showChat = false" @open-note="onOpenNote" />
   </div>
 </template>
 

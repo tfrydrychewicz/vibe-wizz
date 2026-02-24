@@ -5,6 +5,7 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords } from '../embedding/chat'
 
 type NoteRow = {
   id: string
@@ -1033,5 +1034,147 @@ export function registerDbIpcHandlers(): void {
       // FTS-only fallback (no vec / no API key / error above)
       return runFts(15).map((r) => ({ ...r, excerpt: null }))
     }
+  )
+
+  // ─── AI Chat ──────────────────────────────────────────────────────────────────
+
+  /**
+   * chat:send — answer a user question using the knowledge base as context.
+   *
+   * Flow:
+   *   1. Read anthropic_api_key from settings; return graceful message if missing.
+   *   2. FTS5 search on the last user message (top 5) as knowledge base context.
+   *   3. Call Claude with conversation history + context injected into system prompt.
+   *   4. Parse [Note: "Title"] citations from the response; resolve to {id, title}.
+   *   5. Return { content, references }.
+   *
+   * Input:  { messages: {role, content}[], searchQuery?: string }
+   * Output: { content: string, references: {id: string, title: string}[] }
+   */
+  ipcMain.handle(
+    'chat:send',
+    async (
+      _event,
+      { messages, searchQuery }: { messages: { role: 'user' | 'assistant'; content: string }[]; searchQuery?: string },
+    ): Promise<{ content: string; references: { id: string; title: string }[] }> => {
+      const db = getDatabase()
+
+      const setting = db
+        .prepare('SELECT value FROM settings WHERE key = ?')
+        .get('anthropic_api_key') as { value: string } | undefined
+      const apiKey = setting?.value ?? ''
+
+      if (!apiKey) {
+        return {
+          content:
+            'No Anthropic API key configured. Open **Settings** (bottom of the sidebar) and add your API key to enable AI chat.',
+          references: [],
+        }
+      }
+
+      setChatAnthropicKey(apiKey)
+
+      // Use the last user message as the search query if not explicitly provided
+      const query =
+        searchQuery ??
+        [...messages].reverse().find((m) => m.role === 'user')?.content ??
+        ''
+
+      // Retrieve knowledge base context for the question.
+      //
+      // Step 1: Claude Haiku extracts base-form keywords — language-agnostic, handles
+      //         morphology (e.g. Polish "Bifroście" → keyword "Bifrost").
+      // Step 2: FTS5 OR search on those keywords (ranked, good for ASCII/English).
+      // Step 3: LIKE substring fallback for any keywords not yet covered — handles
+      //         inflected forms and non-ASCII characters that FTS5 may tokenize differently.
+      const contextNotes: { id: string; title: string; excerpt: string }[] = []
+      if (query.trim()) {
+        // Pass prior messages so Haiku can resolve follow-ups ("a kiedy to bylo?" → "Bifrost")
+        const keywords = await extractSearchKeywords(query, messages.slice(0, -1))
+
+        if (keywords.length > 0) {
+          const seen = new Set<string>()
+
+          function addNote(row: { id: string; title: string; body_plain: string }): void {
+            if (seen.has(row.id) || contextNotes.length >= 5) return
+            seen.add(row.id)
+            contextNotes.push({
+              id: row.id,
+              title: row.title,
+              excerpt: row.body_plain.length > 600 ? row.body_plain.slice(0, 600) + '…' : row.body_plain,
+            })
+          }
+
+          // FTS5 OR — any keyword match surfaces the note, ranked by relevance
+          try {
+            const ftsQuery = keywords
+              .map((w) => w.replace(/["\(\)\^\*\+\-]/g, ''))
+              .filter(Boolean)
+              .join(' OR ')
+
+            if (ftsQuery) {
+              const ftsRows = db
+                .prepare(
+                  `SELECT n.id, n.title, n.body_plain
+                   FROM notes_fts
+                   JOIN notes n ON n.rowid = notes_fts.rowid
+                   WHERE notes_fts MATCH ? AND n.archived_at IS NULL
+                   ORDER BY rank LIMIT 5`,
+                )
+                .all(ftsQuery) as { id: string; title: string; body_plain: string }[]
+
+              for (const row of ftsRows) addNote(row)
+            }
+          } catch {
+            // FTS error — continue to LIKE fallback
+          }
+
+          // LIKE fallback — substring match handles inflected/non-ASCII forms FTS5 may miss
+          if (contextNotes.length < 5) {
+            for (const keyword of keywords) {
+              if (contextNotes.length >= 5) break
+              try {
+                const likeRows = db
+                  .prepare(
+                    `SELECT id, title, body_plain FROM notes
+                     WHERE LOWER(body_plain) LIKE ? AND archived_at IS NULL
+                     LIMIT 3`,
+                  )
+                  .all(`%${keyword.toLowerCase()}%`) as { id: string; title: string; body_plain: string }[]
+
+                for (const row of likeRows) addNote(row)
+              } catch {
+                // ignore per-keyword failures
+              }
+            }
+          }
+        }
+      }
+
+      let content: string
+      try {
+        content = await sendChatMessage(messages, contextNotes)
+      } catch (err) {
+        console.error('[Chat] Claude API error:', err)
+        return {
+          content: 'Something went wrong calling the Claude API. Please check your API key and try again.',
+          references: [],
+        }
+      }
+
+      // Parse [Note: "Title"] citations and resolve to note IDs
+      const noteRefRegex = /\[Note:\s*"([^"]+)"\]/g
+      const references: { id: string; title: string }[] = []
+      let match
+      while ((match = noteRefRegex.exec(content)) !== null) {
+        const title = match[1]
+        const note = contextNotes.find((n) => n.title.toLowerCase() === title.toLowerCase())
+        if (note && !references.find((r) => r.id === note.id)) {
+          references.push({ id: note.id, title: note.title })
+        }
+      }
+
+      return { content, references }
+    },
   )
 }

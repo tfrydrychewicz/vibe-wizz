@@ -511,7 +511,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] FTS + vector hybrid search
 - [x] Auto entity detection (NER)
 - [x] Action item extraction from notes (also available on `/` command in the note)
-- [ ] AI chat sidebar (basic)
+- [x] AI chat sidebar (basic)
 
 ### Phase 3 — Meetings
 - [ ] Swift mic detection binary
