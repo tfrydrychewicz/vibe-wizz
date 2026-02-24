@@ -4,7 +4,7 @@ export type OpenMode = 'default' | 'new-pane' | 'new-tab'
 
 export interface ContentPane {
   id: string
-  type: 'note' | 'entity'
+  type: 'note' | 'entity' | 'calendar'
   contentId: string
   typeId?: string
   title: string
@@ -37,7 +37,7 @@ export const activePane = computed((): ContentPane | null => {
 })
 
 export function openContent(
-  type: 'note' | 'entity',
+  type: 'note' | 'entity' | 'calendar',
   contentId: string,
   title: string,
   mode: OpenMode,
@@ -52,9 +52,15 @@ export function openContent(
     tabs.value.push(tab)
     activeTabId.value = tab.id
   } else if (mode === 'new-pane') {
-    const tab = activeTab.value!
-    tab.panes.push(pane)
-    tab.activePaneId = pane.id
+    if (!activeTab.value) {
+      // No tab open yet — create one
+      const tab: Tab = { id: newId(), panes: [pane], activePaneId: pane.id }
+      tabs.value.push(tab)
+      activeTabId.value = tab.id
+    } else {
+      activeTab.value.panes.push(pane)
+      activeTab.value.activePaneId = pane.id
+    }
   } else {
     // Default: replace active pane's content
     const tab = activeTab.value!

@@ -1225,4 +1225,112 @@ export function registerDbIpcHandlers(): void {
       return { content, references }
     },
   )
+
+  // ─── Calendar Events ──────────────────────────────────────────────────────────
+
+  type CalendarEventRow = {
+    id: number
+    external_id: string | null
+    title: string
+    start_at: string
+    end_at: string
+    attendees: string
+    linked_note_id: string | null
+    transcript_note_id: string | null
+    recurrence_rule: string | null
+    synced_at: string
+  }
+
+  /** calendar-events:list — returns events in a date range, with linked note title. */
+  ipcMain.handle(
+    'calendar-events:list',
+    (_event, { start_at, end_at }: { start_at: string; end_at: string }) => {
+      const db = getDatabase()
+      return db
+        .prepare(
+          `SELECT ce.*, n.title AS linked_note_title
+           FROM calendar_events ce
+           LEFT JOIN notes n ON ce.linked_note_id = n.id
+           WHERE ce.start_at >= ? AND ce.start_at < ?
+           ORDER BY ce.start_at ASC`,
+        )
+        .all(start_at, end_at) as (CalendarEventRow & { linked_note_title: string | null })[]
+    },
+  )
+
+  /** calendar-events:create — creates a new calendar event. */
+  ipcMain.handle(
+    'calendar-events:create',
+    (
+      _event,
+      opts: {
+        title: string
+        start_at: string
+        end_at: string
+        attendees?: Array<{ email: string; name: string }>
+        linked_note_id?: string | null
+      },
+    ) => {
+      const db = getDatabase()
+      const result = db
+        .prepare(
+          `INSERT INTO calendar_events (title, start_at, end_at, attendees, linked_note_id)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          opts.title,
+          opts.start_at,
+          opts.end_at,
+          JSON.stringify(opts.attendees ?? []),
+          opts.linked_note_id ?? null,
+        )
+      return db
+        .prepare(
+          `SELECT ce.*, n.title AS linked_note_title
+           FROM calendar_events ce
+           LEFT JOIN notes n ON ce.linked_note_id = n.id
+           WHERE ce.id = ?`,
+        )
+        .get(result.lastInsertRowid) as CalendarEventRow & { linked_note_title: string | null }
+    },
+  )
+
+  /** calendar-events:update — updates fields on an existing calendar event. */
+  ipcMain.handle(
+    'calendar-events:update',
+    (
+      _event,
+      opts: {
+        id: number
+        title?: string
+        start_at?: string
+        end_at?: string
+        attendees?: Array<{ email: string; name: string }>
+        linked_note_id?: string | null
+      },
+    ) => {
+      const db = getDatabase()
+      const sets: string[] = []
+      const params: unknown[] = []
+
+      if (opts.title !== undefined) { sets.push('title = ?'); params.push(opts.title) }
+      if (opts.start_at !== undefined) { sets.push('start_at = ?'); params.push(opts.start_at) }
+      if (opts.end_at !== undefined) { sets.push('end_at = ?'); params.push(opts.end_at) }
+      if (opts.attendees !== undefined) { sets.push('attendees = ?'); params.push(JSON.stringify(opts.attendees)) }
+      if ('linked_note_id' in opts) { sets.push('linked_note_id = ?'); params.push(opts.linked_note_id ?? null) }
+
+      if (!sets.length) return { ok: true }
+      params.push(opts.id)
+      db.prepare(`UPDATE calendar_events SET ${sets.join(', ')} WHERE id = ?`)
+        .run(...(params as (string | number | null)[]))
+      return { ok: true }
+    },
+  )
+
+  /** calendar-events:delete — hard-deletes a calendar event. */
+  ipcMain.handle('calendar-events:delete', (_event, { id }: { id: number }) => {
+    const db = getDatabase()
+    db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id)
+    return { ok: true }
+  })
 }

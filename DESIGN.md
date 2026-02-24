@@ -515,6 +515,9 @@ Offline-created notes are queued for embedding/processing and handled automatica
 
 ### Phase 3 — Meetings
 - [x] Swift mic detection binary
+- [x] Meetings + Meetings CRUD + Displaying meetings in the calendar
+    - Meeting fields are editable
+    - Calendar supports different views: single day, working days in the week, week, month
 - [ ] Deepgram streaming transcription
 - [ ] Transcript → structured note pipeline
 - [ ] Speaker diarization + entity matching

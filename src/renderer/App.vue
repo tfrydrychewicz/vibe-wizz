@@ -15,6 +15,7 @@ import TemplateEditor from './components/TemplateEditor.vue'
 import LucideIcon from './components/LucideIcon.vue'
 import TabBar from './components/TabBar.vue'
 import ChatSidebar from './components/ChatSidebar.vue'
+import CalendarView from './components/CalendarView.vue'
 import {
   tabs,
   activeTabId,
@@ -188,6 +189,19 @@ async function onNavClick(id: string): Promise<void> {
   }
 }
 
+function onCalendarNavClick(e: MouseEvent): void {
+  if (e.shiftKey || e.metaKey || e.ctrlKey) {
+    const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : 'new-pane'
+    // Ensure the pane layout (notes-view) is active so the calendar pane renders
+    if (activeView.value !== 'notes' && !isEntityView(activeView.value)) {
+      activeView.value = 'notes'
+    }
+    openContent('calendar', 'calendar', 'Calendar', mode, undefined, 'calendar')
+  } else {
+    void onNavClick('calendar')
+  }
+}
+
 // ── Event handlers from child components ────────────────────────────────────
 
 function onNoteSaved(noteId: string, title: string): void {
@@ -338,7 +352,7 @@ onBeforeUnmount(() => {
           :key="item.id"
           class="nav-item"
           :class="{ active: activeView === item.id }"
-          @click="onNavClick(item.id)"
+          @click="item.id === 'calendar' ? onCalendarNavClick($event) : onNavClick(item.id)"
         >
           <span class="nav-icon"><LucideIcon :name="item.icon" :size="14" /></span>
           <span class="nav-label">{{ item.label }}</span>
@@ -451,6 +465,10 @@ onBeforeUnmount(() => {
                   @saved="(n) => onEntitySaved(pane.contentId, n)"
                   @trashed="onEntityTrashed"
                 />
+                <CalendarView
+                  v-else-if="pane.type === 'calendar'"
+                  @open-note="onOpenNote"
+                />
               </div>
             </div>
 
@@ -510,6 +528,11 @@ onBeforeUnmount(() => {
       <!-- Actions view -->
       <template v-else-if="activeView === 'actions'">
         <ActionsView @open-note="onOpenNote" />
+      </template>
+
+      <!-- Calendar view -->
+      <template v-else-if="activeView === 'calendar'">
+        <CalendarView @open-note="onOpenNote" />
       </template>
 
       <!-- Search view -->
