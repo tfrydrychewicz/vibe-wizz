@@ -50,15 +50,18 @@ async function runPipeline(noteId: string): Promise<void> {
   const chunks = chunkText(note.body_plain, note.title)
   if (chunks.length === 0) return
 
-  // Insert chunks and capture the autoincrement rowids (= chunk_embeddings foreign key)
+  // Insert chunks and capture the autoincrement rowids (= chunk_embeddings foreign key).
+  // Use BigInt so better-sqlite3 always binds via sqlite3_bind_int64 → SQLITE_INTEGER.
+  // sqlite-vec vec0 rejects SQLITE_REAL primary key values even when the value is
+  // a whole number, so passing a JS `number` (which may be bound as REAL) is not safe.
   const insertChunk = db.prepare(
     `INSERT INTO note_chunks (note_id, chunk_text, chunk_context, layer, position)
      VALUES (?, ?, ?, 1, ?)`
   )
-  const rowids: number[] = []
+  const rowids: bigint[] = []
   for (const chunk of chunks) {
     const result = insertChunk.run(noteId, chunk.text, chunk.context, chunk.position)
-    rowids.push(Number(result.lastInsertRowid))
+    rowids.push(BigInt(result.lastInsertRowid))
   }
 
   // Generate embeddings (single batched API call for all chunks)
@@ -98,7 +101,7 @@ function deleteChunks(db: ReturnType<typeof getDatabase>, noteId: string): void 
   if (rows.length > 0) {
     const delVec = db.prepare('DELETE FROM chunk_embeddings WHERE rowid = ?')
     db.transaction(() => {
-      for (const { id } of rows) delVec.run(id)
+      for (const { id } of rows) delVec.run(BigInt(id))
     })()
   }
 

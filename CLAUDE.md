@@ -40,6 +40,7 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
   - Entities: `entities:list`, `entities:create`, `entities:get`, `entities:update`, `entities:delete`, `entities:restore`, `entities:delete-forever`, `entities:search`, `entities:get-mention-count`, `entities:get-trash-status`
   - Trash: `trash:list`
   - Settings: `settings:get`, `settings:set`
+  - Search: `notes:semantic-search`
 - `notes:delete` is a soft-delete (sets `archived_at`); `notes:restore` clears `archived_at`; `notes:delete-forever` replaces all `[[noteLink]]` nodes in other notes' bodies with plain text of the note title, cleans up `note_relations`, then hard-deletes
 - `notes:get-link-count` — `{ id }` → `{ count }`: count of distinct notes that `[[link]]` to this note (from `note_relations`); used for trash confirmation in `NoteList` and delete-forever confirmation in `TrashView`
 - `entities:delete` is a soft-delete (sets `trashed_at`, returns `{ ok, mentionNoteCount }`); `entities:restore` clears `trashed_at`; `entities:delete-forever` replaces all `@mention` nodes in note bodies with plain text before hard-deleting
@@ -57,6 +58,7 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `entity-types:delete` blocks deletion of built-in types (person, project, team, decision, okr)
 - `settings:get` — `{ key }` → stored value string or null; `settings:set` — `{ key, value }` → upserts; used for OpenAI API key storage (`openai_api_key`)
 - `notes:update` triggers `scheduleEmbedding(id)` fire-and-forget after save (no await); generates L1 chunk embeddings in background if sqlite-vec is loaded and API key is configured
+- `notes:semantic-search` — `{ query }` → `[{ id, title, excerpt: string | null }]` (up to 15 notes): embeds the query via OpenAI and runs KNN on `chunk_embeddings` (deduped by note); falls back to FTS5 full-text search if vec not loaded or no API key
 - Migration on startup: `ALTER TABLE entities ADD COLUMN trashed_at TEXT` (idempotent try/catch)
 - Dev DB: `wizz.dev.db`, Prod DB: `wizz.db` — both in Electron's `userData` directory
 
@@ -84,6 +86,7 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `EntityList.vue` — generic entity list pane (mirrors NoteList); props: `typeId`, `typeName`, `activeEntityId`; emits `select`, `open-new-pane`, `open-new-tab`, `new-entity`; exposes `refresh()`; click handler checks modifiers; trash button triggers two-step flow (count check → confirmation overlay → `entities:delete`)
 - `EntityDetail.vue` — dynamic entity form; renders fields from entity type schema JSON; explicit Save button; props: `entityId`; emits `saved: [name: string]`, `trashed: [entityId]`; includes trash button with two-step confirmation
 - `EntityTypeModal.vue` — full entity type creation modal with field builder (name, icon picker, color swatches, dynamic field list with type/options/entity_ref picker)
+- `SearchView.vue` — full-screen semantic search view (shown when sidebar Search is active); debounced text input (300ms); calls `notes:semantic-search`; shows note title + matching chunk excerpt per result; click/Shift+click/Cmd+click open modes; gracefully degrades to FTS when no API key
 - `SettingsModal.vue` — simple settings modal (opened from sidebar Settings button); password input for OpenAI API key with show/hide toggle; loads current key on mount via `settings:get`; saves via `settings:set`
 - `LucideIcon.vue` — dynamic Lucide icon renderer; accepts `name` (kebab-case, e.g. `'user'`, `'bar-chart-2'`), `size`, `color` props; converts to PascalCase to look up the icon component from `lucide-vue-next`; falls back to `Tag` for unknown names
 - `IconPicker.vue` — searchable Lucide icon grid picker (`v-model` stores kebab-case icon name); builds full icon list from `lucide-vue-next` exports at module load; filters by search query; shows up to 96 results; used in `EntityTypeModal`

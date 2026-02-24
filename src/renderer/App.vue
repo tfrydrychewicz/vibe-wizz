@@ -8,6 +8,7 @@ import EntityDetail from './components/EntityDetail.vue'
 import EntityTypeModal from './components/EntityTypeModal.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import TrashView from './components/TrashView.vue'
+import SearchView from './components/SearchView.vue'
 import TemplateList from './components/TemplateList.vue'
 import TemplateEditor from './components/TemplateEditor.vue'
 import LucideIcon from './components/LucideIcon.vue'
@@ -470,6 +471,11 @@ onMounted(() => {
             </div>
           </div>
         </div>
+      </template>
+
+      <!-- Search view -->
+      <template v-else-if="activeView === 'search'">
+        <SearchView @open-note="onOpenNote" />
       </template>
 
       <!-- Trash view -->

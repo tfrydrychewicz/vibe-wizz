@@ -1,7 +1,8 @@
 import { ipcMain } from 'electron'
 import { randomUUID } from 'crypto'
-import { getDatabase } from './index'
+import { getDatabase, isVecLoaded } from './index'
 import { scheduleEmbedding } from '../embedding/pipeline'
+import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 
 type NoteRow = {
   id: string
@@ -711,10 +712,86 @@ export function registerDbIpcHandlers(): void {
 
     if (key === 'openai_api_key') {
       import('../embedding/embedder')
-        .then(({ setOpenAIKey }) => setOpenAIKey(value))
+        .then(({ setOpenAIKey: sk }) => sk(value))
         .catch(() => { /* embedder not yet loaded — pipeline will read key on next run */ })
     }
 
     return { ok: true }
   })
+
+  // ─── Semantic search ──────────────────────────────────────────────────────────
+
+  /**
+   * notes:semantic-search — search notes by meaning using stored chunk embeddings.
+   *
+   * Flow:
+   *   1. If sqlite-vec is loaded and an OpenAI API key is configured: embed the query,
+   *      run a KNN search on chunk_embeddings, deduplicate by note, return top results
+   *      with the matching chunk as an excerpt.
+   *   2. Fallback: FTS5 full-text search on notes_fts (title + body_plain).
+   *
+   * Input:  { query: string }
+   * Output: { id, title, excerpt: string | null }[]  (up to 15 notes)
+   */
+  ipcMain.handle(
+    'notes:semantic-search',
+    async (_event, { query }: { query: string }): Promise<{ id: string; title: string; excerpt: string | null }[]> => {
+      const db = getDatabase()
+
+      if (isVecLoaded()) {
+        const setting = db
+          .prepare('SELECT value FROM settings WHERE key = ?')
+          .get('openai_api_key') as { value: string } | undefined
+        const apiKey = setting?.value ?? ''
+
+        if (apiKey) {
+          try {
+            setOpenAIKey(apiKey)
+            const [embed] = await embedTexts([query])
+            const queryBuf = Buffer.from(embed.embedding.buffer)
+
+            // KNN: returns rows ordered by ascending cosine distance (most similar first)
+            const knnRows = db
+              .prepare('SELECT rowid, distance FROM chunk_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT 30')
+              .all(queryBuf) as { rowid: number; distance: number }[]
+
+            const seen = new Set<string>()
+            const results: { id: string; title: string; excerpt: string | null }[] = []
+
+            for (const { rowid } of knnRows) {
+              const row = db
+                .prepare(
+                  `SELECT nc.note_id, n.title, nc.chunk_text
+                   FROM note_chunks nc
+                   JOIN notes n ON n.id = nc.note_id
+                   WHERE nc.id = ? AND n.archived_at IS NULL`
+                )
+                .get(rowid) as { note_id: string; title: string; chunk_text: string } | undefined
+
+              if (!row || seen.has(row.note_id)) continue
+              seen.add(row.note_id)
+              results.push({ id: row.note_id, title: row.title, excerpt: row.chunk_text })
+              if (results.length >= 15) break
+            }
+
+            return results
+          } catch (err) {
+            console.error('[Search] Semantic search error — falling back to FTS:', err)
+            // fall through to FTS
+          }
+        }
+      }
+
+      // FTS5 fallback: searches both title and body_plain
+      return db
+        .prepare(
+          `SELECT n.id, n.title, NULL as excerpt
+           FROM notes_fts
+           JOIN notes n ON n.rowid = notes_fts.rowid
+           WHERE notes_fts MATCH ? AND n.archived_at IS NULL
+           ORDER BY rank LIMIT 15`
+        )
+        .all(query) as { id: string; title: string; excerpt: null }[]
+    }
+  )
 }
