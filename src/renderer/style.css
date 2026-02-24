@@ -1,0 +1,130 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --color-bg: #1a1a1a;
+  --color-sidebar: #161616;
+  --color-surface: #242424;
+  --color-border: #2e2e2e;
+  --color-text: #e8e8e8;
+  --color-text-muted: #888;
+  --color-accent: #5b8def;
+  --color-accent-hover: #7aaeff;
+  --sidebar-width: 200px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+body {
+  background: var(--color-bg);
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100vh;
+}
+
+/* ── Shell layout ── */
+.app-shell {
+  display: flex;
+  height: 100vh;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  background: var(--color-sidebar);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  /* leave room for native traffic-light buttons on macOS */
+  padding-top: 52px;
+}
+
+.sidebar-top {
+  /* spacer — traffic lights sit here */
+}
+
+.sidebar-nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+}
+
+.sidebar-bottom {
+  padding: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: background 0.1s, color 0.1s;
+}
+
+.nav-item:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.nav-item.active {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.nav-icon {
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ── Main area ── */
+.main-area {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.placeholder {
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.placeholder-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 16px;
+}
+
+.placeholder h2 {
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--color-text);
+  margin-bottom: 6px;
+}
+
+.placeholder p {
+  font-size: 13px;
+}

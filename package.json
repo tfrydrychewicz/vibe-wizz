@@ -1,0 +1,38 @@
+{
+  "name": "wizz",
+  "version": "0.1.0",
+  "description": "AI-Native Second Brain for Engineering Managers",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
+    "build": "env -u ELECTRON_RUN_AS_NODE electron-vite build && electron-builder",
+    "preview": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
+    "typecheck": "vue-tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
+  },
+  "dependencies": {
+    "vue": "^3.4.21"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.4",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.1.0",
+    "typescript": "^5.4.2",
+    "vite": "^5.2.6",
+    "vue-tsc": "^2.0.6"
+  },
+  "build": {
+    "appId": "com.wizz.app",
+    "productName": "Wizz",
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity"
+    },
+    "files": [
+      "out/**/*"
+    ]
+  }
+}
