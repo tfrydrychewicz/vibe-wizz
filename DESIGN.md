@@ -761,7 +761,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Transcript → structured note pipeline (`postProcessor.ts`: Claude Haiku summary + raw transcript appended as TipTap nodes to linked note; `note_transcriptions` row persisted per session; embedding pipeline triggered after)
 - [x] Post-meeting summary (basic): Claude Haiku generates structured meeting summary (Meeting Summary / Key Decisions / Follow-ups); stored in `note_transcriptions.summary` and appended to note body
 - [x] Multi-session transcription history: each start/stop cycle persists to `note_transcriptions`; Transcriptions panel in NoteEditor shows all sessions (newest-first) with timestamps, durations, AI summaries, and expandable raw transcripts
-- [ ] Speaker diarization + entity matching
+- [x] Speaker diarization + entity matching: Deepgram word-level `words` array parsed into speaker segments (`[Speaker N]: text`); on stop, calendar event attendee names fetched and passed to `postProcessor.ts`; Claude Haiku maps speaker IDs → attendee names; labels replaced before storing `raw_transcript` and generating merged note
 - [ ] Post-meeting action extraction from transcript (action items currently extracted from note body by general pipeline; dedicated transcript-aware extraction pending)
 - [ ] Meeting prep notifications
 - [ ] Calendar sync (Google Calendar)

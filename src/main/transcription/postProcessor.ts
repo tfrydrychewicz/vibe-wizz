@@ -149,6 +149,64 @@ function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
   return nodes
 }
 
+// ── AI: speaker-to-attendee matching ──────────────────────────────────────────
+
+/**
+ * Given a speaker-labeled transcript (e.g. "[Speaker 0]: hello\n[Speaker 1]: hi")
+ * and a list of meeting attendee names, ask Claude Haiku to map each speaker
+ * number to an attendee name.  Returns a partial map — unresolved speakers are
+ * left with their "Speaker N" label.
+ */
+async function matchSpeakersToAttendees(
+  transcript: string,
+  attendeeNames: string[],
+  apiKey: string,
+): Promise<Record<string, string>> {
+  if (!apiKey || attendeeNames.length < 2) return {}
+
+  // Collect all distinct speaker IDs that appear in the transcript
+  const speakerIds = new Set<string>()
+  for (const m of transcript.matchAll(/\[Speaker (\d+)\]:/g)) speakerIds.add(m[1])
+  if (speakerIds.size < 2) return {}
+
+  const prompt = `You are analyzing a meeting transcript with numbered speaker labels.
+
+Meeting attendees:
+${attendeeNames.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+
+Transcript excerpt (first 3000 chars):
+${transcript.slice(0, 3000)}
+
+Based on the conversation, map each Speaker number to the most likely attendee name.
+Reply ONLY with a JSON object like {"0": "Alice Smith", "1": "Bob Jones"}.
+Only include speakers you can identify with reasonable confidence. If unsure, reply with {}.
+No explanation, only JSON.`
+
+  const client = new Anthropic({ apiKey })
+  try {
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 200,
+      messages: [{ role: 'user', content: prompt }],
+    })
+    const block = response.content[0]
+    if (block.type !== 'text') return {}
+    const jsonMatch = block.text.trim().match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return {}
+    return JSON.parse(jsonMatch[0]) as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+/** Replace [Speaker N] labels with matched attendee names. */
+function applySpeakerNames(transcript: string, speakerMap: Record<string, string>): string {
+  if (Object.keys(speakerMap).length === 0) return transcript
+  return transcript.replace(/\[Speaker (\d+)\]/g, (_, id: string) =>
+    speakerMap[id] ? `[${speakerMap[id]}]` : `[Speaker ${id}]`,
+  )
+}
+
 // ── AI: merge transcript + manual notes ───────────────────────────────────────
 
 async function generateMergedNote(
@@ -260,6 +318,7 @@ export async function processTranscript(
   anthropicKey: string,
   startedAt?: string,
   endedAt?: string,
+  attendeeNames?: string[],
 ): Promise<void> {
   if (!rawTranscript.trim()) {
     // Still push completion so the editor knows recording stopped
@@ -277,17 +336,27 @@ export async function processTranscript(
     | undefined
   const noteBodyPlain = currentNote?.body_plain ?? ''
 
-  // Persist the transcription session row (raw transcript always saved)
+  // If the transcript has speaker labels and attendees are known, resolve Speaker N → name
+  let labeledTranscript = rawTranscript
+  if (attendeeNames && attendeeNames.length >= 2 && rawTranscript.includes('[Speaker ')) {
+    const speakerMap = await matchSpeakersToAttendees(rawTranscript, attendeeNames, anthropicKey)
+    if (Object.keys(speakerMap).length > 0) {
+      labeledTranscript = applySpeakerNames(rawTranscript, speakerMap)
+      console.log('[Transcription] Speaker map resolved:', speakerMap)
+    }
+  }
+
+  // Persist the transcription session row (speaker-resolved transcript stored)
   const transcriptionId = randomUUID()
   if (startedAt) {
     db.prepare(
       `INSERT INTO note_transcriptions (id, note_id, started_at, ended_at, raw_transcript)
        VALUES (?, ?, ?, ?, ?)`,
-    ).run(transcriptionId, noteId, startedAt, endedAt ?? null, rawTranscript)
+    ).run(transcriptionId, noteId, startedAt, endedAt ?? null, labeledTranscript)
   }
 
   // Generate merged note (transcript + user's existing notes, graceful on failure)
-  const mergedContent = await generateMergedNote(rawTranscript, noteBodyPlain, anthropicKey)
+  const mergedContent = await generateMergedNote(labeledTranscript, noteBodyPlain, anthropicKey)
 
   // Store merged content as the session summary for the history panel
   if (startedAt && mergedContent) {
@@ -297,8 +366,9 @@ export async function processTranscript(
     )
   }
 
-  // Replace note body with merged content (or append raw transcript as fallback)
-  updateNoteWithTranscript(noteId, mergedContent, rawTranscript)
+  // Replace note body with merged content (or append transcript as fallback).
+  // Use the speaker-resolved transcript so the fallback raw section shows names.
+  updateNoteWithTranscript(noteId, mergedContent, labeledTranscript)
 
   // Trigger embedding pipeline (NER + action extraction + embeddings)
   scheduleEmbedding(noteId)

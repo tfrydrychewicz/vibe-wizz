@@ -20,6 +20,7 @@ const anthropicKey = ref('')
 const showAnthropicKey = ref(false)
 const elevenLabsKey = ref('')
 const showElevenLabsKey = ref(false)
+const elevenLabsDiarize = ref(false)
 const deepgramKey = ref('')
 const showDeepgramKey = ref(false)
 const transcriptionModel = ref<'elevenlabs' | 'deepgram' | 'macos'>('macos')
@@ -77,13 +78,14 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList] = await Promise.all([
+  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'deepgram_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'transcription_model' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'transcription_language' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'elevenlabs_diarize' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'calendar_slot_duration' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'meeting_note_title_template' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
@@ -97,6 +99,7 @@ onMounted(async () => {
   deepgramKey.value = deepgram ?? ''
   transcriptionModel.value = (transcModel as 'elevenlabs' | 'deepgram' | 'macos' | null) ?? 'macos'
   transcriptionLanguage.value = transcLang ?? 'multi'
+  elevenLabsDiarize.value = elDiarize === 'true'
   calendarSlotDuration.value = slotDuration ?? '30'
   meetingNoteTitleTemplate.value = noteTitleTemplate ?? '{date} - {title}'
   entityTypes.value = etList ?? []
@@ -112,6 +115,7 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'openai_api_key', value: apiKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'anthropic_api_key', value: anthropicKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'elevenlabs_api_key', value: elevenLabsKey.value.trim() }),
+    window.api.invoke('settings:set', { key: 'elevenlabs_diarize', value: elevenLabsDiarize.value ? 'true' : 'false' }),
     window.api.invoke('settings:set', { key: 'deepgram_api_key', value: deepgramKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'transcription_model', value: transcriptionModel.value }),
     window.api.invoke('settings:set', { key: 'transcription_language', value: transcriptionLanguage.value }),
@@ -223,12 +227,12 @@ function onBackdropKeydown(e: KeyboardEvent): void {
               </div>
             </div>
 
-            <!-- ElevenLabs: key only (auto-detects 99 languages) -->
+            <!-- ElevenLabs: key + optional diarization mode -->
             <template v-if="transcriptionModel === 'elevenlabs'">
               <div class="field-group">
                 <label class="field-label" for="elevenlabs-key">ElevenLabs API Key</label>
                 <p class="field-hint">
-                  Scribe v2 Realtime — 99 languages including Polish, auto-detected (&lt;150ms latency).
+                  Scribe v2 — 99 languages including Polish, auto-detected.
                   Stored locally on your device only.
                 </p>
                 <div class="key-row">
@@ -246,6 +250,26 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                     <Eye v-else :size="14" />
                   </button>
                 </div>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Speaker Diarization</label>
+                <label class="toggle-row">
+                  <input
+                    v-model="elevenLabsDiarize"
+                    type="checkbox"
+                    class="toggle-checkbox"
+                  />
+                  <span class="toggle-label">Identify speakers (Batch mode)</span>
+                </label>
+                <p class="field-hint">
+                  <span v-if="elevenLabsDiarize">
+                    Batch mode: audio is recorded locally, then uploaded to Scribe v2 after you stop.
+                    Supports up to 48 speakers. No live transcript preview during recording.
+                  </span>
+                  <span v-else">
+                    Realtime mode: live transcript as you speak (&lt;150ms latency). No speaker labels.
+                  </span>
+                </p>
               </div>
             </template>
 
@@ -592,6 +616,26 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 }
 
 .toggle-btn:hover {
+  color: var(--color-text);
+}
+
+/* ── Checkbox toggle row ─────────────────────────────────────────────────── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  margin-top: 6px;
+}
+.toggle-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-primary, #4f6ef7);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle-label {
+  font-size: 13px;
   color: var(--color-text);
 }
 
