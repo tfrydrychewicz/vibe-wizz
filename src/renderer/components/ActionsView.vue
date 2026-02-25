@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { CheckSquare, Plus, Trash2, FileText, Sparkles, ArrowRight, ArrowLeft, X, UserPlus } from 'lucide-vue-next'
 import type { OpenMode } from '../stores/tabStore'
 
@@ -39,6 +39,8 @@ const confirmDeleteId = ref<string | null>(null)
 const assigneeEditId = ref<string | null>(null)
 const assigneeQuery = ref('')
 const assigneeResults = ref<EntityResult[]>([])
+const assigneePopupPos = ref({ top: 0, left: 0 })
+const assigneeInputRef = ref<HTMLInputElement | null>(null)
 let assigneeSearchTimer: ReturnType<typeof setTimeout> | null = null
 
 const open = computed(() => items.value.filter((i) => i.status === 'open'))
@@ -96,10 +98,26 @@ function onNewFormKeydown(e: KeyboardEvent): void {
   else if (e.key === 'Escape') cancelNewForm()
 }
 
-function openAssigneePicker(id: string): void {
+function openAssigneePicker(id: string, event: MouseEvent): void {
+  const btn = event.currentTarget as HTMLElement
+  const rect = btn.getBoundingClientRect()
+  const popupWidth = 224
+  const left = Math.min(rect.left, window.innerWidth - popupWidth - 8)
+  assigneePopupPos.value = { top: rect.bottom + 4, left }
   assigneeEditId.value = id
   assigneeQuery.value = ''
   assigneeResults.value = []
+  nextTick(() => assigneeInputRef.value?.focus())
+}
+
+async function pickAssigneeById(entity: EntityResult): Promise<void> {
+  const item = items.value.find((i) => i.id === assigneeEditId.value)
+  if (!item) return
+  await pickAssignee(item, entity)
+}
+
+function onDocMouseDown(): void {
+  if (assigneeEditId.value !== null) closeAssigneePicker()
 }
 
 function closeAssigneePicker(): void {
@@ -134,10 +152,14 @@ async function clearAssignee(item: ActionItem): Promise<void> {
 const unsubscribeActionCreated = window.api.on('action:created', () => { void loadItems() })
 const unsubscribeActionStatus = window.api.on('action:status-changed', () => { void loadItems() })
 
-onMounted(loadItems)
+onMounted(() => {
+  loadItems()
+  document.addEventListener('mousedown', onDocMouseDown)
+})
 onBeforeUnmount(() => {
   unsubscribeActionCreated()
   unsubscribeActionStatus()
+  document.removeEventListener('mousedown', onDocMouseDown)
 })
 </script>
 
@@ -195,34 +217,14 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <!-- Assignee chip -->
-            <div class="card-assignee">
-              <span v-if="item.assigned_entity_name" class="assignee-chip">
+            <div v-if="item.assigned_entity_name" class="card-assignee">
+              <span class="assignee-chip">
                 @{{ item.assigned_entity_name }}
                 <button class="assignee-clear" title="Unassign" @click.stop="clearAssignee(item)"><X :size="9" /></button>
               </span>
-              <!-- Assignee picker -->
-              <div v-if="assigneeEditId === item.id" class="assignee-picker">
-                <input
-                  class="assignee-input"
-                  v-model="assigneeQuery"
-                  placeholder="Search entities…"
-                  autocomplete="off"
-                  @input="onAssigneeInput"
-                  @keydown.esc="closeAssigneePicker"
-                />
-                <div v-if="assigneeResults.length" class="assignee-dropdown">
-                  <button
-                    v-for="e in assigneeResults"
-                    :key="e.id"
-                    class="assignee-option"
-                    @mousedown.prevent="pickAssignee(item, e)"
-                  >{{ e.name }}</button>
-                </div>
-                <button class="assignee-cancel" @click="closeAssigneePicker"><X :size="11" /></button>
-              </div>
             </div>
             <div class="card-actions">
-              <button class="card-btn" title="Assign" @click="openAssigneePicker(item.id)">
+              <button class="card-btn" title="Assign" @click="openAssigneePicker(item.id, $event)">
                 <UserPlus :size="12" />
               </button>
               <button class="card-btn" title="Move to In Progress" @click="updateStatus(item.id, 'in_progress')">
@@ -275,34 +277,14 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <!-- Assignee chip -->
-            <div class="card-assignee">
-              <span v-if="item.assigned_entity_name" class="assignee-chip">
+            <div v-if="item.assigned_entity_name" class="card-assignee">
+              <span class="assignee-chip">
                 @{{ item.assigned_entity_name }}
                 <button class="assignee-clear" title="Unassign" @click.stop="clearAssignee(item)"><X :size="9" /></button>
               </span>
-              <!-- Assignee picker -->
-              <div v-if="assigneeEditId === item.id" class="assignee-picker">
-                <input
-                  class="assignee-input"
-                  v-model="assigneeQuery"
-                  placeholder="Search entities…"
-                  autocomplete="off"
-                  @input="onAssigneeInput"
-                  @keydown.esc="closeAssigneePicker"
-                />
-                <div v-if="assigneeResults.length" class="assignee-dropdown">
-                  <button
-                    v-for="e in assigneeResults"
-                    :key="e.id"
-                    class="assignee-option"
-                    @mousedown.prevent="pickAssignee(item, e)"
-                  >{{ e.name }}</button>
-                </div>
-                <button class="assignee-cancel" @click="closeAssigneePicker"><X :size="11" /></button>
-              </div>
             </div>
             <div class="card-actions">
-              <button class="card-btn" title="Assign" @click="openAssigneePicker(item.id)">
+              <button class="card-btn" title="Assign" @click="openAssigneePicker(item.id, $event)">
                 <UserPlus :size="12" />
               </button>
               <button class="card-btn" title="Move back to Open" @click="updateStatus(item.id, 'open')">
@@ -358,34 +340,14 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <!-- Assignee chip -->
-            <div class="card-assignee">
-              <span v-if="item.assigned_entity_name" class="assignee-chip">
+            <div v-if="item.assigned_entity_name" class="card-assignee">
+              <span class="assignee-chip">
                 @{{ item.assigned_entity_name }}
                 <button class="assignee-clear" title="Unassign" @click.stop="clearAssignee(item)"><X :size="9" /></button>
               </span>
-              <!-- Assignee picker -->
-              <div v-if="assigneeEditId === item.id" class="assignee-picker">
-                <input
-                  class="assignee-input"
-                  v-model="assigneeQuery"
-                  placeholder="Search entities…"
-                  autocomplete="off"
-                  @input="onAssigneeInput"
-                  @keydown.esc="closeAssigneePicker"
-                />
-                <div v-if="assigneeResults.length" class="assignee-dropdown">
-                  <button
-                    v-for="e in assigneeResults"
-                    :key="e.id"
-                    class="assignee-option"
-                    @mousedown.prevent="pickAssignee(item, e)"
-                  >{{ e.name }}</button>
-                </div>
-                <button class="assignee-cancel" @click="closeAssigneePicker"><X :size="11" /></button>
-              </div>
             </div>
             <div class="card-actions">
-              <button class="card-btn" title="Assign" @click="openAssigneePicker(item.id)">
+              <button class="card-btn" title="Assign" @click="openAssigneePicker(item.id, $event)">
                 <UserPlus :size="12" />
               </button>
               <button class="card-btn" title="Reopen" @click="updateStatus(item.id, 'open')">
@@ -413,6 +375,34 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <!-- Assignee search popup — teleported to body so it floats over cards/columns -->
+    <Teleport to="body">
+      <div
+        v-if="assigneeEditId !== null"
+        class="assignee-popup"
+        :style="{ top: assigneePopupPos.top + 'px', left: assigneePopupPos.left + 'px' }"
+        @mousedown.stop
+      >
+        <input
+          ref="assigneeInputRef"
+          class="assignee-input"
+          v-model="assigneeQuery"
+          placeholder="Search entities…"
+          autocomplete="off"
+          @input="onAssigneeInput"
+          @keydown.esc="closeAssigneePicker"
+        />
+        <div v-if="assigneeResults.length" class="assignee-dropdown">
+          <button
+            v-for="e in assigneeResults"
+            :key="e.id"
+            class="assignee-option"
+            @mousedown.prevent="pickAssigneeById(e)"
+          >{{ e.name }}</button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -701,9 +691,7 @@ onBeforeUnmount(() => {
 .card-assignee {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 4px;
-  min-height: 0;
 }
 
 .assignee-chip {
@@ -733,41 +721,37 @@ onBeforeUnmount(() => {
   opacity: 1;
 }
 
-.assignee-picker {
+.assignee-popup {
+  position: fixed;
+  z-index: 1000;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  width: 224px;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  position: relative;
-  flex: 1;
+  flex-direction: column;
 }
 
 .assignee-input {
-  flex: 1;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
   color: var(--color-text);
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
-  padding: 3px 7px;
+  padding: 8px 12px;
   outline: none;
-  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .assignee-input:focus {
-  border-color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
 }
 
 .assignee-dropdown {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  right: 24px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-  z-index: 100;
   overflow: hidden;
 }
 
@@ -777,29 +761,19 @@ onBeforeUnmount(() => {
   text-align: left;
   background: transparent;
   border: none;
+  border-bottom: 1px solid var(--color-border);
   color: var(--color-text);
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
-  padding: 6px 10px;
+  padding: 8px 12px;
   cursor: pointer;
+}
+
+.assignee-option:last-child {
+  border-bottom: none;
 }
 
 .assignee-option:hover {
   background: var(--color-hover);
-}
-
-.assignee-cancel {
-  display: inline-flex;
-  align-items: center;
-  background: transparent;
-  border: none;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 2px;
-  flex-shrink: 0;
-}
-
-.assignee-cancel:hover {
-  color: var(--color-text);
 }
 </style>
