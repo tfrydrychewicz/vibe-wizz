@@ -18,6 +18,12 @@ const apiKey = ref('')
 const showKey = ref(false)
 const anthropicKey = ref('')
 const showAnthropicKey = ref(false)
+const elevenLabsKey = ref('')
+const showElevenLabsKey = ref(false)
+const deepgramKey = ref('')
+const showDeepgramKey = ref(false)
+const transcriptionModel = ref<'elevenlabs' | 'deepgram' | 'macos'>('macos')
+const transcriptionLanguage = ref('multi')
 
 // ── Calendar settings ─────────────────────────────────────────────────────────
 const calendarSlotDuration = ref('30')
@@ -71,9 +77,13 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [openai, anthropic, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList] = await Promise.all([
+  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'deepgram_api_key' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'transcription_model' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'transcription_language' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'calendar_slot_duration' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'meeting_note_title_template' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
@@ -83,6 +93,10 @@ onMounted(async () => {
   ])
   apiKey.value = openai ?? ''
   anthropicKey.value = anthropic ?? ''
+  elevenLabsKey.value = elevenlabs ?? ''
+  deepgramKey.value = deepgram ?? ''
+  transcriptionModel.value = (transcModel as 'elevenlabs' | 'deepgram' | 'macos' | null) ?? 'macos'
+  transcriptionLanguage.value = transcLang ?? 'multi'
   calendarSlotDuration.value = slotDuration ?? '30'
   meetingNoteTitleTemplate.value = noteTitleTemplate ?? '{date} - {title}'
   entityTypes.value = etList ?? []
@@ -97,6 +111,10 @@ async function save(): Promise<void> {
   await Promise.all([
     window.api.invoke('settings:set', { key: 'openai_api_key', value: apiKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'anthropic_api_key', value: anthropicKey.value.trim() }),
+    window.api.invoke('settings:set', { key: 'elevenlabs_api_key', value: elevenLabsKey.value.trim() }),
+    window.api.invoke('settings:set', { key: 'deepgram_api_key', value: deepgramKey.value.trim() }),
+    window.api.invoke('settings:set', { key: 'transcription_model', value: transcriptionModel.value }),
+    window.api.invoke('settings:set', { key: 'transcription_language', value: transcriptionLanguage.value }),
     window.api.invoke('settings:set', { key: 'calendar_slot_duration', value: calendarSlotDuration.value }),
     window.api.invoke('settings:set', { key: 'meeting_note_title_template', value: meetingNoteTitleTemplate.value }),
     window.api.invoke('settings:set', { key: 'attendee_entity_type_id', value: attendeeEntityTypeId.value }),
@@ -192,6 +210,99 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                 </button>
               </div>
             </div>
+
+            <div class="section-divider" />
+            <h4 class="section-subtitle">Transcription</h4>
+
+            <div class="field-group">
+              <label class="field-label">Engine</label>
+              <div class="model-picker">
+                <button class="model-btn" :class="{ active: transcriptionModel === 'elevenlabs' }" @click="transcriptionModel = 'elevenlabs'">ElevenLabs</button>
+                <button class="model-btn" :class="{ active: transcriptionModel === 'deepgram' }" @click="transcriptionModel = 'deepgram'">Deepgram</button>
+                <button class="model-btn" :class="{ active: transcriptionModel === 'macos' }" @click="transcriptionModel = 'macos'">macOS</button>
+              </div>
+            </div>
+
+            <!-- ElevenLabs: key only (auto-detects 99 languages) -->
+            <template v-if="transcriptionModel === 'elevenlabs'">
+              <div class="field-group">
+                <label class="field-label" for="elevenlabs-key">ElevenLabs API Key</label>
+                <p class="field-hint">
+                  Scribe v2 Realtime — 99 languages including Polish, auto-detected (&lt;150ms latency).
+                  Stored locally on your device only.
+                </p>
+                <div class="key-row">
+                  <input
+                    id="elevenlabs-key"
+                    v-model="elevenLabsKey"
+                    :type="showElevenLabsKey ? 'text' : 'password'"
+                    class="modal-input key-input"
+                    placeholder="ElevenLabs API key"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <button class="toggle-btn" :title="showElevenLabsKey ? 'Hide' : 'Show'" @click="showElevenLabsKey = !showElevenLabsKey">
+                    <EyeOff v-if="showElevenLabsKey" :size="14" />
+                    <Eye v-else :size="14" />
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <!-- Deepgram: key + language -->
+            <template v-else-if="transcriptionModel === 'deepgram'">
+              <div class="field-group">
+                <label class="field-label" for="deepgram-key">Deepgram API Key</label>
+                <p class="field-hint">
+                  Nova-3 streaming transcription. Stored locally on your device only.
+                </p>
+                <div class="key-row">
+                  <input
+                    id="deepgram-key"
+                    v-model="deepgramKey"
+                    :type="showDeepgramKey ? 'text' : 'password'"
+                    class="modal-input key-input"
+                    placeholder="Deepgram API key"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <button class="toggle-btn" :title="showDeepgramKey ? 'Hide' : 'Show'" @click="showDeepgramKey = !showDeepgramKey">
+                    <EyeOff v-if="showDeepgramKey" :size="14" />
+                    <Eye v-else :size="14" />
+                  </button>
+                </div>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="transcription-lang">Language</label>
+                <p class="field-hint">
+                  Auto-detect covers English and major Western languages. Set Polish explicitly for Polish speech.
+                </p>
+                <select id="transcription-lang" v-model="transcriptionLanguage" class="modal-input modal-select">
+                  <option value="multi">Auto-detect (EN + ES/FR/DE/HI/RU/PT/JA/IT/NL)</option>
+                  <option value="en">English</option>
+                  <option value="pl">Polish</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="ru">Russian</option>
+                  <option value="hi">Hindi</option>
+                  <option value="ja">Japanese</option>
+                  <option value="it">Italian</option>
+                  <option value="nl">Dutch</option>
+                </select>
+              </div>
+            </template>
+
+            <!-- macOS: no key, no language (uses system locale) -->
+            <template v-else>
+              <div class="field-group">
+                <p class="field-hint">
+                  Uses macOS on-device speech recognition (SFSpeechRecognizer). Language follows your
+                  macOS system language. No API key required.
+                </p>
+              </div>
+            </template>
           </template>
 
           <!-- Calendar -->
@@ -482,6 +593,57 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 
 .toggle-btn:hover {
   color: var(--color-text);
+}
+
+/* ── Section divider & subtitle ──────────────────────────────────────────── */
+.section-divider {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 0;
+}
+
+.section-subtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+/* ── Model picker (same visual style as slot picker) ─────────────────────── */
+.model-picker {
+  display: flex;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  overflow: hidden;
+  width: fit-content;
+}
+
+.model-btn {
+  padding: 6px 16px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.model-btn:last-child {
+  border-right: none;
+}
+
+.model-btn:hover {
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+  color: var(--color-text);
+}
+
+.model-btn.active {
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 500;
 }
 
 /* ── Slot duration picker ─────────────────────────────────────────────────── */

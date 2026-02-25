@@ -679,7 +679,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
     - NoteEditor shows meeting context header (title, time, attendees) for notes linked to a calendar event
 - [x] Attendee entity configuration in Settings
     - Choose entity type, name field, and email field for attendee autocomplete in MeetingModal
-- [ ] Deepgram streaming transcription (triggered from meeting prompt **and** from NoteEditor meeting context header)
+- [x] Deepgram streaming transcription (triggered from meeting prompt **and** from NoteEditor meeting context header)
 - [ ] Transcript → structured note pipeline
 - [ ] Speaker diarization + entity matching
 - [ ] Post-meeting summary + action extraction

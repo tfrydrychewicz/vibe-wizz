@@ -64,7 +64,9 @@ import {
   ImagePlus,
   Check, ExternalLink, Trash2,
   Palette,
+  Mic, MicOff, ChevronDown as ChevronDownIcon,
 } from 'lucide-vue-next'
+import { pendingAutoStartNoteId } from '../stores/transcriptionStore'
 
 const props = defineProps<{ noteId: string }>()
 const emit = defineEmits<{
@@ -124,6 +126,125 @@ function formatMeetingTime(ev: LinkedCalendarEvent): string {
   const endTime = end.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
   return `${date} · ${startTime} – ${endTime}`
 }
+
+// ── Transcription state ────────────────────────────────────────────────────────
+
+const isTranscribing = ref(false)
+const transcriptText = ref('')      // finalized partial transcripts accumulated
+const transcriptPartial = ref('')   // current non-final partial (shown while streaming)
+const transcriptPanelOpen = ref(true)
+const transcriptionError = ref<string | null>(null)
+let mediaRecorder: MediaRecorder | null = null
+let mediaStream: MediaStream | null = null
+// ElevenLabs path: PCM 16kHz capture via ScriptProcessorNode
+let audioContext: AudioContext | null = null
+// eslint-disable-next-line @typescript-eslint/no-deprecated
+let scriptProcessor: ScriptProcessorNode | null = null
+
+async function startTranscription(): Promise<void> {
+  if (!linkedCalendarEvent.value) return
+  transcriptionError.value = null
+
+  const result = (await window.api.invoke('transcription:start', {
+    noteId: props.noteId,
+    eventId: linkedCalendarEvent.value.id,
+  })) as { ok: boolean; audioFormat?: string; error?: string }
+
+  if (!result.ok) {
+    transcriptionError.value = result.error ?? 'Failed to start transcription'
+    return
+  }
+
+  // audioFormat:'none' means Swift captured audio directly — nothing to set up
+  if (result.audioFormat === 'none') {
+    isTranscribing.value = true
+    transcriptText.value = ''
+    transcriptPartial.value = ''
+    return
+  }
+
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+
+    if (result.audioFormat === 'pcm') {
+      // ElevenLabs: capture raw PCM Int16 at 16kHz via ScriptProcessorNode
+      audioContext = new AudioContext({ sampleRate: 16000 })
+      const source = audioContext.createMediaStreamSource(mediaStream)
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1)
+      source.connect(scriptProcessor)
+      scriptProcessor.connect(audioContext.destination)
+      scriptProcessor.onaudioprocess = (e) => {
+        const f32 = e.inputBuffer.getChannelData(0)
+        const i16 = new Int16Array(f32.length)
+        for (let i = 0; i < f32.length; i++) {
+          i16[i] = Math.max(-32768, Math.min(32767, Math.round(f32[i] * 32768)))
+        }
+        window.api.send('transcription:audio-chunk', i16.buffer)
+      }
+    } else {
+      // Deepgram: stream WebM/Opus via MediaRecorder
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm'
+      mediaRecorder = new MediaRecorder(mediaStream, { mimeType })
+      mediaRecorder.ondataavailable = async (e: BlobEvent) => {
+        if (e.data.size === 0) return
+        const buf = await e.data.arrayBuffer()
+        window.api.send('transcription:audio-chunk', buf)
+      }
+      mediaRecorder.start(250) // 250ms chunks
+    }
+
+    isTranscribing.value = true
+    transcriptText.value = ''
+    transcriptPartial.value = ''
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Microphone access denied'
+    transcriptionError.value = msg
+    void window.api.invoke('transcription:stop')
+  }
+}
+
+async function stopTranscription(): Promise<void> {
+  // ElevenLabs path cleanup
+  scriptProcessor?.disconnect()
+  scriptProcessor = null
+  await audioContext?.close()
+  audioContext = null
+  // Deepgram path cleanup
+  mediaRecorder?.stop()
+  mediaStream?.getTracks().forEach((t) => t.stop())
+  mediaRecorder = null
+  mediaStream = null
+  isTranscribing.value = false
+  await window.api.invoke('transcription:stop')
+}
+
+const unsubTranscriptPartial = window.api.on('transcription:partial', (...args: unknown[]) => {
+  const { text, isFinal } = args[0] as { text: string; isFinal: boolean }
+  if (isFinal) {
+    transcriptText.value += (transcriptText.value ? ' ' : '') + text
+    transcriptPartial.value = ''
+  } else {
+    transcriptPartial.value = text
+  }
+})
+
+const unsubTranscriptComplete = window.api.on('transcription:complete', (...args: unknown[]) => {
+  const { noteId } = args[0] as { noteId: string }
+  if (noteId === props.noteId) {
+    transcriptText.value = ''
+    transcriptPartial.value = ''
+    void loadNote(props.noteId)
+  }
+})
+
+const unsubTranscriptError = window.api.on('transcription:error', (...args: unknown[]) => {
+  const { message } = args[0] as { message: string }
+  transcriptionError.value = message
+  isTranscribing.value = false
+})
 
 // Loading state while /action slash command calls Claude to extract actions
 const isExtractingActions = ref(false)
@@ -823,6 +944,11 @@ watch(
       }
     }
     await loadNote(newId)
+    // Auto-start transcription if triggered via meeting prompt
+    if (pendingAutoStartNoteId.value === newId) {
+      pendingAutoStartNoteId.value = null
+      void startTranscription()
+    }
   },
   { immediate: true }
 )
@@ -835,6 +961,18 @@ onBeforeUnmount(() => {
   unsubscribeNer()
   unsubscribeActionStatus()
   unsubscribeActionUnlinked()
+  unsubTranscriptPartial()
+  unsubTranscriptComplete()
+  unsubTranscriptError()
+  if (isTranscribing.value) {
+    scriptProcessor?.disconnect()
+    scriptProcessor = null
+    void audioContext?.close()
+    audioContext = null
+    mediaRecorder?.stop()
+    mediaStream?.getTracks().forEach((t) => t.stop())
+    void window.api.invoke('transcription:stop')
+  }
   if (saveTimer) {
     clearTimeout(saveTimer)
     flushSave()
@@ -1061,10 +1199,41 @@ onBeforeUnmount(() => {
           >{{ a.name || a.email }}</span>
         </div>
       </div>
+      <div class="meeting-context-actions">
+        <span v-if="transcriptionError" class="transcription-error-msg">{{ transcriptionError }}</span>
+        <button
+          class="transcription-btn"
+          :class="{ recording: isTranscribing }"
+          :title="isTranscribing ? 'Stop recording' : 'Start transcription'"
+          @click="isTranscribing ? stopTranscription() : startTranscription()"
+        >
+          <MicOff v-if="isTranscribing" :size="12" />
+          <Mic v-else :size="12" />
+          {{ isTranscribing ? 'Stop' : 'Start Transcription' }}
+        </button>
+      </div>
     </div>
 
     <div class="note-body">
       <EditorContent :editor="editor" />
+    </div>
+
+    <!-- Live transcript panel (shown during/after recording) -->
+    <div
+      v-if="linkedCalendarEvent && (isTranscribing || transcriptText || transcriptPartial)"
+      class="transcript-panel"
+    >
+      <button class="transcript-panel-toggle" @click="transcriptPanelOpen = !transcriptPanelOpen">
+        <span class="transcript-panel-label">
+          <span v-if="isTranscribing" class="transcript-recording-dot" />
+          Live Transcript
+        </span>
+        <ChevronDownIcon :size="12" :class="{ 'rotate-180': !transcriptPanelOpen }" />
+      </button>
+      <div v-if="transcriptPanelOpen" class="transcript-panel-body">
+        <span v-if="!transcriptText && !transcriptPartial" class="transcript-waiting">Listening…</span>
+        <span v-else>{{ transcriptText }}<span v-if="transcriptPartial" class="transcript-partial"> {{ transcriptPartial }}</span></span>
+      </div>
     </div>
 
     <TrashedMentionPopup

@@ -30,6 +30,7 @@ import {
   closePanesForContent,
 } from './stores/tabStore'
 import type { OpenMode } from './stores/tabStore'
+import { pendingAutoStartNoteId } from './stores/transcriptionStore'
 
 type NavItem = {
   id: string
@@ -284,14 +285,24 @@ function onChatKeydown(e: KeyboardEvent): void {
   }
 }
 
+let unsubTranscriptionOpenNote: (() => void) | null = null
+
 onMounted(() => {
   loadEntityTypes()
   loadNoteTemplates()
   window.addEventListener('keydown', onChatKeydown)
+
+  unsubTranscriptionOpenNote = window.api.on('transcription:open-note', (...args: unknown[]) => {
+    const { noteId, autoStart } = args[0] as { noteId: string; autoStart?: boolean }
+    if (autoStart) pendingAutoStartNoteId.value = noteId
+    activeView.value = 'notes'
+    openContent('note', noteId, 'Meeting Note', 'default', undefined, 'file-text')
+  })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onChatKeydown)
+  unsubTranscriptionOpenNote?.()
 })
 </script>
 

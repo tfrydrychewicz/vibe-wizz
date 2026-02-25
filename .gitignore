@@ -4,4 +4,7 @@ dist/
 *.tsbuildinfo
 .DS_Store
 resources/MicMonitor
+resources/Transcriber
+resources/Transcriber.app/
 swift/MicMonitor/.build/
+swift/Transcriber/.build/

@@ -50,20 +50,24 @@ function skip(): void {
 async function doTranscribe(always: boolean): Promise<void> {
   visible.value = false
 
+  let eventId: number
   if (selectedEventId.value === 'new') {
     const now = new Date()
     const end = new Date(now.getTime() + 60 * 60 * 1000)
-    await window.api.invoke('calendar-events:create', {
+    const created = (await window.api.invoke('calendar-events:create', {
       title: 'New Meeting',
       start_at: now.toISOString(),
       end_at: end.toISOString(),
-    })
+    })) as { id: number }
+    eventId = created.id
+  } else {
+    eventId = parseInt(selectedEventId.value, 10)
   }
 
   if (always) {
-    window.api.send('meeting-prompt:always-transcribe')
+    window.api.send('meeting-prompt:always-transcribe', { eventId })
   } else {
-    window.api.send('meeting-prompt:transcribe')
+    window.api.send('meeting-prompt:transcribe', { eventId })
   }
 }
 

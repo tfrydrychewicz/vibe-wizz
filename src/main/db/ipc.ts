@@ -1311,6 +1311,7 @@ export function registerDbIpcHandlers(): void {
         end_at?: string
         attendees?: Array<{ email: string; name: string }>
         linked_note_id?: string | null
+        transcript_note_id?: string | null
       },
     ) => {
       const db = getDatabase()
@@ -1322,6 +1323,7 @@ export function registerDbIpcHandlers(): void {
       if (opts.end_at !== undefined) { sets.push('end_at = ?'); params.push(opts.end_at) }
       if (opts.attendees !== undefined) { sets.push('attendees = ?'); params.push(JSON.stringify(opts.attendees)) }
       if ('linked_note_id' in opts) { sets.push('linked_note_id = ?'); params.push(opts.linked_note_id ?? null) }
+      if ('transcript_note_id' in opts) { sets.push('transcript_note_id = ?'); params.push(opts.transcript_note_id ?? null) }
 
       if (!sets.length) return { ok: true }
       params.push(opts.id)

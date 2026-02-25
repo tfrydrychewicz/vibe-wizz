@@ -655,6 +655,127 @@ body {
   color: var(--color-text-muted);
 }
 
+.meeting-context-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.transcription-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.transcription-btn:hover {
+  background: var(--color-hover);
+  border-color: var(--color-accent);
+}
+
+.transcription-btn.recording {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+}
+
+.transcription-btn.recording:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.transcription-error-msg {
+  font-size: 11px;
+  color: #ef4444;
+}
+
+/* ── Live transcript panel ── */
+.transcript-panel {
+  border-top: 1px solid var(--color-border);
+  background: rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
+  max-height: 200px;
+  display: flex;
+  flex-direction: column;
+}
+
+.transcript-panel-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 48px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.transcript-panel-toggle:hover {
+  color: var(--color-text);
+}
+
+.transcript-panel-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transcript-recording-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.transcript-panel-toggle svg {
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.transcript-panel-toggle svg.rotate-180 {
+  transform: rotate(180deg);
+}
+
+.transcript-panel-body {
+  padding: 6px 48px 12px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  overflow-y: auto;
+  flex: 1;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.transcript-waiting {
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.transcript-partial {
+  opacity: 0.5;
+  font-style: italic;
+}
+
 .note-body {
   flex: 1;
   overflow-y: auto;

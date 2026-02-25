@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.wizz.transcriber</string>
+  <key>CFBundleName</key>
+  <string>Transcriber</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Wizz uses your microphone to transcribe meeting audio.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Wizz uses on-device speech recognition to transcribe meeting audio.</string>
+</dict>
+</plist>

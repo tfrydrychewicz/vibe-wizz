@@ -12,8 +12,10 @@
 
 import { BrowserWindow, ipcMain, screen } from 'electron'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { micEvents, type MicChangeEvent } from './monitor'
 import { getDatabase } from '../db/index'
+import { pushToRenderer } from '../push'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
@@ -72,6 +74,52 @@ function hidePrompt(): void {
   }
 }
 
+/**
+ * Get or create a note for the given calendar event, returning its ID.
+ * Uses linked_note_id if already set; otherwise creates a new note and links it.
+ */
+function getOrCreateNoteForEvent(eventId: number): string | null {
+  const db = getDatabase()
+  try {
+    const event = db
+      .prepare('SELECT id, title, start_at, linked_note_id FROM calendar_events WHERE id = ?')
+      .get(eventId) as { id: number; title: string; start_at: string; linked_note_id: string | null } | undefined
+    if (!event) {
+      console.error('[MeetingWindow] Calendar event not found:', eventId)
+      return null
+    }
+    if (event.linked_note_id) return event.linked_note_id
+
+    // Build note title from template (default: "{date} - {title}")
+    const templateRow = db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get('meeting_note_title_template') as { value: string } | undefined
+    const template = templateRow?.value || '{date} - {title}'
+    const dateStr = new Date(event.start_at).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+    const noteTitle = template.replace('{date}', dateStr).replace('{title}', event.title)
+
+    // Create note
+    const noteId = randomUUID()
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO notes (id, title, body, body_plain, source, language, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'transcript', 'en', ?, ?)`,
+    ).run(noteId, noteTitle, JSON.stringify({ type: 'doc', content: [] }), '', now, now)
+
+    // Link to event
+    db.prepare('UPDATE calendar_events SET linked_note_id = ? WHERE id = ?').run(noteId, eventId)
+
+    return noteId
+  } catch (err) {
+    console.error('[MeetingWindow] Failed to get/create note for event:', err)
+    return null
+  }
+}
+
 export function createMeetingWindow(): void {
   meetingWin = new BrowserWindow({
     width: WIN_W,
@@ -117,8 +165,8 @@ export function createMeetingWindow(): void {
         if (dismissed) return
 
         if (getAutoTranscribeSetting()) {
-          // Phase 3.2 — start Deepgram transcription (no-op for now)
-          console.log('[MeetingWindow] Auto-transcribe triggered')
+          // Auto-transcribe: find the current/upcoming event and open it
+          triggerAutoTranscribe()
           return
         }
 
@@ -142,27 +190,74 @@ export function createMeetingWindow(): void {
     hidePrompt()
   })
 
-  ipcMain.on('meeting-prompt:transcribe', () => {
+  ipcMain.on('meeting-prompt:transcribe', (_event, payload?: { eventId?: number }) => {
     dismissed = true
     hidePrompt()
-    // Phase 3.2 — start Deepgram transcription
-    console.log('[MeetingWindow] Transcription requested')
+    if (payload?.eventId != null) {
+      triggerTranscriptionForEvent(payload.eventId)
+    } else {
+      console.warn('[MeetingWindow] transcribe IPC received without eventId')
+    }
   })
 
-  ipcMain.on('meeting-prompt:always-transcribe', () => {
+  ipcMain.on('meeting-prompt:always-transcribe', (_event, payload?: { eventId?: number }) => {
     dismissed = true
     hidePrompt()
     try {
       getDatabase()
         .prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
         .run('auto_transcribe_meetings', 'true')
-      console.log('[MeetingWindow] auto_transcribe_meetings saved')
     } catch (err) {
       console.error('[MeetingWindow] Failed to save setting:', err)
     }
-    // Phase 3.2 — start Deepgram transcription
-    console.log('[MeetingWindow] Always-transcribe set, transcription requested')
+    if (payload?.eventId != null) {
+      triggerTranscriptionForEvent(payload.eventId)
+    } else {
+      console.warn('[MeetingWindow] always-transcribe IPC received without eventId')
+    }
   })
+}
+
+/** Open the note for the event in the main window and signal auto-start. */
+function triggerTranscriptionForEvent(eventId: number): void {
+  const noteId = getOrCreateNoteForEvent(eventId)
+  if (!noteId) return
+  pushToRenderer('transcription:open-note', { noteId, eventId, autoStart: true })
+}
+
+/** Called when auto_transcribe_meetings is true — find current/upcoming event and start. */
+function triggerAutoTranscribe(): void {
+  try {
+    const db = getDatabase()
+    const now = new Date().toISOString()
+    const tenMinutesLater = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+    // Find current or upcoming event
+    const event = db
+      .prepare(
+        `SELECT id FROM calendar_events
+         WHERE (start_at <= ? AND end_at >= ?)
+            OR (start_at > ? AND start_at <= ?)
+         ORDER BY start_at ASC
+         LIMIT 1`,
+      )
+      .get(now, now, now, tenMinutesLater) as { id: number } | undefined
+    if (event) {
+      triggerTranscriptionForEvent(event.id)
+    } else {
+      // No matching event — create a generic "New Meeting" event and start
+      const start = new Date()
+      const end = new Date(start.getTime() + 60 * 60 * 1000)
+      const result = db
+        .prepare(
+          `INSERT INTO calendar_events (title, start_at, end_at, attendees)
+           VALUES ('New Meeting', ?, ?, '[]')`,
+        )
+        .run(start.toISOString(), end.toISOString())
+      triggerTranscriptionForEvent(result.lastInsertRowid as number)
+    }
+  } catch (err) {
+    console.error('[MeetingWindow] triggerAutoTranscribe error:', err)
+  }
 }
 
 export function destroyMeetingWindow(): void {

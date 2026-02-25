@@ -4,12 +4,14 @@
   "description": "AI-Native Second Brain for Engineering Managers",
   "main": "out/main/index.js",
   "scripts": {
+    "postinstall": "plutil -replace NSSpeechRecognitionUsageDescription -string \"Wizz uses on-device speech recognition to transcribe meeting audio.\" node_modules/electron/dist/Electron.app/Contents/Info.plist 2>/dev/null || true && codesign --sign - --force --deep node_modules/electron/dist/Electron.app 2>/dev/null || true",
     "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "build": "env -u ELECTRON_RUN_AS_NODE electron-vite build && electron-builder",
     "preview": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
     "typecheck": "vue-tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "build:swift": "swiftc swift/MicMonitor/Sources/main.swift -o resources/MicMonitor -O"
+    "build:swift": "swiftc swift/MicMonitor/Sources/main.swift -o resources/MicMonitor -O",
+    "build:transcriber": "mkdir -p resources/Transcriber.app/Contents/MacOS && swiftc swift/Transcriber/Sources/main.swift -o resources/Transcriber.app/Contents/MacOS/Transcriber -O && cp swift/Transcriber/Info.plist resources/Transcriber.app/Contents/Info.plist && codesign --sign - --force --deep resources/Transcriber.app"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -30,6 +32,7 @@
     "@tiptap/starter-kit": "^3.20.0",
     "@tiptap/vue-3": "^3.20.0",
     "better-sqlite3": "^12.6.2",
+    "ws": "^8.18.0",
     "lucide-vue-next": "^0.575.0",
     "marked": "^17.0.3",
     "openai": "^6.24.0",
@@ -39,6 +42,7 @@
   "devDependencies": {
     "@electron/rebuild": "^3.7.2",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/ws": "^8.5.14",
     "@types/marked": "^5.0.2",
     "@vitejs/plugin-vue": "^5.0.4",
     "electron": "^29.1.0",
@@ -56,10 +60,15 @@
     },
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Wizz uses your microphone to detect and transcribe meeting audio.",
+        "NSSpeechRecognitionUsageDescription": "Wizz uses on-device speech recognition to transcribe meeting audio when no Deepgram API key is configured."
+      }
     },
     "extraResources": [
-      { "from": "resources/MicMonitor", "to": "MicMonitor" }
+      { "from": "resources/MicMonitor", "to": "MicMonitor" },
+      { "from": "resources/Transcriber.app", "to": "Transcriber.app" }
     ],
     "files": [
       "out/**/*",

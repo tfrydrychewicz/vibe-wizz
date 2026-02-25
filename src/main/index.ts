@@ -5,6 +5,7 @@ import { registerDbIpcHandlers } from './db/ipc'
 import { setMainWindow } from './push'
 import { startMicMonitor, stopMicMonitor, getMicStatus } from './mic/monitor'
 import { createMeetingWindow, destroyMeetingWindow } from './mic/meetingWindow'
+import { registerTranscriptionIpcHandlers } from './transcription/session'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
@@ -55,6 +56,7 @@ ipcMain.handle('mic:status', () => ({ isActive: getMicStatus() }))
 app.whenReady().then(() => {
   initDatabase()
   registerDbIpcHandlers()
+  registerTranscriptionIpcHandlers()
   createWindow()
   startMicMonitor()
   createMeetingWindow()
