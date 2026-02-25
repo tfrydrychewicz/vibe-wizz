@@ -20,7 +20,7 @@ const isDev = process.env['NODE_ENV'] === 'development'
 const DEBOUNCE_MS = 5000
 // Window dimensions — sized to fit the card + shadow bleed (8px each side)
 const WIN_W = 320
-const WIN_H = 152
+const WIN_H = 190
 
 let meetingWin: BrowserWindow | null = null
 let debounceTimer: ReturnType<typeof setTimeout> | null = null

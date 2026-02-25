@@ -1,23 +1,78 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { Mic, X } from 'lucide-vue-next'
+import { Mic, X, ChevronDown } from 'lucide-vue-next'
+import type { CalendarEvent } from './MeetingModal.vue'
 
 const deviceName = ref<string | null>(null)
 const visible = ref(false)
+const todayEvents = ref<CalendarEvent[]>([])
+// 'new' = create new meeting; otherwise stringified event id
+const selectedEventId = ref<string>('new')
+
+function formatTime(iso: string): string {
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const h = d.getHours()
+  const m = String(d.getMinutes()).padStart(2, '0')
+  const ampm = h >= 12 ? 'pm' : 'am'
+  const h12 = h % 12 || 12
+  return `${h12}:${m}${ampm}`
+}
+
+async function loadTodayEvents(): Promise<void> {
+  const now = new Date()
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0)
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0)
+
+  const events = (await window.api.invoke('calendar-events:list', {
+    start_at: startOfDay.toISOString(),
+    end_at: endOfDay.toISOString(),
+  })) as CalendarEvent[]
+
+  todayEvents.value = events
+
+  // Auto-select a meeting that is happening now or starts within 10 minutes
+  const nowMs = now.getTime()
+  const tenMinMs = nowMs + 10 * 60 * 1000
+  const match = events.find(e => {
+    const start = new Date(e.start_at).getTime()
+    const end = new Date(e.end_at).getTime()
+    return (nowMs >= start && nowMs <= end) || (start >= nowMs && start <= tenMinMs)
+  })
+  selectedEventId.value = match ? String(match.id) : 'new'
+}
 
 function skip(): void {
   visible.value = false
   window.api.send('meeting-prompt:skip')
 }
 
-function transcribe(): void {
+async function doTranscribe(always: boolean): Promise<void> {
   visible.value = false
-  window.api.send('meeting-prompt:transcribe')
+
+  if (selectedEventId.value === 'new') {
+    const now = new Date()
+    const end = new Date(now.getTime() + 60 * 60 * 1000)
+    await window.api.invoke('calendar-events:create', {
+      title: 'New Meeting',
+      start_at: now.toISOString(),
+      end_at: end.toISOString(),
+    })
+  }
+
+  if (always) {
+    window.api.send('meeting-prompt:always-transcribe')
+  } else {
+    window.api.send('meeting-prompt:transcribe')
+  }
 }
 
-async function alwaysTranscribe(): Promise<void> {
-  visible.value = false
-  window.api.send('meeting-prompt:always-transcribe')
+function transcribe(): void {
+  void doTranscribe(false)
+}
+
+function alwaysTranscribe(): void {
+  void doTranscribe(true)
 }
 
 let unsubActive: (() => void) | null = null
@@ -28,6 +83,7 @@ onMounted(() => {
     const event = data as { deviceName: string | null }
     deviceName.value = event.deviceName
     visible.value = true
+    void loadTodayEvents()
   })
   unsubInactive = window.api.on('mic:inactive', () => {
     visible.value = false
@@ -51,6 +107,22 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <p class="card-device">{{ deviceName ?? 'Microphone active' }}</p>
+
+      <!-- Meeting selector -->
+      <div class="meeting-select-wrap">
+        <select v-model="selectedEventId" class="meeting-select">
+          <option
+            v-for="ev in todayEvents"
+            :key="ev.id"
+            :value="String(ev.id)"
+          >
+            {{ ev.title }} ({{ formatTime(ev.start_at) }}–{{ formatTime(ev.end_at) }})
+          </option>
+          <option value="new">+ New Meeting</option>
+        </select>
+        <ChevronDown class="select-arrow" :size="12" />
+      </div>
+
       <div class="card-actions">
         <button class="btn btn-primary" @click="transcribe">Transcribe</button>
         <button class="btn btn-secondary" @click="alwaysTranscribe">Always transcribe</button>
@@ -118,6 +190,44 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Meeting selector */
+
+.meeting-select-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.meeting-select {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 5px 28px 5px 9px;
+  color: var(--color-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meeting-select:focus {
+  border-color: var(--color-accent);
+}
+
+.select-arrow {
+  position: absolute;
+  right: 8px;
+  color: var(--color-text-muted);
+  pointer-events: none;
 }
 
 .card-actions {
