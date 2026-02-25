@@ -259,19 +259,26 @@ On user confirmation:
 - Lower accuracy, no real-time streaming, but functional
 - Good Polish language support with the medium multilingual model
 
+#### Live Note-Taking During Transcription
+
+While a transcription session is active and linked to a note, the NoteEditor remains fully editable — the user can type notes, action items, or observations in real time alongside the live transcript. The transcript appears as a separate collapsible section below the editor body (not inline), so it never interrupts the manual note-taking flow.
+
 #### Post-Meeting Processing
 
 When meeting ends (mic deactivates for >60s or user manually stops):
 
-1. **Create transcript note** linked to calendar event
+1. **Merge transcript + manual notes**: the raw transcript (processed by Deepgram) and the user's hand-typed note content are merged into a single unified note. The merge strategy:
+   - Manual notes take precedence and appear first (the user's intent is preserved)
+   - Processed transcript (AI-structured: summary, topics, decisions) is appended as a distinct section (e.g. `## Transcript Summary`) so it's clearly attributed
+   - Raw verbatim transcript stored separately (accessible but collapsed by default)
 2. **Speaker labeling**: Match diarized speakers to Person entities using voice profile (built over time) or calendar attendee list
 3. **AI processing** (Claude Sonnet, single pass):
    - Generate structured meeting summary (topics discussed, decisions made, open questions)
    - Extract action items with assignees and deadlines
    - Detect new entities mentioned (people, projects) → suggest creation
    - Identify follow-ups needed
-4. **Action items** auto-created in `action_items` table, linked to source transcript
-5. **Notification**: Desktop notification with summary + "Review transcript" link
+4. **Action items** auto-created in `action_items` table, linked to source note
+5. **Notification**: Desktop notification with summary + "Review notes" link
 
 ### 4. AI-Powered Retrieval (RAPTOR+)
 
@@ -461,8 +468,10 @@ When a note is opened that has a calendar event linked to it (`calendar-events:g
 - Event title
 - Formatted time range (e.g. "Mon, Feb 25 · 10:00am – 11:00am")
 - Attendee chips (parsed from the event's JSON attendees array)
+- **"Start Transcription" button** — second entry point for transcription (in addition to the meeting detection prompt); clicking it triggers the same transcription flow as the meeting prompt's "Transcribe" action, pre-linked to the note's calendar event; visible whenever the note has a linked event (mic does not need to be active — user can manually trigger)
+- **Live transcript panel** (shown while recording): a collapsible section below the editor body displays the real-time partial transcript as it arrives from Deepgram; the editor body above it remains fully editable so the user can take manual notes simultaneously; the two streams are kept separate during recording and merged at the end (see §3 Post-Meeting Processing)
 
-This gives the note authoring context without needing to open the calendar.
+This gives the note authoring context without needing to open the calendar, and lets users start transcription directly from their meeting notes while continuing to write by hand.
 
 ---
 
@@ -489,6 +498,8 @@ A frameless always-on-top `BrowserWindow` (320×190px, `floating` level so it ap
 - **Transcribe**: if "+ New Meeting" is selected, creates a `calendar-events:create` entry titled "New Meeting" (start = now, end = now + 1hr) before firing `meeting-prompt:transcribe` IPC (transcription is a no-op until Phase 3.2)
 - **Always transcribe**: same as Transcribe but also writes `auto_transcribe_meetings = 'true'` to settings; future mic activations skip the prompt entirely
 - **Dismissed state**: once dismissed in a mic session (any of the three actions), the prompt won't reappear until the mic goes inactive and becomes active again
+
+> **Two transcription entry points**: transcription can be started from (1) this meeting detection prompt (mic-triggered, automatic) or (2) the **"Start Transcription" button in the NoteEditor meeting context header** (manual, note-linked event). Both paths converge on the same transcription pipeline and IPC channel (`meeting-prompt:transcribe`). See §7c.
 
 ---
 
@@ -529,7 +540,7 @@ interface CalendarEvent {
 - **Google Calendar / Outlook sync**: OAuth2 pull every 5 min, match attendees to Person entities by email; populate `external_id`, `recurrence_rule`
 - **Meeting prep notifications**: desktop notification 5 min before event; click opens a prep note with AI-generated context from previous meetings with the same attendees
 - **Smart linking**: suggest linking an open note to today's events; auto-link transcript to matching event by time overlap
-- **Deepgram streaming transcription** (Phase 3.2): on Transcribe, capture system audio + mic via `desktopCapturer`, stream to Deepgram Nova-3 WebSocket; show real-time partial transcript in floating overlay; on meeting end, create `transcript_note_id` note, run speaker diarization + entity matching, generate structured summary + action items
+- **Deepgram streaming transcription** (Phase 3.2): triggered from either (a) the meeting detection prompt ("Transcribe" / "Always transcribe" buttons) or (b) the "Start Transcription" button in the NoteEditor meeting context header; both paths: capture system audio + mic via `desktopCapturer`, stream to Deepgram Nova-3 WebSocket; live partial transcript displayed as a separate collapsible panel in the NoteEditor (below the editable body) so the user can keep taking manual notes simultaneously; on meeting end, merge manual notes + AI-processed transcript into the single linked note (`linked_note_id`) — manual content first, structured transcript summary appended as a distinct section; run speaker diarization + entity matching; extract action items linked to the note
 
 ### 8. Command Palette & AI Chat
 
@@ -668,7 +679,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
     - NoteEditor shows meeting context header (title, time, attendees) for notes linked to a calendar event
 - [x] Attendee entity configuration in Settings
     - Choose entity type, name field, and email field for attendee autocomplete in MeetingModal
-- [ ] Deepgram streaming transcription
+- [ ] Deepgram streaming transcription (triggered from meeting prompt **and** from NoteEditor meeting context header)
 - [ ] Transcript → structured note pipeline
 - [ ] Speaker diarization + entity matching
 - [ ] Post-meeting summary + action extraction
