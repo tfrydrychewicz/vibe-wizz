@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted } from 'vue'
 import { marked } from 'marked'
-import { X, Trash2, Send, MessageSquare } from 'lucide-vue-next'
-import { messages, isLoading, clearMessages, type ChatMessage } from '../stores/chatStore'
+import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus } from 'lucide-vue-next'
+import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
 
 const emit = defineEmits<{
   close: []
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
+  'open-view': [view: string]
 }>()
 
 const inputText = ref('')
@@ -60,12 +61,13 @@ async function send(): Promise<void> {
     const result = (await window.api.invoke('chat:send', {
       messages: apiMessages,
       searchQuery: text,
-    })) as { content: string; references: { id: string; title: string }[] }
+    })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }
 
     messages.value.push({
       role: 'assistant',
       content: result.content,
       references: result.references,
+      actions: result.actions,
     })
   } catch {
     messages.value.push({
@@ -89,6 +91,49 @@ function onKeydown(e: KeyboardEvent): void {
 function openNote(e: MouseEvent, noteId: string, title: string): void {
   const mode: OpenMode = e.metaKey || e.ctrlKey ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
   emit('open-note', { noteId, title, mode })
+}
+
+// ── Action card helpers ────────────────────────────────────────────────────
+
+interface ActionCardMeta {
+  icon: string
+  label: string
+  variant: 'green' | 'blue' | 'red'
+  linkView: 'calendar' | 'actions'
+  linkLabel: string
+}
+
+function actionCardMeta(type: ExecutedAction['type']): ActionCardMeta {
+  switch (type) {
+    case 'created_event':  return { icon: 'CalendarPlus',  label: 'Created event',          variant: 'green', linkView: 'calendar', linkLabel: 'Open Calendar' }
+    case 'updated_event':  return { icon: 'CalendarCheck', label: 'Updated event',          variant: 'blue',  linkView: 'calendar', linkLabel: 'Open Calendar' }
+    case 'deleted_event':  return { icon: 'CalendarX',     label: 'Deleted event',          variant: 'red',   linkView: 'calendar', linkLabel: 'Open Calendar' }
+    case 'created_action': return { icon: 'ListPlus',      label: 'Created action item',    variant: 'green', linkView: 'actions',  linkLabel: 'Open Actions'  }
+    case 'updated_action': return { icon: 'CheckSquare',   label: 'Updated action item',    variant: 'blue',  linkView: 'actions',  linkLabel: 'Open Actions'  }
+    case 'deleted_action': return { icon: 'SquareMinus',   label: 'Deleted action item',    variant: 'red',   linkView: 'actions',  linkLabel: 'Open Actions'  }
+  }
+}
+
+function formatActionPayload(action: ExecutedAction): string {
+  const p = action.payload
+  const parts: string[] = []
+  if (p.title) parts.push(p.title)
+  if (p.start_at) {
+    try {
+      const start = new Date(p.start_at)
+      const end = p.end_at ? new Date(p.end_at) : null
+      const date = start.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })
+      const startT = start.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })
+      const endT = end ? end.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' }) : null
+      parts.push(`${date} · ${startT}${endT ? `–${endT}` : ''}`)
+    } catch {
+      parts.push(p.start_at)
+    }
+  }
+  if (p.status) parts.push(p.status)
+  if (p.due_date) parts.push(`due ${p.due_date}`)
+  if (p.assigned_entity_name) parts.push(`→ ${p.assigned_entity_name}`)
+  return parts.join(' · ')
 }
 
 /** Event delegation — handles clicks on note-ref buttons rendered inside v-html */
@@ -183,6 +228,28 @@ function renderMessage(content: string, references: { id: string; title: string 
           v-html="renderMessage(msg.content, msg.references ?? [])"
           @click="onBubbleClick($event, msg)"
         />
+
+        <!-- Action cards (shown for assistant messages that executed tools) -->
+        <template v-if="msg.role === 'assistant' && msg.actions && msg.actions.length > 0">
+          <div
+            v-for="(action, ai) in msg.actions"
+            :key="ai"
+            class="action-card"
+            :class="`action-card--${actionCardMeta(action.type).variant}`"
+          >
+            <div class="action-card-body">
+              <span class="action-card-label">{{ actionCardMeta(action.type).label }}</span>
+              <span class="action-card-detail">{{ formatActionPayload(action) }}</span>
+            </div>
+            <button
+              v-if="actionCardMeta(action.type).variant !== 'red'"
+              class="action-card-link"
+              @click="emit('open-view', actionCardMeta(action.type).linkView)"
+            >
+              {{ actionCardMeta(action.type).linkLabel }} →
+            </button>
+          </div>
+        </template>
       </div>
 
       <!-- Loading indicator -->
@@ -538,5 +605,78 @@ function renderMessage(content: string, references: { id: string; title: string 
 
 .chat-send-btn:not(:disabled):hover {
   opacity: 0.85;
+}
+
+/* ── Action cards ── */
+
+.action-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 11px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  max-width: 92%;
+  font-size: 12px;
+}
+
+.action-card--green {
+  background: rgba(52, 168, 83, 0.1);
+  border-color: rgba(52, 168, 83, 0.25);
+}
+
+.action-card--blue {
+  background: rgba(91, 141, 239, 0.1);
+  border-color: rgba(91, 141, 239, 0.25);
+}
+
+.action-card--red {
+  background: rgba(220, 80, 80, 0.08);
+  border-color: rgba(220, 80, 80, 0.2);
+}
+
+.action-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.action-card-label {
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.action-card--green .action-card-label { color: #34a853; }
+.action-card--blue  .action-card-label { color: var(--color-accent); }
+.action-card--red   .action-card-label { color: #dc5050; }
+
+.action-card-detail {
+  color: var(--color-text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.action-card-link {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  transition: color 0.1s;
+}
+
+.action-card-link:hover {
+  color: var(--color-text);
 }
 </style>

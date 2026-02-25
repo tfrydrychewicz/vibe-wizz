@@ -1,10 +1,13 @@
 /**
  * Claude-based chat handler for the AI chat sidebar.
  * Performs knowledge base Q&A by injecting relevant note context into a system prompt.
+ * Also supports agentic tool use: Claude can create/update/delete calendar events and action items.
  * Lazy singleton — instantiated on first use, replaced when the API key changes.
  */
 
 import Anthropic from '@anthropic-ai/sdk'
+import { randomUUID } from 'crypto'
+import { getDatabase } from '../db/index'
 
 let _client: Anthropic | null = null
 let _currentKey = ''
@@ -15,6 +18,7 @@ const CHAT_MODEL = 'claude-sonnet-4-6'
 const KEYWORD_MODEL = 'claude-haiku-4-5-20251001'
 
 const MAX_CONTEXT_CHARS = 8000
+const MAX_TOOL_ITERATIONS = 10
 
 export type CalendarEventContext = {
   id: number
@@ -36,13 +40,281 @@ export type ActionItemContext = {
   source_note_title: string | null
 }
 
+export type ExecutedAction = {
+  type:
+    | 'created_event'
+    | 'updated_event'
+    | 'deleted_event'
+    | 'created_action'
+    | 'updated_action'
+    | 'deleted_action'
+  payload: {
+    id: number | string
+    title?: string
+    start_at?: string
+    end_at?: string
+    status?: string
+    due_date?: string | null
+    assigned_entity_name?: string | null
+  }
+}
+
+// ── Tool definitions ─────────────────────────────────────────────────────────
+
+const WIZZ_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'create_calendar_event',
+    description: 'Create a new calendar event.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Event title' },
+        start_at: { type: 'string', description: 'ISO 8601 local time without Z, e.g. 2026-02-27T15:00' },
+        end_at: { type: 'string', description: 'ISO 8601 local time without Z, e.g. 2026-02-27T16:00' },
+        attendees: {
+          type: 'array',
+          description: 'Optional list of attendees',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              email: { type: 'string' },
+            },
+          },
+        },
+      },
+      required: ['title', 'start_at', 'end_at'],
+    },
+  },
+  {
+    name: 'update_calendar_event',
+    description:
+      'Update fields on an existing calendar event. Resolve the event ID from the calendar context provided before calling this.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Calendar event ID (integer)' },
+        title: { type: 'string' },
+        start_at: { type: 'string', description: 'ISO 8601 local time without Z' },
+        end_at: { type: 'string', description: 'ISO 8601 local time without Z' },
+        attendees: {
+          type: 'array',
+          items: { type: 'object', properties: { name: { type: 'string' }, email: { type: 'string' } } },
+        },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_calendar_event',
+    description:
+      'Delete a calendar event permanently. ALWAYS describe what you are about to delete in your response text and ask the user to confirm before calling this tool.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Calendar event ID (integer)' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'create_action_item',
+    description: 'Create a new action item / task.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Action item title' },
+        due_date: { type: 'string', description: 'Optional ISO 8601 date, e.g. 2026-03-01' },
+        assigned_entity_id: {
+          type: 'string',
+          description: 'Optional entity ID of the Person to assign this to',
+        },
+        source_note_id: {
+          type: 'string',
+          description: 'Optional note ID this action item comes from',
+        },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'update_action_item',
+    description:
+      'Update an existing action item. Resolve the item ID from the action items context provided before calling this.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Action item ID (UUID)' },
+        title: { type: 'string' },
+        status: {
+          type: 'string',
+          enum: ['open', 'in_progress', 'done', 'cancelled'],
+          description: 'New status',
+        },
+        due_date: { type: 'string', description: 'ISO 8601 date or null to clear' },
+        assigned_entity_id: { type: 'string', description: 'Entity ID of assignee, or null to clear' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_action_item',
+    description:
+      'Delete an action item permanently. ALWAYS describe what you are about to delete in your response text and ask the user to confirm before calling this tool.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Action item ID (UUID)' },
+      },
+      required: ['id'],
+    },
+  },
+]
+
+// ── Tool executor ────────────────────────────────────────────────────────────
+
+function executeTool(toolName: string, input: Record<string, unknown>): ExecutedAction {
+  const db = getDatabase()
+
+  switch (toolName) {
+    case 'create_calendar_event': {
+      const inp = input as { title: string; start_at: string; end_at: string; attendees?: { name?: string; email?: string }[] }
+      const attendeesJson = JSON.stringify(inp.attendees ?? [])
+      const now = new Date().toISOString()
+      const result = db
+        .prepare(
+          `INSERT INTO calendar_events (title, start_at, end_at, attendees, synced_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(inp.title, inp.start_at, inp.end_at, attendeesJson, now)
+      const row = db
+        .prepare('SELECT id, title, start_at, end_at FROM calendar_events WHERE id = ?')
+        .get(result.lastInsertRowid) as { id: number; title: string; start_at: string; end_at: string }
+      return { type: 'created_event', payload: row }
+    }
+
+    case 'update_calendar_event': {
+      const { id, ...updates } = input as {
+        id: number
+        title?: string
+        start_at?: string
+        end_at?: string
+        attendees?: { name?: string; email?: string }[]
+      }
+      const sets: string[] = []
+      const params: unknown[] = []
+      if (updates.title !== undefined) { sets.push('title = ?'); params.push(updates.title) }
+      if (updates.start_at !== undefined) { sets.push('start_at = ?'); params.push(updates.start_at) }
+      if (updates.end_at !== undefined) { sets.push('end_at = ?'); params.push(updates.end_at) }
+      if (updates.attendees !== undefined) { sets.push('attendees = ?'); params.push(JSON.stringify(updates.attendees)) }
+      if (sets.length) {
+        params.push(id)
+        db.prepare(`UPDATE calendar_events SET ${sets.join(', ')} WHERE id = ?`)
+          .run(...(params as (string | number | null)[]))
+      }
+      const row = db
+        .prepare('SELECT id, title, start_at, end_at FROM calendar_events WHERE id = ?')
+        .get(id) as { id: number; title: string; start_at: string; end_at: string } | undefined
+      if (!row) throw new Error(`Calendar event with id ${id} not found`)
+      return { type: 'updated_event', payload: row }
+    }
+
+    case 'delete_calendar_event': {
+      const { id } = input as { id: number }
+      const row = db
+        .prepare('SELECT id, title, start_at, end_at FROM calendar_events WHERE id = ?')
+        .get(id) as { id: number; title: string; start_at: string; end_at: string } | undefined
+      if (!row) throw new Error(`Calendar event with id ${id} not found`)
+      db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id)
+      return { type: 'deleted_event', payload: row }
+    }
+
+    case 'create_action_item': {
+      const inp = input as {
+        title: string
+        due_date?: string
+        assigned_entity_id?: string
+        source_note_id?: string
+      }
+      const id = randomUUID()
+      db.prepare(
+        `INSERT INTO action_items (id, title, source_note_id, assigned_entity_id, due_date, extraction_type, confidence)
+         VALUES (?, ?, ?, ?, ?, 'manual', 1.0)`,
+      ).run(id, inp.title, inp.source_note_id ?? null, inp.assigned_entity_id ?? null, inp.due_date ?? null)
+      const row = db
+        .prepare(
+          `SELECT ai.id, ai.title, ai.status, ai.due_date, e.name AS assigned_entity_name
+           FROM action_items ai
+           LEFT JOIN entities e ON e.id = ai.assigned_entity_id
+           WHERE ai.id = ?`,
+        )
+        .get(id) as { id: string; title: string; status: string; due_date: string | null; assigned_entity_name: string | null }
+      return { type: 'created_action', payload: row }
+    }
+
+    case 'update_action_item': {
+      const { id, ...updates } = input as {
+        id: string
+        title?: string
+        status?: string
+        due_date?: string | null
+        assigned_entity_id?: string | null
+      }
+      const sets: string[] = []
+      const params: unknown[] = []
+      if (updates.title !== undefined) { sets.push('title = ?'); params.push(updates.title) }
+      if (updates.status !== undefined) {
+        sets.push('status = ?')
+        params.push(updates.status)
+        if (updates.status === 'done' || updates.status === 'cancelled') {
+          sets.push("completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')")
+        } else {
+          sets.push('completed_at = NULL')
+        }
+      }
+      if ('due_date' in updates) { sets.push('due_date = ?'); params.push(updates.due_date ?? null) }
+      if ('assigned_entity_id' in updates) { sets.push('assigned_entity_id = ?'); params.push(updates.assigned_entity_id ?? null) }
+      if (sets.length) {
+        params.push(id)
+        db.prepare(`UPDATE action_items SET ${sets.join(', ')} WHERE id = ?`)
+          .run(...(params as (string | number | null)[]))
+      }
+      const row = db
+        .prepare(
+          `SELECT ai.id, ai.title, ai.status, ai.due_date, e.name AS assigned_entity_name
+           FROM action_items ai
+           LEFT JOIN entities e ON e.id = ai.assigned_entity_id
+           WHERE ai.id = ?`,
+        )
+        .get(id) as { id: string; title: string; status: string; due_date: string | null; assigned_entity_name: string | null } | undefined
+      if (!row) throw new Error(`Action item with id ${id} not found`)
+      return { type: 'updated_action', payload: row }
+    }
+
+    case 'delete_action_item': {
+      const { id } = input as { id: string }
+      const row = db
+        .prepare('SELECT id, title FROM action_items WHERE id = ?')
+        .get(id) as { id: string; title: string } | undefined
+      if (!row) throw new Error(`Action item with id ${id} not found`)
+      db.prepare('DELETE FROM action_items WHERE id = ?').run(id)
+      return { type: 'deleted_action', payload: row }
+    }
+
+    default:
+      throw new Error(`Unknown tool: ${toolName}`)
+  }
+}
+
+// ── Formatting helpers ───────────────────────────────────────────────────────
+
 function formatCalendarEvent(ev: CalendarEventContext): string {
   const start = new Date(ev.start_at)
   const end = new Date(ev.end_at)
   const dateStr = start.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
   const startTime = start.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })
   const endTime = end.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })
-  let line = `- "${ev.title}" on ${dateStr} ${startTime}–${endTime}`
+  let line = `- [id:${ev.id}] "${ev.title}" on ${dateStr} ${startTime}–${endTime}`
   try {
     const attendees = JSON.parse(ev.attendees) as { name?: string; email?: string }[]
     if (attendees.length > 0) {
@@ -56,7 +328,7 @@ function formatCalendarEvent(ev: CalendarEventContext): string {
 }
 
 function formatActionItem(item: ActionItemContext): string {
-  let line = `- [${item.status}] "${item.title}"`
+  let line = `- [id:${item.id}] [${item.status}] "${item.title}"`
   if (item.due_date) line += ` (due: ${item.due_date})`
   if (item.assigned_entity_name) line += ` → ${item.assigned_entity_name}`
   if (item.source_note_title) line += ` (from: "${item.source_note_title}")`
@@ -129,13 +401,15 @@ export async function extractSearchKeywords(
 /**
  * Send a chat message with optional knowledge base context.
  *
+ * Supports Claude tool use: if Claude decides to call a calendar or action item
+ * tool, the tool is executed immediately and the result is fed back to Claude
+ * (looping up to MAX_TOOL_ITERATIONS) before returning the final response.
+ *
  * contextNotes: top search results injected into the system prompt.
  * calendarEvents: upcoming/recent calendar events for temporal awareness.
  * actionItems: open/in-progress action items.
- * Claude is instructed to cite notes as [Note: "Title"] and to reply
- * in the same language the user used.
  *
- * Returns the assistant's response text.
+ * Returns { content, actions } where actions is the list of DB mutations performed.
  * Throws on API error — caller should handle gracefully.
  */
 export async function sendChatMessage(
@@ -143,7 +417,7 @@ export async function sendChatMessage(
   contextNotes: { id: string; title: string; excerpt: string }[],
   calendarEvents: CalendarEventContext[] = [],
   actionItems: ActionItemContext[] = [],
-): Promise<string> {
+): Promise<{ content: string; actions: ExecutedAction[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
   let systemPrompt =
@@ -151,7 +425,11 @@ export async function sendChatMessage(
     'You help the user find information from their notes, understand patterns across meetings, ' +
     'and think through problems using their accumulated context.\n\n' +
     'Always reply in the same language the user writes in.\n\n' +
-    'Be concise and actionable. When you don\'t have relevant context, say so rather than guessing.'
+    'Be concise and actionable. When you don\'t have relevant context, say so rather than guessing.\n\n' +
+    'You have tools available to create, update, and delete calendar events and action items. ' +
+    'Use them when the user asks you to make a change (schedule, add, create, mark, update, move, cancel, delete, etc.). ' +
+    'For creates and updates: execute immediately without asking. ' +
+    'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool.'
 
   if (contextNotes.length > 0) {
     let contextStr = contextNotes
@@ -172,25 +450,74 @@ export async function sendChatMessage(
   if (calendarEvents.length > 0) {
     const evLines = calendarEvents.map(formatCalendarEvent).join('\n')
     systemPrompt +=
-      '\n\nHere are the user\'s upcoming and recent calendar events (past 7 days + next 30 days):\n' +
+      '\n\nHere are the user\'s upcoming and recent calendar events (past 7 days + next 30 days). ' +
+      'Each entry includes its ID in [id:N] — use the ID when calling calendar tools:\n' +
       evLines
   }
 
   if (actionItems.length > 0) {
     const itemLines = actionItems.map(formatActionItem).join('\n')
     systemPrompt +=
-      '\n\nHere are the user\'s open and in-progress action items:\n' +
+      '\n\nHere are the user\'s open and in-progress action items. ' +
+      'Each entry includes its ID in [id:...] — use the ID when calling action item tools:\n' +
       itemLines
   }
 
-  const response = await _client.messages.create({
-    model: CHAT_MODEL,
-    max_tokens: 1500,
-    system: systemPrompt,
-    messages,
-  })
+  // Build a mutable message list for the tool loop.
+  // The loop may append assistant tool-use blocks and user tool-result blocks.
+  const loopMessages: Anthropic.MessageParam[] = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }))
 
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
-  return block.text.trim()
+  const actions: ExecutedAction[] = []
+  let finalText = ''
+
+  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const response = await _client.messages.create({
+      model: CHAT_MODEL,
+      max_tokens: 1500,
+      system: systemPrompt,
+      tools: WIZZ_TOOLS,
+      messages: loopMessages,
+    })
+
+    if (response.stop_reason !== 'tool_use') {
+      // Terminal response — extract text content
+      const textBlock = response.content.find((b) => b.type === 'text')
+      finalText = textBlock?.type === 'text' ? textBlock.text.trim() : ''
+      break
+    }
+
+    // Append assistant turn (may include text + tool_use blocks)
+    loopMessages.push({ role: 'assistant', content: response.content })
+
+    // Execute each tool call and collect results
+    const toolResults: Anthropic.ToolResultBlockParam[] = []
+    for (const block of response.content) {
+      if (block.type !== 'tool_use') continue
+
+      let resultContent: string
+      let isError = false
+      try {
+        const action = executeTool(block.name, block.input as Record<string, unknown>)
+        actions.push(action)
+        resultContent = JSON.stringify(action.payload)
+      } catch (err) {
+        isError = true
+        resultContent = err instanceof Error ? err.message : String(err)
+      }
+
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: block.id,
+        content: resultContent,
+        is_error: isError,
+      })
+    }
+
+    loopMessages.push({ role: 'user', content: toolResults })
+  }
+
+  return { content: finalText, actions }
 }

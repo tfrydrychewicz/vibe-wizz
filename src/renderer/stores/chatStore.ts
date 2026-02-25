@@ -5,10 +5,30 @@
 
 import { ref } from 'vue'
 
+export interface ExecutedAction {
+  type:
+    | 'created_event'
+    | 'updated_event'
+    | 'deleted_event'
+    | 'created_action'
+    | 'updated_action'
+    | 'deleted_action'
+  payload: {
+    id: number | string
+    title?: string
+    start_at?: string
+    end_at?: string
+    status?: string
+    due_date?: string | null
+    assigned_entity_name?: string | null
+  }
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   references?: { id: string; title: string }[]
+  actions?: ExecutedAction[]
   error?: boolean
 }
 

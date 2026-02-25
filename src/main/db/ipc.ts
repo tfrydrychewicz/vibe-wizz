@@ -5,7 +5,7 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, CalendarEventContext, ActionItemContext } from '../embedding/chat'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, CalendarEventContext, ActionItemContext, ExecutedAction } from '../embedding/chat'
 
 type NoteRow = {
   id: string
@@ -1108,7 +1108,7 @@ export function registerDbIpcHandlers(): void {
     async (
       _event,
       { messages, searchQuery }: { messages: { role: 'user' | 'assistant'; content: string }[]; searchQuery?: string },
-    ): Promise<{ content: string; references: { id: string; title: string }[] }> => {
+    ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }> => {
       const db = getDatabase()
 
       const setting = db
@@ -1121,6 +1121,7 @@ export function registerDbIpcHandlers(): void {
           content:
             'No Anthropic API key configured. Open **Settings** (bottom of the sidebar) and add your API key to enable AI chat.',
           references: [],
+          actions: [],
         }
       }
 
@@ -1280,13 +1281,17 @@ export function registerDbIpcHandlers(): void {
       }
 
       let content: string
+      let executedActions: ExecutedAction[] = []
       try {
-        content = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems)
+        content = result.content
+        executedActions = result.actions
       } catch (err) {
         console.error('[Chat] Claude API error:', err)
         return {
           content: 'Something went wrong calling the Claude API. Please check your API key and try again.',
           references: [],
+          actions: [],
         }
       }
 
@@ -1302,7 +1307,7 @@ export function registerDbIpcHandlers(): void {
         }
       }
 
-      return { content, references }
+      return { content, references, actions: executedActions }
     },
   )
 

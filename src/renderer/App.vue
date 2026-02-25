@@ -190,6 +190,11 @@ async function onNavClick(id: string): Promise<void> {
   }
 }
 
+function onChatOpenView(view: string): void {
+  activeView.value = view
+  showChat.value = false
+}
+
 function onCalendarNavClick(e: MouseEvent): void {
   if (e.shiftKey || e.metaKey || e.ctrlKey) {
     const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : 'new-pane'
@@ -591,7 +596,12 @@ onBeforeUnmount(() => {
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
 
     <!-- AI Chat sidebar -->
-    <ChatSidebar v-if="showChat" @close="showChat = false" @open-note="onOpenNote" />
+    <ChatSidebar
+      v-if="showChat"
+      @close="showChat = false"
+      @open-note="onOpenNote"
+      @open-view="onChatOpenView"
+    />
   </div>
 </template>
 

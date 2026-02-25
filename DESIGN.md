@@ -636,6 +636,185 @@ interface NoteTranscription {
 - Answers include citations linking to source notes
 - Conversation context persists within a session
 
+### 8a. AI Actions — Agentic Command Execution
+
+**Overview**: The AI chat sidebar can execute Wizz operations directly from natural language. Instead of only answering questions, the assistant understands commands and performs them — creating meetings, updating action item statuses, rescheduling events — returning a confirmation alongside its prose response.
+
+**Supported actions (initial scope):**
+
+| Category | Operations | Example prompts |
+|----------|-----------|-----------------|
+| Calendar | create, update, delete | "Schedule a retro Friday at 3pm", "Move tomorrow's standup to 10am", "Cancel the 2pm sync" |
+| Action items | create, update (title/status/due/assignee), delete | "Add a task: review Sasha's PR by Wednesday", "Mark the runbook task as done", "Assign the vendor eval to @John" |
+
+**Intent detection — Claude tool use, not regex:**
+
+`chat.ts` passes a set of tool definitions to the Claude API with every message. Claude decides autonomously whether to call a tool or reply conversationally — no keyword matching or separate intent classifier needed. The full set of defined tools:
+
+```typescript
+const WIZZ_TOOLS: Tool[] = [
+  {
+    name: 'create_calendar_event',
+    description: 'Create a new calendar event.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title:     { type: 'string' },
+        start_at:  { type: 'string', description: 'ISO 8601 local time, no Z' },
+        end_at:    { type: 'string', description: 'ISO 8601 local time, no Z' },
+        attendees: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, email: { type: 'string' } } } }
+      },
+      required: ['title', 'start_at', 'end_at']
+    }
+  },
+  {
+    name: 'update_calendar_event',
+    description: 'Update fields on an existing calendar event. Resolve event ID from context before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:       { type: 'number' },
+        title:    { type: 'string' },
+        start_at: { type: 'string' },
+        end_at:   { type: 'string' },
+        attendees: { type: 'array', items: { type: 'object' } }
+      },
+      required: ['id']
+    }
+  },
+  {
+    name: 'delete_calendar_event',
+    description: 'Delete a calendar event. ALWAYS describe what you are about to delete and ask the user to confirm before calling this tool.',
+    input_schema: {
+      type: 'object',
+      properties: { id: { type: 'number' } },
+      required: ['id']
+    }
+  },
+  {
+    name: 'create_action_item',
+    description: 'Create a new action item / task.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title:              { type: 'string' },
+        due_date:           { type: 'string', description: 'ISO 8601 date' },
+        assigned_entity_id: { type: 'string', description: 'Entity ID of the Person to assign' },
+        source_note_id:     { type: 'string' }
+      },
+      required: ['title']
+    }
+  },
+  {
+    name: 'update_action_item',
+    description: 'Update an existing action item. Resolve item ID from context before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:                 { type: 'string' },
+        title:              { type: 'string' },
+        status:             { type: 'string', enum: ['open', 'in_progress', 'done', 'cancelled'] },
+        due_date:           { type: 'string' },
+        assigned_entity_id: { type: 'string' }
+      },
+      required: ['id']
+    }
+  },
+  {
+    name: 'delete_action_item',
+    description: 'Delete an action item. ALWAYS describe what you are about to delete and ask the user to confirm before calling this tool.',
+    input_schema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id']
+    }
+  }
+]
+```
+
+**Execution flow (single `chat:send` round-trip):**
+
+```
+User: "Schedule a retro on Friday at 3pm"
+    │
+    ├─ Step 1: chat.ts sends messages[] + WIZZ_TOOLS to Claude
+    │
+    ├─ Step 2: Claude responds stop_reason='tool_use'
+    │   tool_use: { name: 'create_calendar_event',
+    │               input: { title: 'Retro', start_at: '2026-02-27T15:00',
+    │                         end_at: '2026-02-27T16:00' } }
+    │
+    ├─ Step 3: chat.ts executes the corresponding DB operation directly
+    │   (calls the same logic as calendar-events:create IPC handler)
+    │   result: { id: 42, title: 'Retro', ... }
+    │
+    ├─ Step 4: result appended as tool_result message; loop back to Claude
+    │
+    └─ Step 5: Claude produces final response (stop_reason='end_turn')
+        content: "Done! I've scheduled **Retro** for Friday Feb 27, 3–4pm."
+        actions: [{ type: 'created_event', payload: { id: 42, title: 'Retro', ... } }]
+```
+
+The tool loop runs entirely inside `chat.ts` — `chat:send` still resolves with a single `{ content, references, actions }` response. Multi-tool turns (e.g. create then update) are handled by iterating until `stop_reason !== 'tool_use'`.
+
+**Destructive action confirmation:**
+
+Delete tools include in their `description` the instruction to always seek confirmation before calling. Claude will therefore respond conversationally ("Should I delete **Retro** on Friday?") when delete intent is detected. The user confirms ("yes, go ahead") and the delete executes on the next turn. If the user phrased the original command as an unambiguous delete ("yes delete that retro"), Claude may call the tool immediately on the first turn.
+
+**`chat:send` response — extended type:**
+
+```typescript
+interface ExecutedAction {
+  type:
+    | 'created_event'   | 'updated_event'   | 'deleted_event'
+    | 'created_action'  | 'updated_action'  | 'deleted_action'
+  payload: CalendarEvent | ActionItem | { id: number | string }  // deleted: id only
+}
+
+interface ChatResponse {
+  content: string
+  references: { id: string; title: string }[]   // existing — note citations
+  actions: ExecutedAction[]                       // new — executed tool results
+}
+```
+
+No new IPC channel required. Tool execution is internal to the `chat:send` handler.
+
+**ChatSidebar action cards:**
+
+Executed actions are rendered as compact cards below the assistant's text message:
+
+```
+┌──────────────────────────────────────────┐
+│ ✅  Created event                         │
+│  Retro · Fri Feb 27 · 3:00–4:00pm        │
+│                              Open in Calendar → │
+└──────────────────────────────────────────┘
+
+┌──────────────────────────────────────────┐
+│ ✅  Action item marked done               │
+│  Review Sasha's PR                       │
+│                              Open in Actions → │
+└──────────────────────────────────────────┘
+
+┌──────────────────────────────────────────┐
+│ 🗑  Deleted event                         │
+│  Friday Retro                            │
+└──────────────────────────────────────────┘
+```
+
+Card colours: green for creates, blue for updates, muted red for deletes. "Open in…" buttons support all three navigation modes (plain / Shift / Cmd click).
+
+**Resolving references from context:**
+
+The system prompt already injects upcoming calendar events and open action items (see `chat:send` implementation). When the user says "move tomorrow's standup", Claude finds the matching event ID in the injected context and calls `update_calendar_event` with it directly. If multiple matches exist or the reference is ambiguous, Claude asks for clarification before calling any tool.
+
+**Error handling:**
+
+If a tool call fails (DB error, item not found), the error is returned as a `tool_result` with `is_error: true`. Claude sees the error text and responds naturally: "I couldn't find that meeting — can you tell me more about when it is?" The failed tool call is omitted from `actions[]` in the response.
+
+---
+
 ### 9. Data Portability
 
 **Import**:
@@ -762,12 +941,13 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Post-meeting summary (basic): Claude Haiku generates structured meeting summary (Meeting Summary / Key Decisions / Follow-ups); stored in `note_transcriptions.summary` and appended to note body
 - [x] Multi-session transcription history: each start/stop cycle persists to `note_transcriptions`; Transcriptions panel in NoteEditor shows all sessions (newest-first) with timestamps, durations, AI summaries, and expandable raw transcripts
 - [x] Speaker diarization + entity matching: Deepgram word-level `words` array parsed into speaker segments (`[Speaker N]: text`); on stop, calendar event attendee names fetched and passed to `postProcessor.ts`; Claude Haiku maps speaker IDs → attendee names; labels replaced before storing `raw_transcript` and generating merged note
-- [ ] Post-meeting action extraction from transcript (action items currently extracted from note body by general pipeline; dedicated transcript-aware extraction pending)
+- [x] Post-meeting action extraction from transcript (action items currently extracted from note body by general pipeline; dedicated transcript-aware extraction pending)
 - [ ] Meeting prep notifications
 - [ ] Calendar sync (Google Calendar)
 
 ### Phase 4 — Proactive AI
 - [x] Make the AI also aware of the meetings and actions
+- [x] AI Actions — natural language calendar and action item CRUD via Claude tool use (§8a): extend `chat.ts` with `WIZZ_TOOLS` definitions + tool-call execution loop; extend `chat:send` response with `actions: ExecutedAction[]`; render action cards in `ChatSidebar.vue`
 - [ ] Daily Brief generation
 - [ ] Cluster summaries (L3) + nightly batch
 - [ ] Graph RAG (note_relations)
