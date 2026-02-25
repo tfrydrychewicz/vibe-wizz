@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { X, Eye, EyeOff } from 'lucide-vue-next'
 
 const emit = defineEmits<{ close: [] }>()
@@ -71,6 +71,8 @@ onMounted(async () => {
   calendarSlotDuration.value = slotDuration ?? '30'
   entityTypes.value = etList ?? []
   attendeeEntityTypeId.value = attTypeId ?? ''
+  // Wait for the watcher to fire (it resets name/email fields), then restore saved values
+  await nextTick()
   attendeeNameField.value = attNameField ?? ''
   attendeeEmailField.value = attEmailField ?? ''
 })
