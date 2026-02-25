@@ -5,7 +5,7 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, CalendarEventContext, ActionItemContext, ExecutedAction, type ChatModelId } from '../embedding/chat'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, type ChatModelId } from '../embedding/chat'
 
 type NoteRow = {
   id: string
@@ -1165,12 +1165,14 @@ export function registerDbIpcHandlers(): void {
         images,
         files,
         model,
+        mentionedEntityIds,
       }: {
         messages: { role: 'user' | 'assistant'; content: string }[]
         searchQuery?: string
         images?: { dataUrl: string; mimeType: string }[]
         files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
         model?: string
+        mentionedEntityIds?: string[]
       },
     ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }> => {
       const db = getDatabase()
@@ -1379,6 +1381,24 @@ export function registerDbIpcHandlers(): void {
         }
       })()
 
+      // Fetch entity context for entities mentioned by the user in this conversation
+      const entityContext: EntityContext[] = (() => {
+        if (!mentionedEntityIds?.length) return []
+        try {
+          const sp = mentionedEntityIds.map(() => '?').join(',')
+          return db
+            .prepare(
+              `SELECT e.id, e.name, et.name AS type_name
+               FROM entities e
+               JOIN entity_types et ON et.id = e.type_id
+               WHERE e.id IN (${sp}) AND e.trashed_at IS NULL`,
+            )
+            .all(...mentionedEntityIds) as EntityContext[]
+        } catch {
+          return []
+        }
+      })()
+
       // Fetch full content of notes linked to events / action items and append to context
       try {
         const existingIds = new Set(contextNotes.map((n) => n.id))
@@ -1413,7 +1433,7 @@ export function registerDbIpcHandlers(): void {
       let content: string
       let executedActions: ExecutedAction[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, model as ChatModelId | undefined, files)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, model as ChatModelId | undefined, files, entityContext)
         content = result.content
         executedActions = result.actions
       } catch (err) {

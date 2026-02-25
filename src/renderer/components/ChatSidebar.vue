@@ -5,6 +5,12 @@ import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX,
 import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction, type AttachedImage, type AttachedFile } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
 
+interface EntityResult {
+  id: string
+  name: string
+  type_name: string
+}
+
 const emit = defineEmits<{
   close: []
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
@@ -26,6 +32,15 @@ const attachedImages = ref<AttachedImage[]>([])
 const attachedFiles = ref<AttachedFile[]>([])
 const isDragOver = ref(false)
 const selectedModel = ref<ModelId>('claude-sonnet-4-6')
+
+// ── @mention entity picker ────────────────────────────────────────────────────
+const mentionedEntities = ref<EntityResult[]>([])  // entities confirmed for this session
+const mentionActive = ref(false)
+const mentionQuery = ref('')
+const mentionStart = ref(-1)  // index of @ in textarea value
+const mentionResults = ref<EntityResult[]>([])
+const mentionIndex = ref(0)
+let mentionTimer: ReturnType<typeof setTimeout> | null = null
 
 const SUPPORTED_FILE_TYPES = '.pdf,.txt,.csv,.md'
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -137,6 +152,86 @@ function removeImage(id: string): void {
   if (idx !== -1) attachedImages.value.splice(idx, 1)
 }
 
+// ── @mention entity picker ────────────────────────────────────────────────────
+
+function closeMention(): void {
+  mentionActive.value = false
+  mentionResults.value = []
+  mentionStart.value = -1
+  mentionQuery.value = ''
+  mentionIndex.value = 0
+  if (mentionTimer) { clearTimeout(mentionTimer); mentionTimer = null }
+}
+
+function debouncedMentionSearch(query: string): void {
+  if (mentionTimer) { clearTimeout(mentionTimer); mentionTimer = null }
+  mentionResults.value = []
+  mentionIndex.value = 0
+  mentionTimer = setTimeout(async () => {
+    try {
+      const results = await window.api.invoke('entities:search', { query }) as EntityResult[]
+      mentionResults.value = results.slice(0, 8)
+    } catch {
+      mentionResults.value = []
+    }
+  }, 150)
+}
+
+function updateMentionState(): void {
+  const ta = textareaRef.value
+  if (!ta) return
+  const val = ta.value
+  const pos = ta.selectionStart ?? val.length
+  const before = val.slice(0, pos)
+  // Find last @ with no space between it and cursor (active mention in progress)
+  const match = before.match(/@([^\s@]*)$/)
+  if (match) {
+    const newStart = before.length - match[0].length
+    const newQuery = match[1]
+    const stateChanged = newStart !== mentionStart.value || newQuery !== mentionQuery.value
+    mentionStart.value = newStart
+    mentionQuery.value = newQuery
+    mentionActive.value = true
+    if (stateChanged) debouncedMentionSearch(newQuery)
+  } else {
+    closeMention()
+  }
+}
+
+function onInputWithMention(): void {
+  adjustTextareaHeight()
+  updateMentionState()
+}
+
+function pickMention(entity: EntityResult): void {
+  const ta = textareaRef.value
+  if (!ta || mentionStart.value < 0) return
+  const val = ta.value
+  const cursorPos = ta.selectionStart ?? val.length
+  inputText.value = val.slice(0, mentionStart.value) + `@${entity.name}` + val.slice(cursorPos)
+  // Add to mentioned entities (deduplicate)
+  if (!mentionedEntities.value.find((e) => e.id === entity.id)) {
+    mentionedEntities.value.push(entity)
+  }
+  const insertEnd = mentionStart.value + entity.name.length + 1
+  closeMention()
+  nextTick(() => {
+    ta.setSelectionRange(insertEnd, insertEnd)
+    ta.focus()
+    adjustTextareaHeight()
+  })
+}
+
+function removeMentionEntity(id: string): void {
+  const idx = mentionedEntities.value.findIndex((e) => e.id === id)
+  if (idx !== -1) mentionedEntities.value.splice(idx, 1)
+}
+
+function onClear(): void {
+  clearMessages()
+  mentionedEntities.value = []
+}
+
 async function send(): Promise<void> {
   const text = inputText.value.trim()
   if ((!text && attachedImages.value.length === 0 && attachedFiles.value.length === 0) || isLoading.value) return
@@ -173,6 +268,9 @@ async function send(): Promise<void> {
       images: imagesToSend,
       files: filesToSend.length > 0 ? filesToSend : undefined,
       model: selectedModel.value,
+      mentionedEntityIds: mentionedEntities.value.length > 0
+        ? mentionedEntities.value.map((e) => e.id)
+        : undefined,
     })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }
 
     messages.value.push({
@@ -194,6 +292,30 @@ async function send(): Promise<void> {
 }
 
 function onKeydown(e: KeyboardEvent): void {
+  // Mention picker keyboard navigation takes priority
+  if (mentionActive.value && mentionResults.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      mentionIndex.value = (mentionIndex.value + 1) % mentionResults.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      mentionIndex.value = (mentionIndex.value - 1 + mentionResults.value.length) % mentionResults.value.length
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const entity = mentionResults.value[mentionIndex.value]
+      if (entity) pickMention(entity)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeMention()
+      return
+    }
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     void send()
@@ -326,7 +448,7 @@ function renderMessage(content: string, references: { id: string; title: string 
         v-if="messages.length > 0"
         class="chat-action-btn"
         title="Clear conversation"
-        @click="clearMessages"
+        @click="onClear"
       >
         <Trash2 :size="13" />
       </button>
@@ -410,8 +532,8 @@ function renderMessage(content: string, references: { id: string; title: string 
       <div ref="messagesEndRef" />
     </div>
 
-    <!-- Attachments bar (images + files) -->
-    <div v-if="attachedImages.length > 0 || attachedFiles.length > 0" class="chat-attachments-bar">
+    <!-- Attachments bar (images + files + mentioned entities) -->
+    <div v-if="attachedImages.length > 0 || attachedFiles.length > 0 || mentionedEntities.length > 0" class="chat-attachments-bar">
       <div
         v-for="img in attachedImages"
         :key="img.id"
@@ -436,6 +558,18 @@ function renderMessage(content: string, references: { id: string; title: string 
           <X :size="10" />
         </button>
       </div>
+      <!-- Mentioned entity chips -->
+      <div
+        v-for="entity in mentionedEntities"
+        :key="entity.id"
+        class="chat-mention-chip"
+      >
+        <span class="chat-mention-chip-name">@{{ entity.name }}</span>
+        <span class="chat-mention-chip-type">{{ entity.type_name }}</span>
+        <button class="chat-attachment-remove chat-attachment-remove--file" title="Remove" @click="removeMentionEntity(entity.id)">
+          <X :size="10" />
+        </button>
+      </div>
     </div>
 
     <!-- Hidden file input -->
@@ -450,6 +584,19 @@ function renderMessage(content: string, references: { id: string; title: string 
 
     <!-- Input -->
     <div class="chat-input-area">
+      <!-- @mention entity picker (floats above input) -->
+      <div v-if="mentionActive && mentionResults.length > 0" class="mention-picker">
+        <button
+          v-for="(entity, i) in mentionResults"
+          :key="entity.id"
+          class="mention-option"
+          :class="{ 'mention-option--active': i === mentionIndex }"
+          @mousedown.prevent="pickMention(entity)"
+        >
+          <span class="mention-option-name">@{{ entity.name }}</span>
+          <span class="mention-option-type">{{ entity.type_name }}</span>
+        </button>
+      </div>
       <button
         class="chat-attach-btn"
         :disabled="isLoading"
@@ -462,12 +609,13 @@ function renderMessage(content: string, references: { id: string; title: string 
         ref="textareaRef"
         v-model="inputText"
         class="chat-input"
-        placeholder="Ask about your notes…"
+        placeholder="Ask about your notes… (type @ to mention an entity)"
         rows="1"
         :disabled="isLoading"
         @keydown="onKeydown"
-        @input="adjustTextareaHeight"
+        @input="onInputWithMention"
         @paste="onPaste"
+        @blur="closeMention"
       />
       <button
         class="chat-send-btn"
@@ -841,6 +989,7 @@ function renderMessage(content: string, references: { id: string; title: string 
 /* ── Input area ── */
 
 .chat-input-area {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 8px;
@@ -1079,5 +1228,88 @@ function renderMessage(content: string, references: { id: string; title: string 
 .chat-attach-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+/* ── @mention picker ── */
+
+.mention-picker {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.mention-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  cursor: pointer;
+  gap: 8px;
+  font-family: inherit;
+}
+
+.mention-option:last-child {
+  border-bottom: none;
+}
+
+.mention-option:hover,
+.mention-option--active {
+  background: var(--color-hover);
+}
+
+.mention-option-name {
+  font-size: 13px;
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.mention-option-type {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+/* ── Entity mention chips in attachments bar ── */
+
+.chat-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: rgba(91, 141, 239, 0.1);
+  border: 1px solid rgba(91, 141, 239, 0.25);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chat-mention-chip-name {
+  color: var(--color-accent);
+}
+
+.chat-mention-chip-type {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  font-weight: 400;
 }
 </style>

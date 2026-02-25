@@ -50,6 +50,12 @@ export type ActionItemContext = {
   source_note_title: string | null
 }
 
+export type EntityContext = {
+  id: string
+  name: string
+  type_name: string
+}
+
 export type ExecutedAction = {
   type:
     | 'created_event'
@@ -470,6 +476,7 @@ export async function sendChatMessage(
   images?: { dataUrl: string; mimeType: string }[],
   model: ChatModelId = DEFAULT_CHAT_MODEL,
   files?: AttachedFilePayload[],
+  entityContext: EntityContext[] = [],
 ): Promise<{ content: string; actions: ExecutedAction[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
@@ -516,6 +523,17 @@ export async function sendChatMessage(
       '\n\nHere are the user\'s open and in-progress action items. ' +
       'Each entry includes its ID in [id:...] — use the ID when calling action item tools:\n' +
       itemLines
+  }
+
+  if (entityContext.length > 0) {
+    const entityLines = entityContext
+      .map((e) => `- [id:${e.id}] @${e.name} (type: ${e.type_name})`)
+      .join('\n')
+    systemPrompt +=
+      '\n\nEntities mentioned in this conversation. When assigning action items or referencing people/projects, ' +
+      'use the entity ID from [id:...]. Always confirm the entity type is appropriate for the operation ' +
+      '(e.g. only assign tasks to Person-type entities):\n' +
+      entityLines
   }
 
   // Build a mutable message list for the tool loop.
