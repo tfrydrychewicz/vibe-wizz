@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { X, Plus, Trash2, ExternalLink } from 'lucide-vue-next'
+import LucideIcon from './LucideIcon.vue'
 import type { OpenMode } from '../stores/tabStore'
 
 export interface CalendarEvent {
@@ -30,13 +31,29 @@ const emit = defineEmits<{
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
 }>()
 
+// ── Attendee config ───────────────────────────────────────────────────────────
+
+interface AttendeeItem {
+  name: string
+  email: string
+  entity_id?: string
+}
+
+interface AttendeeConfig {
+  typeId: string
+  nameField: string
+  emailField: string
+}
+
+const attendeeConfig = ref<AttendeeConfig | null>(null)
+
 // ── Form state ────────────────────────────────────────────────────────────────
 
 const title = ref('')
 const dateStr = ref('')   // YYYY-MM-DD
 const startTime = ref('') // HH:MM
 const endTime = ref('')   // HH:MM
-const attendees = ref<Array<{ name: string; email: string }>>([])
+const attendees = ref<AttendeeItem[]>([])
 const linkedNoteId = ref<string | null>(null)
 const linkedNoteTitle = ref<string | null>(null)
 const confirmDelete = ref(false)
@@ -109,11 +126,21 @@ function populate(): void {
   confirmDelete.value = false
 }
 
-onMounted(populate)
+onMounted(async () => {
+  populate()
+  const [typeId, nameField, emailField] = await Promise.all([
+    window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'attendee_name_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
+  ])
+  if (typeId && nameField && emailField) {
+    attendeeConfig.value = { typeId, nameField, emailField }
+  }
+})
 watch(() => props.event, populate)
 watch(() => props.defaultStart, populate)
 
-// ── Attendees ─────────────────────────────────────────────────────────────────
+// ── Attendees — free-form mode ────────────────────────────────────────────────
 
 const newAttendeeName = ref('')
 const newAttendeeEmail = ref('')
@@ -138,6 +165,84 @@ function onAttendeeKeydown(e: KeyboardEvent): void {
   }
 }
 
+// ── Attendees — entity search mode ───────────────────────────────────────────
+
+interface EntitySearchResult {
+  id: string
+  name: string
+  type_icon: string
+}
+
+const attendeeQuery = ref('')
+const attendeeResults = ref<EntitySearchResult[]>([])
+const showAttendeeDropdown = ref(false)
+const attendeeDropdownIdx = ref(0)
+const attendeeSearchInputEl = ref<HTMLInputElement | null>(null)
+const attendeeDropdownPos = ref({ top: 0, left: 0, width: 0 })
+
+function updateDropdownPos(): void {
+  const el = attendeeSearchInputEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  attendeeDropdownPos.value = { top: rect.bottom + 4, left: rect.left, width: rect.width }
+}
+
+watch(attendeeQuery, async (q) => {
+  if (!attendeeConfig.value || !q.trim()) {
+    attendeeResults.value = []
+    showAttendeeDropdown.value = false
+    return
+  }
+  attendeeResults.value = (await window.api.invoke('entities:search', {
+    query: q,
+    type_id: attendeeConfig.value.typeId,
+  })) as EntitySearchResult[]
+  if (attendeeResults.value.length > 0) {
+    updateDropdownPos()
+    showAttendeeDropdown.value = true
+  } else {
+    showAttendeeDropdown.value = false
+  }
+  attendeeDropdownIdx.value = 0
+})
+
+async function selectAttendeeEntity(result: EntitySearchResult): Promise<void> {
+  const cfg = attendeeConfig.value!
+  const res = (await window.api.invoke('entities:get', { id: result.id })) as {
+    entity: { id: string; name: string; fields: string }
+  } | null
+  if (!res) return
+  const { entity } = res
+  const fields = JSON.parse(entity.fields ?? '{}') as Record<string, string>
+  const name = cfg.nameField === '__name__' ? entity.name : (fields[cfg.nameField] ?? entity.name)
+  const email = cfg.emailField === '__name__' ? entity.name : (fields[cfg.emailField] ?? '')
+  if (!attendees.value.some(a => a.entity_id === entity.id)) {
+    attendees.value.push({ name, email, entity_id: entity.id })
+  }
+  attendeeQuery.value = ''
+  showAttendeeDropdown.value = false
+}
+
+function closeAttendeeDropdownDelayed(): void {
+  window.setTimeout(() => { showAttendeeDropdown.value = false }, 150)
+}
+
+function onAttendeeSearchKeydown(e: KeyboardEvent): void {
+  if (!showAttendeeDropdown.value || !attendeeResults.value.length) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    attendeeDropdownIdx.value = (attendeeDropdownIdx.value + 1) % attendeeResults.value.length
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    attendeeDropdownIdx.value = (attendeeDropdownIdx.value - 1 + attendeeResults.value.length) % attendeeResults.value.length
+  } else if (e.key === 'Enter') {
+    e.preventDefault()
+    void selectAttendeeEntity(attendeeResults.value[attendeeDropdownIdx.value])
+  } else if (e.key === 'Escape') {
+    showAttendeeDropdown.value = false
+  }
+}
+
 // ── Save ──────────────────────────────────────────────────────────────────────
 
 async function save(): Promise<void> {
@@ -149,13 +254,19 @@ async function save(): Promise<void> {
     const start_at = buildISO(dateStr.value, startTime.value)
     const end_at = buildISO(dateStr.value, endTime.value)
 
+    const attendeesPayload = attendees.value.map(a => ({
+      name: a.name,
+      email: a.email,
+      ...(a.entity_id ? { entity_id: a.entity_id } : {}),
+    }))
+
     if (props.event) {
       await window.api.invoke('calendar-events:update', {
         id: props.event.id,
         title: t,
         start_at,
         end_at,
-        attendees: attendees.value.map(({ name, email }) => ({ name, email })),
+        attendees: attendeesPayload,
         linked_note_id: linkedNoteId.value,
       })
       emit('saved', {
@@ -172,7 +283,7 @@ async function save(): Promise<void> {
         title: t,
         start_at,
         end_at,
-        attendees: attendees.value.map(({ name, email }) => ({ name, email })),
+        attendees: attendeesPayload,
         linked_note_id: linkedNoteId.value,
       }) as CalendarEvent
       emit('saved', created)
@@ -251,23 +362,60 @@ function openLinkedNote(e: MouseEvent): void {
               <button class="btn-remove" @click="removeAttendee(idx)"><X :size="10" /></button>
             </div>
           </div>
-          <div class="attendee-add-row">
-            <input
-              v-model="newAttendeeName"
-              class="field-input attendee-input"
-              placeholder="Name"
-              @keydown="onAttendeeKeydown"
-            />
-            <input
-              v-model="newAttendeeEmail"
-              class="field-input attendee-input"
-              placeholder="Email"
-              @keydown="onAttendeeKeydown"
-            />
-            <button class="btn-add-attendee" title="Add attendee" @click="addAttendee">
-              <Plus :size="13" />
-            </button>
-          </div>
+
+          <!-- Entity search mode -->
+          <template v-if="attendeeConfig">
+            <div class="attendee-search-wrap">
+              <input
+                ref="attendeeSearchInputEl"
+                v-model="attendeeQuery"
+                class="field-input"
+                placeholder="Search entities…"
+                autocomplete="off"
+                @keydown="onAttendeeSearchKeydown"
+                @blur="closeAttendeeDropdownDelayed"
+              />
+            </div>
+            <Teleport to="body">
+              <div
+                v-if="showAttendeeDropdown && attendeeResults.length"
+                class="attendee-dropdown-portal"
+                :style="{ top: attendeeDropdownPos.top + 'px', left: attendeeDropdownPos.left + 'px', width: attendeeDropdownPos.width + 'px' }"
+              >
+                <button
+                  v-for="(r, i) in attendeeResults"
+                  :key="r.id"
+                  class="attendee-dropdown-item"
+                  :class="{ active: i === attendeeDropdownIdx }"
+                  @mousedown.prevent="selectAttendeeEntity(r)"
+                >
+                  <LucideIcon :name="r.type_icon" :size="12" />
+                  {{ r.name }}
+                </button>
+              </div>
+            </Teleport>
+          </template>
+
+          <!-- Free-form mode -->
+          <template v-else>
+            <div class="attendee-add-row">
+              <input
+                v-model="newAttendeeName"
+                class="field-input attendee-input"
+                placeholder="Name"
+                @keydown="onAttendeeKeydown"
+              />
+              <input
+                v-model="newAttendeeEmail"
+                class="field-input attendee-input"
+                placeholder="Email"
+                @keydown="onAttendeeKeydown"
+              />
+              <button class="btn-add-attendee" title="Add attendee" @click="addAttendee">
+                <Plus :size="13" />
+              </button>
+            </div>
+          </template>
         </div>
 
         <!-- Linked note -->
@@ -406,6 +554,44 @@ function openLinkedNote(e: MouseEvent): void {
 .field-shrink {
   flex-shrink: 0;
   flex: 1;
+}
+
+/* Attendees — entity search */
+
+.attendee-search-wrap {
+  position: relative;
+}
+
+:global(.attendee-dropdown-portal) {
+  position: fixed;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  z-index: 2000;
+  overflow: hidden;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+:global(.attendee-dropdown-item) {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+:global(.attendee-dropdown-item:hover),
+:global(.attendee-dropdown-item.active) {
+  background: rgba(91, 141, 239, 0.12);
 }
 
 /* Attendees */

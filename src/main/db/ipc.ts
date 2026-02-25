@@ -479,22 +479,24 @@ export function registerDbIpcHandlers(): void {
   // ─── Entities ────────────────────────────────────────────────────────────────
 
   /**
-   * entities:search — searches non-trashed entities by name across all types.
-   * Used by the @mention suggestion in the note editor.
+   * entities:search — searches non-trashed entities by name.
+   * Used by the @mention suggestion in the note editor and attendee entity search.
+   * Optional type_id filter restricts results to a specific entity type.
    */
-  ipcMain.handle('entities:search', (_event, { query }: { query: string }) => {
+  ipcMain.handle('entities:search', (_event, { query, type_id }: { query: string; type_id?: string }) => {
     const db = getDatabase()
-    return db
-      .prepare(
-        `SELECT e.id, e.name, e.type_id, et.name AS type_name, et.icon AS type_icon
-         FROM entities e
-         JOIN entity_types et ON e.type_id = et.id
-         WHERE e.name LIKE ? COLLATE NOCASE
-           AND e.trashed_at IS NULL
-         ORDER BY e.name COLLATE NOCASE
-         LIMIT 20`
-      )
-      .all(`%${query}%`)
+    const params: unknown[] = [`%${query}%`]
+    let sql = `SELECT e.id, e.name, e.type_id, et.name AS type_name, et.icon AS type_icon
+               FROM entities e
+               JOIN entity_types et ON e.type_id = et.id
+               WHERE e.name LIKE ? COLLATE NOCASE
+                 AND e.trashed_at IS NULL`
+    if (type_id) {
+      sql += ` AND e.type_id = ?`
+      params.push(type_id)
+    }
+    sql += ` ORDER BY e.name COLLATE NOCASE LIMIT 20`
+    return db.prepare(sql).all(...params)
   })
 
   /** entities:list — returns all non-trashed entities of a given type, sorted by name. */

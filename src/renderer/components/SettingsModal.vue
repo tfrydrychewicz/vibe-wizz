@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { X, Eye, EyeOff } from 'lucide-vue-next'
 
 const emit = defineEmits<{ close: [] }>()
@@ -12,15 +12,67 @@ const calendarSlotDuration = ref('30')
 const saving = ref(false)
 const savedFeedback = ref(false)
 
+// ── Attendee entity config ────────────────────────────────────────────────────
+
+interface EntityTypeRow {
+  id: string
+  name: string
+  icon: string
+  schema: string
+}
+
+interface FieldDef {
+  name: string
+  type: string
+}
+
+const entityTypes = ref<EntityTypeRow[]>([])
+const attendeeEntityTypeId = ref('')
+const attendeeNameField = ref('')
+const attendeeEmailField = ref('')
+
+const selectedEntityFields = computed<FieldDef[]>(() => {
+  if (!attendeeEntityTypeId.value) return []
+  const et = entityTypes.value.find(t => t.id === attendeeEntityTypeId.value)
+  if (!et) return []
+  try { return (JSON.parse(et.schema) as { fields: FieldDef[] }).fields ?? [] } catch { return [] }
+})
+
+const nameFieldOptions = computed(() => [
+  { value: '__name__', label: 'Entity Name (primary)' },
+  ...selectedEntityFields.value
+    .filter(f => f.type === 'text' || f.type === 'email')
+    .map(f => ({ value: f.name, label: f.name })),
+])
+
+const emailFieldOptions = computed(() =>
+  selectedEntityFields.value
+    .filter(f => f.type === 'text' || f.type === 'email')
+    .map(f => ({ value: f.name, label: f.name }))
+)
+
+watch(attendeeEntityTypeId, () => {
+  attendeeNameField.value = ''
+  attendeeEmailField.value = ''
+})
+
 onMounted(async () => {
-  const [openai, anthropic, slotDuration] = await Promise.all([
+  const [openai, anthropic, slotDuration, attTypeId, attNameField, attEmailField, etList] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'calendar_slot_duration' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'attendee_name_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
+    window.api.invoke('entity-types:list') as Promise<EntityTypeRow[]>,
   ])
   apiKey.value = openai ?? ''
   anthropicKey.value = anthropic ?? ''
   calendarSlotDuration.value = slotDuration ?? '30'
+  entityTypes.value = etList ?? []
+  attendeeEntityTypeId.value = attTypeId ?? ''
+  attendeeNameField.value = attNameField ?? ''
+  attendeeEmailField.value = attEmailField ?? ''
 })
 
 async function save(): Promise<void> {
@@ -29,6 +81,9 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'openai_api_key', value: apiKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'anthropic_api_key', value: anthropicKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'calendar_slot_duration', value: calendarSlotDuration.value }),
+    window.api.invoke('settings:set', { key: 'attendee_entity_type_id', value: attendeeEntityTypeId.value }),
+    window.api.invoke('settings:set', { key: 'attendee_name_field', value: attendeeNameField.value }),
+    window.api.invoke('settings:set', { key: 'attendee_email_field', value: attendeeEmailField.value }),
   ])
   saving.value = false
   savedFeedback.value = true
@@ -115,6 +170,35 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                 {{ opt.label }}
               </button>
             </div>
+          </div>
+
+          <div class="field-group">
+            <label class="modal-label">Attendee Entity</label>
+            <p class="field-hint">
+              Link meeting attendees to entities. When configured, the meeting modal lets you search and pick existing entities instead of typing name and email manually.
+            </p>
+            <select v-model="attendeeEntityTypeId" class="modal-input modal-select">
+              <option value="">None (free-form name + email)</option>
+              <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
+            </select>
+            <template v-if="attendeeEntityTypeId">
+              <div class="attendee-field-row">
+                <div class="attendee-field-col">
+                  <label class="modal-label">Name Field</label>
+                  <select v-model="attendeeNameField" class="modal-input modal-select">
+                    <option value="">— select field —</option>
+                    <option v-for="f in nameFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                  </select>
+                </div>
+                <div class="attendee-field-col">
+                  <label class="modal-label">Email Field</label>
+                  <select v-model="attendeeEmailField" class="modal-input modal-select">
+                    <option value="">— select field —</option>
+                    <option v-for="f in emailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                  </select>
+                </div>
+              </div>
+            </template>
           </div>
         </section>
       </div>
@@ -264,6 +348,28 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 .settings-section + .settings-section {
   border-top: 1px solid var(--color-border);
   padding-top: 16px;
+}
+
+.modal-select {
+  width: 100%;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+.attendee-field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.attendee-field-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .slot-picker {
