@@ -5,6 +5,12 @@
 
 import { ref } from 'vue'
 
+export interface AttachedImage {
+  id: string
+  dataUrl: string
+  mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+}
+
 export interface ExecutedAction {
   type:
     | 'created_event'
@@ -27,6 +33,7 @@ export interface ExecutedAction {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  images?: { dataUrl: string }[]
   references?: { id: string; title: string }[]
   actions?: ExecutedAction[]
   error?: boolean

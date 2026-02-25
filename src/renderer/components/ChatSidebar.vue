@@ -2,7 +2,7 @@
 import { ref, nextTick, watch, onMounted } from 'vue'
 import { marked } from 'marked'
 import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus } from 'lucide-vue-next'
-import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction } from '../stores/chatStore'
+import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction, type AttachedImage } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
 
 const emit = defineEmits<{
@@ -14,6 +14,8 @@ const emit = defineEmits<{
 const inputText = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const attachedImages = ref<AttachedImage[]>([])
+const isDragOver = ref(false)
 
 // Configure marked: no GFM tables/extensions needed beyond basic, keep it safe
 marked.setOptions({ breaks: true })
@@ -43,16 +45,59 @@ function adjustTextareaHeight(): void {
   el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 }
 
+function processFile(file: File): void {
+  const mime = file.type as AttachedImage['mimeType']
+  if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(mime)) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    attachedImages.value.push({
+      id: crypto.randomUUID(),
+      dataUrl: reader.result as string,
+      mimeType: mime,
+    })
+  }
+  reader.readAsDataURL(file)
+}
+
+function onPaste(e: ClipboardEvent): void {
+  for (const item of e.clipboardData?.items ?? []) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      e.preventDefault()
+      const file = item.getAsFile()
+      if (file) processFile(file)
+    }
+  }
+}
+
+function onDrop(e: DragEvent): void {
+  isDragOver.value = false
+  for (const file of e.dataTransfer?.files ?? []) {
+    if (file.type.startsWith('image/')) processFile(file)
+  }
+}
+
+function removeImage(id: string): void {
+  const idx = attachedImages.value.findIndex((img) => img.id === id)
+  if (idx !== -1) attachedImages.value.splice(idx, 1)
+}
+
 async function send(): Promise<void> {
   const text = inputText.value.trim()
-  if (!text || isLoading.value) return
+  if ((!text && attachedImages.value.length === 0) || isLoading.value) return
 
   inputText.value = ''
   nextTick(() => {
     if (textareaRef.value) textareaRef.value.style.height = 'auto'
   })
 
-  const userMsg: ChatMessage = { role: 'user', content: text }
+  const imagesToSend = attachedImages.value.map(({ dataUrl, mimeType }) => ({ dataUrl, mimeType }))
+  attachedImages.value = []
+
+  const userMsg: ChatMessage = {
+    role: 'user',
+    content: text,
+    images: imagesToSend.length > 0 ? imagesToSend.map(({ dataUrl }) => ({ dataUrl })) : undefined,
+  }
   messages.value.push(userMsg)
 
   isLoading.value = true
@@ -64,6 +109,7 @@ async function send(): Promise<void> {
     const result = (await window.api.invoke('chat:send', {
       messages: apiMessages,
       searchQuery: text,
+      images: imagesToSend,
     })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }
 
     messages.value.push({
@@ -188,7 +234,13 @@ function renderMessage(content: string, references: { id: string; title: string 
 </script>
 
 <template>
-  <div class="chat-sidebar">
+  <div
+    class="chat-sidebar"
+    :class="{ 'chat-sidebar--drag-over': isDragOver }"
+    @dragover.prevent="isDragOver = true"
+    @dragleave="isDragOver = false"
+    @drop.prevent="onDrop"
+  >
     <!-- Header -->
     <div class="chat-header">
       <span class="chat-header-icon"><MessageSquare :size="14" /></span>
@@ -220,8 +272,19 @@ function renderMessage(content: string, references: { id: string; title: string 
         class="chat-message"
         :class="msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'"
       >
-        <!-- User bubble: plain text -->
-        <div v-if="msg.role === 'user'" class="chat-bubble chat-bubble-user">{{ msg.content }}</div>
+        <!-- User bubble: plain text + optional image thumbnails -->
+        <template v-if="msg.role === 'user'">
+          <div v-if="msg.images && msg.images.length > 0" class="chat-msg-images">
+            <img
+              v-for="(img, ii) in msg.images"
+              :key="ii"
+              :src="img.dataUrl"
+              class="chat-msg-img"
+              alt=""
+            />
+          </div>
+          <div v-if="msg.content" class="chat-bubble chat-bubble-user">{{ msg.content }}</div>
+        </template>
 
         <!-- Assistant bubble: Markdown + inline note chips via v-html + event delegation -->
         <div
@@ -265,6 +328,20 @@ function renderMessage(content: string, references: { id: string; title: string 
       <div ref="messagesEndRef" />
     </div>
 
+    <!-- Attachments bar -->
+    <div v-if="attachedImages.length > 0" class="chat-attachments-bar">
+      <div
+        v-for="img in attachedImages"
+        :key="img.id"
+        class="chat-attachment-thumb"
+      >
+        <img :src="img.dataUrl" class="chat-attachment-img" alt="" />
+        <button class="chat-attachment-remove" title="Remove" @click="removeImage(img.id)">
+          <X :size="10" />
+        </button>
+      </div>
+    </div>
+
     <!-- Input -->
     <div class="chat-input-area">
       <textarea
@@ -276,10 +353,11 @@ function renderMessage(content: string, references: { id: string; title: string 
         :disabled="isLoading"
         @keydown="onKeydown"
         @input="adjustTextareaHeight"
+        @paste="onPaste"
       />
       <button
         class="chat-send-btn"
-        :disabled="!inputText.trim() || isLoading"
+        :disabled="(!inputText.trim() && attachedImages.length === 0) || isLoading"
         title="Send (Enter)"
         @click="send"
       >
@@ -413,6 +491,23 @@ function renderMessage(content: string, references: { id: string; title: string 
   word-break: break-word;
 }
 
+.chat-msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  max-width: 92%;
+}
+
+.chat-msg-img {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  display: block;
+}
+
 .chat-bubble-user {
   background: var(--color-accent);
   color: #fff;
@@ -544,6 +639,68 @@ function renderMessage(content: string, references: { id: string; title: string 
 .chat-bubble-assistant :deep(.chat-note-ref-plain) {
   color: var(--color-text-muted);
   font-style: italic;
+}
+
+/* ── Drag-over state ── */
+
+.chat-sidebar--drag-over {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -4px;
+}
+
+/* ── Attachments bar ── */
+
+.chat-attachments-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+  overflow-x: auto;
+  background: var(--color-surface);
+}
+
+.chat-attachment-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  border-radius: 6px;
+  overflow: visible;
+}
+
+.chat-attachment-img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  display: block;
+  border: 1px solid var(--color-border);
+}
+
+.chat-attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(30, 30, 30, 0.85);
+  border: 1px solid var(--color-border);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  z-index: 1;
+  transition: background 0.1s;
+}
+
+.chat-attachment-remove:hover {
+  background: rgba(220, 80, 80, 0.9);
 }
 
 /* ── Input area ── */

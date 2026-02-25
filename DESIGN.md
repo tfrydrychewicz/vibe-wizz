@@ -711,6 +711,7 @@ interface NoteTranscription {
 - "What are all of Sarah's open action items?"
 - Answers include citations linking to source notes
 - Conversation context persists within a session
+- **Image attachments**: paste images from clipboard (`Cmd+V` in textarea) or drag-and-drop onto the sidebar; attached images appear as 64×64px thumbnails in a bar above the input with a ✕ remove button; on send the images are forwarded to Claude as vision content blocks (base64, Anthropic Vision API); sent images are shown as 100×100px thumbnails in the conversation history below the user's message bubble; supported formats: JPEG, PNG, GIF, WebP
 
 ### 8a. AI Actions — Agentic Command Execution
 
@@ -1027,6 +1028,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 ### Phase 4 — Proactive AI
 - [x] Make the AI also aware of the meetings and actions
 - [x] AI Actions — natural language calendar and action item CRUD via Claude tool use (§8a): extend `chat.ts` with `WIZZ_TOOLS` definitions + tool-call execution loop; extend `chat:send` response with `actions: ExecutedAction[]`; render action cards in `ChatSidebar.vue`
+- [x] Image attachments in AI chat — paste from clipboard or drag-and-drop onto sidebar; thumbnail bar above input; images forwarded as Anthropic Vision base64 content blocks on the last user message; thumbnails shown in conversation history
 - [ ] Daily Brief generation
 - [ ] Cluster summaries (L3) + nightly batch
 - [ ] Graph RAG (note_relations)

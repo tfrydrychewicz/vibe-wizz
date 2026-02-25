@@ -1107,7 +1107,15 @@ export function registerDbIpcHandlers(): void {
     'chat:send',
     async (
       _event,
-      { messages, searchQuery }: { messages: { role: 'user' | 'assistant'; content: string }[]; searchQuery?: string },
+      {
+        messages,
+        searchQuery,
+        images,
+      }: {
+        messages: { role: 'user' | 'assistant'; content: string }[]
+        searchQuery?: string
+        images?: { dataUrl: string; mimeType: string }[]
+      },
     ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }> => {
       const db = getDatabase()
 
@@ -1283,7 +1291,7 @@ export function registerDbIpcHandlers(): void {
       let content: string
       let executedActions: ExecutedAction[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images)
         content = result.content
         executedActions = result.actions
       } catch (err) {

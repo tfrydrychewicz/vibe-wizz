@@ -417,6 +417,7 @@ export async function sendChatMessage(
   contextNotes: { id: string; title: string; excerpt: string }[],
   calendarEvents: CalendarEventContext[] = [],
   actionItems: ActionItemContext[] = [],
+  images?: { dataUrl: string; mimeType: string }[],
 ): Promise<{ content: string; actions: ExecutedAction[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
@@ -465,10 +466,27 @@ export async function sendChatMessage(
 
   // Build a mutable message list for the tool loop.
   // The loop may append assistant tool-use blocks and user tool-result blocks.
-  const loopMessages: Anthropic.MessageParam[] = messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }))
+  // If images are provided, attach them to the last user message as vision content blocks.
+  const lastUserIndex = [...messages].map((m) => m.role).lastIndexOf('user')
+  const loopMessages: Anthropic.MessageParam[] = messages.map((m, i) => {
+    if (i === lastUserIndex && images && images.length > 0) {
+      return {
+        role: 'user' as const,
+        content: [
+          ...images.map((img) => ({
+            type: 'image' as const,
+            source: {
+              type: 'base64' as const,
+              media_type: img.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+              data: img.dataUrl.includes(',') ? img.dataUrl.split(',')[1] : img.dataUrl,
+            },
+          })),
+          { type: 'text' as const, text: m.content },
+        ],
+      }
+    }
+    return { role: m.role as 'user' | 'assistant', content: m.content }
+  })
 
   const actions: ExecutedAction[] = []
   let finalText = ''
