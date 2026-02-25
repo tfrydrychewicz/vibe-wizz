@@ -1030,6 +1030,31 @@ export function registerDbIpcHandlers(): void {
             const [embed] = await embedTexts([query])
             const queryBuf = Buffer.from(embed.embedding.buffer)
 
+            // L3 cluster boost — find top 3 matching clusters, collect all their member note IDs.
+            // Wrapped in try/catch: cluster_embeddings is empty until the first nightly batch runs.
+            const clusterBoostSet = new Set<string>()
+            try {
+              const clusterRows = db
+                .prepare(
+                  'SELECT rowid, distance FROM cluster_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT 3'
+                )
+                .all(queryBuf) as { rowid: number; distance: number }[]
+              for (const { rowid } of clusterRows) {
+                const chunk = db
+                  .prepare('SELECT chunk_context FROM note_chunks WHERE id = ? AND layer = 3')
+                  .get(rowid) as { chunk_context: string } | undefined
+                if (!chunk?.chunk_context) continue
+                try {
+                  const members = JSON.parse(chunk.chunk_context) as string[]
+                  for (const id of members) clusterBoostSet.add(id)
+                } catch {
+                  // malformed chunk_context — skip
+                }
+              }
+            } catch {
+              // cluster_embeddings empty or not ready — no-op
+            }
+
             // KNN: top 20 chunks by cosine similarity
             const knnRows = db
               .prepare('SELECT rowid, distance FROM chunk_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT 20')
@@ -1072,6 +1097,14 @@ export function registerDbIpcHandlers(): void {
                 candidates.set(hit.id, { id: hit.id, title: hit.title, excerpt: hit.excerpt, score: s })
               }
             })
+
+            // Apply cluster boost: notes in top-matching clusters get a small score bump.
+            // +0.05 is meaningful vs typical RRF scores (~0.015–0.033) but not overpowering.
+            if (clusterBoostSet.size > 0) {
+              for (const [noteId, c] of candidates) {
+                if (clusterBoostSet.has(noteId)) c.score += 0.05
+              }
+            }
 
             return [...candidates.values()]
               .sort((a, b) => b.score - a.score)

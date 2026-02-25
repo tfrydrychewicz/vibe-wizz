@@ -1030,7 +1030,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] AI Actions — natural language calendar and action item CRUD via Claude tool use (§8a): extend `chat.ts` with `WIZZ_TOOLS` definitions + tool-call execution loop; extend `chat:send` response with `actions: ExecutedAction[]`; render action cards in `ChatSidebar.vue`
 - [x] Image attachments in AI chat — paste from clipboard or drag-and-drop onto sidebar; thumbnail bar above input; images forwarded as Anthropic Vision base64 content blocks on the last user message; thumbnails shown in conversation history
 - [x] Daily Brief generation
-- [ ] Cluster summaries (L3) + nightly batch
+- [x] Cluster summaries (L3) + nightly batch — K-means++ on L2 summary embeddings (K=√(N/2), 2–20), Claude Haiku cluster theme summaries, stored in `note_chunks(layer=3)` + `cluster_embeddings`; `scheduler.ts` runs at startup if >23h since last run; semantic search upgraded with +0.05 cluster boost on top of FTS5+L1 RRF
 - [ ] Graph RAG (note_relations)
 - [ ] Follow-up intelligence
 - [ ] Proactive related notes sidebar
