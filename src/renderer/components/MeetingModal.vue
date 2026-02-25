@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
-import { X, Plus, Trash2, ExternalLink } from 'lucide-vue-next'
+import { X, Plus, Trash2, ExternalLink, FileText } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
 import type { OpenMode } from '../stores/tabStore'
 
@@ -59,6 +59,7 @@ const linkedNoteTitle = ref<string | null>(null)
 const confirmDelete = ref(false)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
+const creatingNote = ref(false)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -124,6 +125,8 @@ function populate(): void {
     linkedNoteTitle.value = null
   }
   confirmDelete.value = false
+  noteSearchQuery.value = ''
+  showNoteDropdown.value = false
 }
 
 onMounted(async () => {
@@ -311,6 +314,93 @@ function openLinkedNote(e: MouseEvent): void {
   const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
   emit('open-note', { noteId: linkedNoteId.value, title: linkedNoteTitle.value, mode })
 }
+
+// ── Note search (attach existing note) ────────────────────────────────────────
+
+const noteSearchQuery = ref('')
+const noteSearchResults = ref<Array<{ id: string; title: string }>>([])
+const showNoteDropdown = ref(false)
+const noteDropdownIdx = ref(0)
+const noteSearchInputEl = ref<HTMLInputElement | null>(null)
+const noteDropdownPos = ref({ top: 0, left: 0, width: 0 })
+
+function updateNoteDropdownPos(): void {
+  const el = noteSearchInputEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  noteDropdownPos.value = { top: rect.bottom + 4, left: rect.left, width: rect.width }
+}
+
+watch(noteSearchQuery, async (q) => {
+  if (!q.trim()) {
+    noteSearchResults.value = []
+    showNoteDropdown.value = false
+    return
+  }
+  noteSearchResults.value = (await window.api.invoke('notes:search', { query: q })) as Array<{ id: string; title: string }>
+  if (noteSearchResults.value.length > 0) {
+    updateNoteDropdownPos()
+    showNoteDropdown.value = true
+  } else {
+    showNoteDropdown.value = false
+  }
+  noteDropdownIdx.value = 0
+})
+
+async function selectNoteResult(result: { id: string; title: string }): Promise<void> {
+  linkedNoteId.value = result.id
+  linkedNoteTitle.value = result.title
+  noteSearchQuery.value = ''
+  showNoteDropdown.value = false
+  if (props.event) {
+    await window.api.invoke('calendar-events:update', { id: props.event.id, linked_note_id: result.id })
+    emit('saved', { ...props.event, linked_note_id: result.id, linked_note_title: result.title })
+  }
+}
+
+function closeNoteDropdownDelayed(): void {
+  window.setTimeout(() => { showNoteDropdown.value = false }, 150)
+}
+
+function onNoteSearchKeydown(e: KeyboardEvent): void {
+  if (!showNoteDropdown.value || !noteSearchResults.value.length) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    noteDropdownIdx.value = (noteDropdownIdx.value + 1) % noteSearchResults.value.length
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    noteDropdownIdx.value = (noteDropdownIdx.value - 1 + noteSearchResults.value.length) % noteSearchResults.value.length
+  } else if (e.key === 'Enter') {
+    e.preventDefault()
+    void selectNoteResult(noteSearchResults.value[noteDropdownIdx.value])
+  } else if (e.key === 'Escape') {
+    showNoteDropdown.value = false
+  }
+}
+
+// ── Create meeting note ────────────────────────────────────────────────────────
+
+async function createMeetingNote(e: MouseEvent): Promise<void> {
+  if (!props.event || creatingNote.value) return
+  creatingNote.value = true
+  try {
+    const template = (await window.api.invoke('settings:get', { key: 'meeting_note_title_template' }) as string | null) ?? '{date} - {title}'
+    const start = new Date(props.event.start_at)
+    const datePart = start.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    const noteTitle = template
+      .replace('{date}', datePart)
+      .replace('{title}', props.event.title)
+    const note = (await window.api.invoke('notes:create', { title: noteTitle })) as { id: string; title: string }
+    await window.api.invoke('calendar-events:update', { id: props.event.id, linked_note_id: note.id })
+    linkedNoteId.value = note.id
+    linkedNoteTitle.value = noteTitle
+    const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+    emit('open-note', { noteId: note.id, title: noteTitle, mode })
+    emit('saved', { ...props.event, linked_note_id: note.id, linked_note_title: noteTitle })
+  } finally {
+    creatingNote.value = false
+  }
+}
 </script>
 
 <template>
@@ -418,10 +508,10 @@ function openLinkedNote(e: MouseEvent): void {
           </template>
         </div>
 
-        <!-- Linked note -->
-        <div v-if="linkedNoteId && linkedNoteTitle" class="field">
-          <label class="field-label">Linked Note</label>
-          <div class="linked-note-row">
+        <!-- Meeting Notes -->
+        <div v-if="event" class="field">
+          <label class="field-label">Meeting Notes</label>
+          <div v-if="linkedNoteId && linkedNoteTitle" class="linked-note-row">
             <button class="linked-note-title" @click="openLinkedNote">
               <ExternalLink :size="11" />
               {{ linkedNoteTitle }}
@@ -430,6 +520,41 @@ function openLinkedNote(e: MouseEvent): void {
               <X :size="11" />
             </button>
           </div>
+          <template v-else>
+            <button class="btn-create-note" :disabled="creatingNote" @click="createMeetingNote">
+              <FileText :size="12" />
+              {{ creatingNote ? 'Creating…' : 'Create Meeting Notes' }}
+            </button>
+            <div class="note-attach-wrap">
+              <input
+                ref="noteSearchInputEl"
+                v-model="noteSearchQuery"
+                class="field-input note-attach-input"
+                placeholder="or attach existing note…"
+                autocomplete="off"
+                @keydown="onNoteSearchKeydown"
+                @blur="closeNoteDropdownDelayed"
+              />
+            </div>
+            <Teleport to="body">
+              <div
+                v-if="showNoteDropdown && noteSearchResults.length"
+                class="attendee-dropdown-portal"
+                :style="{ top: noteDropdownPos.top + 'px', left: noteDropdownPos.left + 'px', width: noteDropdownPos.width + 'px' }"
+              >
+                <button
+                  v-for="(r, i) in noteSearchResults"
+                  :key="r.id"
+                  class="attendee-dropdown-item"
+                  :class="{ active: i === noteDropdownIdx }"
+                  @mousedown.prevent="selectNoteResult(r)"
+                >
+                  <FileText :size="12" />
+                  {{ r.title }}
+                </button>
+              </div>
+            </Teleport>
+          </template>
         </div>
       </div>
 
@@ -705,6 +830,46 @@ function openLinkedNote(e: MouseEvent): void {
 }
 
 .btn-unlink {
+  color: var(--color-text-muted);
+}
+
+/* Create meeting note button */
+
+.btn-create-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-bg);
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 7px 12px;
+  cursor: pointer;
+  width: 100%;
+  justify-content: center;
+}
+
+.btn-create-note:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.btn-create-note:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.note-attach-wrap {
+  position: relative;
+  margin-top: 6px;
+}
+
+.note-attach-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
   color: var(--color-text-muted);
 }
 

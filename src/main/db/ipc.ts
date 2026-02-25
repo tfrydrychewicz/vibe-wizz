@@ -218,12 +218,14 @@ export function registerDbIpcHandlers(): void {
       .all()
   })
 
-  /** notes:delete — soft-deletes a note by setting archived_at. */
+  /** notes:delete — soft-deletes a note by setting archived_at, and unlinks it from any calendar events. */
   ipcMain.handle('notes:delete', (_event, { id }: { id: string }) => {
     const db = getDatabase()
     db.prepare(
       `UPDATE notes SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
     ).run(id)
+    // Unlink this note from any calendar event that references it as meeting notes
+    db.prepare(`UPDATE calendar_events SET linked_note_id = NULL WHERE linked_note_id = ?`).run(id)
     return { ok: true }
   })
 
@@ -1334,5 +1336,19 @@ export function registerDbIpcHandlers(): void {
     const db = getDatabase()
     db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id)
     return { ok: true }
+  })
+
+  /** calendar-events:get-by-note — returns the calendar event that has linked_note_id = note_id, or null. */
+  ipcMain.handle('calendar-events:get-by-note', (_event, { note_id }: { note_id: string }) => {
+    const db = getDatabase()
+    return (db
+      .prepare(
+        `SELECT ce.*, n.title AS linked_note_title
+         FROM calendar_events ce
+         LEFT JOIN notes n ON ce.linked_note_id = n.id
+         WHERE ce.linked_note_id = ?
+         LIMIT 1`,
+      )
+      .get(note_id) as (CalendarEventRow & { linked_note_title: string | null }) | null)
   })
 }

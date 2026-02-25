@@ -9,6 +9,7 @@ const showKey = ref(false)
 const anthropicKey = ref('')
 const showAnthropicKey = ref(false)
 const calendarSlotDuration = ref('30')
+const meetingNoteTitleTemplate = ref('{date} - {title}')
 const saving = ref(false)
 const savedFeedback = ref(false)
 
@@ -57,10 +58,11 @@ watch(attendeeEntityTypeId, () => {
 })
 
 onMounted(async () => {
-  const [openai, anthropic, slotDuration, attTypeId, attNameField, attEmailField, etList] = await Promise.all([
+  const [openai, anthropic, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'calendar_slot_duration' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'meeting_note_title_template' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_name_field' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
@@ -69,6 +71,7 @@ onMounted(async () => {
   apiKey.value = openai ?? ''
   anthropicKey.value = anthropic ?? ''
   calendarSlotDuration.value = slotDuration ?? '30'
+  meetingNoteTitleTemplate.value = noteTitleTemplate ?? '{date} - {title}'
   entityTypes.value = etList ?? []
   attendeeEntityTypeId.value = attTypeId ?? ''
   // Wait for the watcher to fire (it resets name/email fields), then restore saved values
@@ -83,6 +86,7 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'openai_api_key', value: apiKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'anthropic_api_key', value: anthropicKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'calendar_slot_duration', value: calendarSlotDuration.value }),
+    window.api.invoke('settings:set', { key: 'meeting_note_title_template', value: meetingNoteTitleTemplate.value }),
     window.api.invoke('settings:set', { key: 'attendee_entity_type_id', value: attendeeEntityTypeId.value }),
     window.api.invoke('settings:set', { key: 'attendee_name_field', value: attendeeNameField.value }),
     window.api.invoke('settings:set', { key: 'attendee_email_field', value: attendeeEmailField.value }),
@@ -172,6 +176,14 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                 {{ opt.label }}
               </button>
             </div>
+          </div>
+
+          <div class="field-group">
+            <label class="modal-label">Meeting Note Title Template</label>
+            <p class="field-hint">
+              Title used when creating a new meeting note. Available placeholders: <code>{date}</code>, <code>{title}</code>.
+            </p>
+            <input v-model="meetingNoteTitleTemplate" class="modal-input" placeholder="{date} - {title}" />
           </div>
 
           <div class="field-group">

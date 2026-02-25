@@ -95,6 +95,36 @@ const TEXT_COLORS = [
 const title = ref('Untitled')
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
 
+// ── Meeting context (when this note is a meeting note) ─────────────────────────
+
+type LinkedCalendarEvent = {
+  id: number
+  title: string
+  start_at: string
+  end_at: string
+  attendees: string // JSON string
+}
+
+const linkedCalendarEvent = ref<LinkedCalendarEvent | null>(null)
+
+const parsedAttendees = computed(() => {
+  if (!linkedCalendarEvent.value?.attendees) return []
+  try {
+    return JSON.parse(linkedCalendarEvent.value.attendees) as Array<{ name: string; email: string }>
+  } catch {
+    return []
+  }
+})
+
+function formatMeetingTime(ev: LinkedCalendarEvent): string {
+  const start = new Date(ev.start_at)
+  const end = new Date(ev.end_at)
+  const date = start.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const startTime = start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  const endTime = end.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  return `${date} · ${startTime} – ${endTime}`
+}
+
 // Loading state while /action slash command calls Claude to extract actions
 const isExtractingActions = ref(false)
 
@@ -497,7 +527,11 @@ async function loadNote(noteId: string): Promise<void> {
   isLoading = true
   saveStatus.value = 'saved'
   try {
-    const note = (await window.api.invoke('notes:get', { id: noteId })) as NoteRow | null
+    const [note, calEvent] = await Promise.all([
+      window.api.invoke('notes:get', { id: noteId }) as Promise<NoteRow | null>,
+      window.api.invoke('calendar-events:get-by-note', { note_id: noteId }) as Promise<LinkedCalendarEvent | null>,
+    ])
+    linkedCalendarEvent.value = calEvent
     if (!note || !editor.value) return
     title.value = note.title
     setCurrentNoteId(noteId)
@@ -1012,6 +1046,21 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
+    </div>
+
+    <!-- Meeting context header (shown when this note is linked to a calendar event) -->
+    <div v-if="linkedCalendarEvent" class="meeting-context-header">
+      <div class="meeting-context-title">{{ linkedCalendarEvent.title }}</div>
+      <div class="meeting-context-meta">
+        <span class="meeting-context-time">{{ formatMeetingTime(linkedCalendarEvent) }}</span>
+        <div v-if="parsedAttendees.length" class="meeting-context-attendees">
+          <span
+            v-for="a in parsedAttendees"
+            :key="a.name || a.email"
+            class="meeting-context-chip"
+          >{{ a.name || a.email }}</span>
+        </div>
+      </div>
     </div>
 
     <div class="note-body">

@@ -613,6 +613,48 @@ body {
   color: #f0a050;
 }
 
+/* ── Meeting context header ── */
+.meeting-context-header {
+  padding: 10px 48px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: rgba(91, 141, 239, 0.04);
+  flex-shrink: 0;
+}
+
+.meeting-context-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+
+.meeting-context-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.meeting-context-time {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.meeting-context-attendees {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.meeting-context-chip {
+  font-size: 11px;
+  background: rgba(91, 141, 239, 0.1);
+  border: 1px solid rgba(91, 141, 239, 0.22);
+  border-radius: 12px;
+  padding: 1px 8px;
+  color: var(--color-text-muted);
+}
+
 .note-body {
   flex: 1;
   overflow-y: auto;
