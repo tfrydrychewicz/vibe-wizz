@@ -11,6 +11,14 @@ export interface AttachedImage {
   mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
 }
 
+export interface AttachedFile {
+  id: string
+  name: string
+  content: string                              // plain text, or base64 (no data: prefix) for PDFs
+  mimeType: 'application/pdf' | 'text/plain'  // normalised for Anthropic API
+  size: number
+}
+
 export interface ExecutedAction {
   type:
     | 'created_event'
@@ -35,6 +43,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   images?: { dataUrl: string }[]
+  files?: { name: string }[]
   references?: { id: string; title: string }[]
   actions?: ExecutedAction[]
   error?: boolean

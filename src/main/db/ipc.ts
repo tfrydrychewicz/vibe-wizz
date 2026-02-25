@@ -1111,11 +1111,13 @@ export function registerDbIpcHandlers(): void {
         messages,
         searchQuery,
         images,
+        files,
         model,
       }: {
         messages: { role: 'user' | 'assistant'; content: string }[]
         searchQuery?: string
         images?: { dataUrl: string; mimeType: string }[]
+        files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
         model?: string
       },
     ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }> => {
@@ -1293,7 +1295,7 @@ export function registerDbIpcHandlers(): void {
       let content: string
       let executedActions: ExecutedAction[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, model as ChatModelId | undefined)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, model as ChatModelId | undefined, files)
         content = result.content
         executedActions = result.actions
       } catch (err) {

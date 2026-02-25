@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted } from 'vue'
 import { marked } from 'marked'
-import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus } from 'lucide-vue-next'
-import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction, type AttachedImage } from '../stores/chatStore'
+import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText } from 'lucide-vue-next'
+import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction, type AttachedImage, type AttachedFile } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
 
 const emit = defineEmits<{
@@ -21,9 +21,14 @@ type ModelId = typeof MODELS[number]['id']
 const inputText = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 const attachedImages = ref<AttachedImage[]>([])
+const attachedFiles = ref<AttachedFile[]>([])
 const isDragOver = ref(false)
 const selectedModel = ref<ModelId>('claude-sonnet-4-6')
+
+const SUPPORTED_FILE_TYPES = '.pdf,.txt,.csv,.md'
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
 // Configure marked: no GFM tables/extensions needed beyond basic, keep it safe
 marked.setOptions({ breaks: true })
@@ -67,6 +72,48 @@ function processFile(file: File): void {
   reader.readAsDataURL(file)
 }
 
+function processDocumentFile(file: File): void {
+  if (file.size > MAX_FILE_SIZE) return  // silently ignore oversized files
+  const isPdf = file.type === 'application/pdf'
+  const isText = file.type.startsWith('text/') || file.name.endsWith('.md') || file.name.endsWith('.csv')
+  if (!isPdf && !isText) return
+
+  const reader = new FileReader()
+  reader.onload = () => {
+    let content: string
+    const apiMime: AttachedFile['mimeType'] = isPdf ? 'application/pdf' : 'text/plain'
+    if (isPdf) {
+      // FileReader.readAsDataURL gives "data:application/pdf;base64,<data>" — strip the prefix
+      const dataUrl = reader.result as string
+      content = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
+    } else {
+      content = reader.result as string
+    }
+    attachedFiles.value.push({ id: crypto.randomUUID(), name: file.name, content, mimeType: apiMime, size: file.size })
+  }
+  if (isPdf) reader.readAsDataURL(file)
+  else reader.readAsText(file)
+}
+
+function onFileInputChange(e: Event): void {
+  for (const file of (e.target as HTMLInputElement).files ?? []) {
+    processDocumentFile(file)
+  }
+  // Reset so the same file can be re-attached after removal
+  if (fileInputRef.value) fileInputRef.value.value = ''
+}
+
+function removeFile(id: string): void {
+  const idx = attachedFiles.value.findIndex((f) => f.id === id)
+  if (idx !== -1) attachedFiles.value.splice(idx, 1)
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function onPaste(e: ClipboardEvent): void {
   for (const item of e.clipboardData?.items ?? []) {
     if (item.kind === 'file' && item.type.startsWith('image/')) {
@@ -81,6 +128,7 @@ function onDrop(e: DragEvent): void {
   isDragOver.value = false
   for (const file of e.dataTransfer?.files ?? []) {
     if (file.type.startsWith('image/')) processFile(file)
+    else processDocumentFile(file)
   }
 }
 
@@ -91,7 +139,7 @@ function removeImage(id: string): void {
 
 async function send(): Promise<void> {
   const text = inputText.value.trim()
-  if ((!text && attachedImages.value.length === 0) || isLoading.value) return
+  if ((!text && attachedImages.value.length === 0 && attachedFiles.value.length === 0) || isLoading.value) return
 
   inputText.value = ''
   nextTick(() => {
@@ -101,10 +149,15 @@ async function send(): Promise<void> {
   const imagesToSend = attachedImages.value.map(({ dataUrl, mimeType }) => ({ dataUrl, mimeType }))
   attachedImages.value = []
 
+  const filesToSend = attachedFiles.value.map(({ name, content, mimeType }) => ({ name, content, mimeType }))
+  const fileNamesForDisplay = attachedFiles.value.map(({ name }) => ({ name }))
+  attachedFiles.value = []
+
   const userMsg: ChatMessage = {
     role: 'user',
     content: text,
     images: imagesToSend.length > 0 ? imagesToSend.map(({ dataUrl }) => ({ dataUrl })) : undefined,
+    files: fileNamesForDisplay.length > 0 ? fileNamesForDisplay : undefined,
   }
   messages.value.push(userMsg)
 
@@ -118,6 +171,7 @@ async function send(): Promise<void> {
       messages: apiMessages,
       searchQuery: text,
       images: imagesToSend,
+      files: filesToSend.length > 0 ? filesToSend : undefined,
       model: selectedModel.value,
     })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }
 
@@ -295,7 +349,7 @@ function renderMessage(content: string, references: { id: string; title: string 
         class="chat-message"
         :class="msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'"
       >
-        <!-- User bubble: plain text + optional image thumbnails -->
+        <!-- User bubble: plain text + optional image thumbnails + file chips -->
         <template v-if="msg.role === 'user'">
           <div v-if="msg.images && msg.images.length > 0" class="chat-msg-images">
             <img
@@ -305,6 +359,11 @@ function renderMessage(content: string, references: { id: string; title: string 
               class="chat-msg-img"
               alt=""
             />
+          </div>
+          <div v-if="msg.files && msg.files.length > 0" class="chat-msg-files">
+            <span v-for="(f, fi) in msg.files" :key="fi" class="chat-msg-file-chip">
+              <FileText :size="11" />{{ f.name }}
+            </span>
           </div>
           <div v-if="msg.content" class="chat-bubble chat-bubble-user">{{ msg.content }}</div>
         </template>
@@ -351,8 +410,8 @@ function renderMessage(content: string, references: { id: string; title: string 
       <div ref="messagesEndRef" />
     </div>
 
-    <!-- Attachments bar -->
-    <div v-if="attachedImages.length > 0" class="chat-attachments-bar">
+    <!-- Attachments bar (images + files) -->
+    <div v-if="attachedImages.length > 0 || attachedFiles.length > 0" class="chat-attachments-bar">
       <div
         v-for="img in attachedImages"
         :key="img.id"
@@ -363,10 +422,42 @@ function renderMessage(content: string, references: { id: string; title: string 
           <X :size="10" />
         </button>
       </div>
+      <div
+        v-for="f in attachedFiles"
+        :key="f.id"
+        class="chat-attachment-file"
+      >
+        <FileText :size="14" class="chat-attachment-file-icon" />
+        <div class="chat-attachment-file-info">
+          <span class="chat-attachment-file-name">{{ f.name }}</span>
+          <span class="chat-attachment-file-size">{{ formatFileSize(f.size) }}</span>
+        </div>
+        <button class="chat-attachment-remove chat-attachment-remove--file" title="Remove" @click="removeFile(f.id)">
+          <X :size="10" />
+        </button>
+      </div>
     </div>
+
+    <!-- Hidden file input -->
+    <input
+      ref="fileInputRef"
+      type="file"
+      :accept="SUPPORTED_FILE_TYPES"
+      multiple
+      style="display: none"
+      @change="onFileInputChange"
+    />
 
     <!-- Input -->
     <div class="chat-input-area">
+      <button
+        class="chat-attach-btn"
+        :disabled="isLoading"
+        title="Attach file (PDF, TXT, CSV, MD)"
+        @click="fileInputRef?.click()"
+      >
+        <Paperclip :size="14" />
+      </button>
       <textarea
         ref="textareaRef"
         v-model="inputText"
@@ -380,7 +471,7 @@ function renderMessage(content: string, references: { id: string; title: string 
       />
       <button
         class="chat-send-btn"
-        :disabled="(!inputText.trim() && attachedImages.length === 0) || isLoading"
+        :disabled="(!inputText.trim() && attachedImages.length === 0 && attachedFiles.length === 0) || isLoading"
         title="Send (Enter)"
         @click="send"
       >
@@ -882,5 +973,111 @@ function renderMessage(content: string, references: { id: string; title: string 
 
 .action-card-link:hover {
   color: var(--color-text);
+}
+
+/* ── File chips in sent messages ── */
+
+.chat-msg-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+  max-width: 92%;
+}
+
+.chat-msg-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── File attachment chips in bar ── */
+
+.chat-attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  position: relative;
+  flex-shrink: 0;
+  max-width: 180px;
+}
+
+.chat-attachment-file-icon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.chat-attachment-file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chat-attachment-file-name {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.chat-attachment-file-size {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+}
+
+.chat-attachment-remove--file {
+  position: static;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  top: unset;
+  right: unset;
+}
+
+/* ── Attach button ── */
+
+.chat-attach-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 34px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: 6px;
+  transition: color 0.1s, background 0.1s;
+}
+
+.chat-attach-btn:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-hover);
+}
+
+.chat-attach-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 </style>

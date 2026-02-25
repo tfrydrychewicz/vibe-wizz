@@ -456,6 +456,12 @@ export async function extractSearchKeywords(
  * Returns { content, actions } where actions is the list of DB mutations performed.
  * Throws on API error — caller should handle gracefully.
  */
+export type AttachedFilePayload = {
+  name: string
+  content: string                             // plain text, or base64 (no data: prefix) for PDFs
+  mimeType: 'application/pdf' | 'text/plain'
+}
+
 export async function sendChatMessage(
   messages: { role: 'user' | 'assistant'; content: string }[],
   contextNotes: { id: string; title: string; excerpt: string }[],
@@ -463,6 +469,7 @@ export async function sendChatMessage(
   actionItems: ActionItemContext[] = [],
   images?: { dataUrl: string; mimeType: string }[],
   model: ChatModelId = DEFAULT_CHAT_MODEL,
+  files?: AttachedFilePayload[],
 ): Promise<{ content: string; actions: ExecutedAction[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
@@ -512,22 +519,30 @@ export async function sendChatMessage(
 
   // Build a mutable message list for the tool loop.
   // The loop may append assistant tool-use blocks and user tool-result blocks.
-  // If images are provided, attach them to the last user message as vision content blocks.
+  // If images or files are provided, attach them to the last user message as content blocks.
   const lastUserIndex = [...messages].map((m) => m.role).lastIndexOf('user')
   const loopMessages: Anthropic.MessageParam[] = messages.map((m, i) => {
-    if (i === lastUserIndex && images && images.length > 0) {
+    const hasImages = images && images.length > 0
+    const hasFiles = files && files.length > 0
+    if (i === lastUserIndex && (hasImages || hasFiles)) {
       return {
         role: 'user' as const,
         content: [
-          ...images.map((img) => ({
+          ...(hasImages ? images.map((img) => ({
             type: 'image' as const,
             source: {
               type: 'base64' as const,
               media_type: img.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
               data: img.dataUrl.includes(',') ? img.dataUrl.split(',')[1] : img.dataUrl,
             },
-          })),
-          { type: 'text' as const, text: m.content },
+          })) : []),
+          ...(hasFiles ? files.map((f) => ({
+            type: 'document' as const,
+            source: f.mimeType === 'application/pdf'
+              ? { type: 'base64' as const, media_type: 'application/pdf' as const, data: f.content }
+              : { type: 'text' as const, media_type: 'text/plain' as const, data: f.content },
+          })) : []),
+          { type: 'text' as const, text: m.content || '(see attached file)' },
         ],
       }
     }
