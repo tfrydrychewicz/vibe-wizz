@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted } from 'vue'
 import { marked } from 'marked'
-import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus } from 'lucide-vue-next'
+import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus } from 'lucide-vue-next'
 import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction, type AttachedImage } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
 
@@ -157,7 +157,7 @@ interface ActionCardMeta {
   icon: string
   label: string
   variant: 'green' | 'blue' | 'red'
-  linkView: 'calendar' | 'actions'
+  linkView?: 'calendar' | 'actions'
   linkLabel: string
 }
 
@@ -169,6 +169,17 @@ function actionCardMeta(type: ExecutedAction['type']): ActionCardMeta {
     case 'created_action': return { icon: 'ListPlus',      label: 'Created action item',    variant: 'green', linkView: 'actions',  linkLabel: 'Open Actions'  }
     case 'updated_action': return { icon: 'CheckSquare',   label: 'Updated action item',    variant: 'blue',  linkView: 'actions',  linkLabel: 'Open Actions'  }
     case 'deleted_action': return { icon: 'SquareMinus',   label: 'Deleted action item',    variant: 'red',   linkView: 'actions',  linkLabel: 'Open Actions'  }
+    case 'created_note':   return { icon: 'FilePlus',      label: 'Created note',           variant: 'green',                       linkLabel: 'Open Note'     }
+  }
+}
+
+function onActionCardLink(e: MouseEvent, action: ExecutedAction): void {
+  if (action.type === 'created_note') {
+    const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+    emit('open-note', { noteId: String(action.payload.id), title: action.payload.title ?? 'Untitled', mode })
+  } else {
+    const meta = actionCardMeta(action.type)
+    if (meta.linkView) emit('open-view', meta.linkView)
   }
 }
 
@@ -322,7 +333,7 @@ function renderMessage(content: string, references: { id: string; title: string 
             <button
               v-if="actionCardMeta(action.type).variant !== 'red'"
               class="action-card-link"
-              @click="emit('open-view', actionCardMeta(action.type).linkView)"
+              @click="onActionCardLink($event, action)"
             >
               {{ actionCardMeta(action.type).linkLabel }} →
             </button>

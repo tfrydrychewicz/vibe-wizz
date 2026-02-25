@@ -19,6 +19,7 @@ export interface ExecutedAction {
     | 'created_action'
     | 'updated_action'
     | 'deleted_action'
+    | 'created_note'
   payload: {
     id: number | string
     title?: string

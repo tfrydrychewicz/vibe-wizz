@@ -8,6 +8,8 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import { getDatabase } from '../db/index'
+import { parseMarkdownToTipTap } from '../transcription/postProcessor'
+import { scheduleEmbedding } from './pipeline'
 
 let _client: Anthropic | null = null
 let _currentKey = ''
@@ -56,6 +58,7 @@ export type ExecutedAction = {
     | 'created_action'
     | 'updated_action'
     | 'deleted_action'
+    | 'created_note'
   payload: {
     id: number | string
     title?: string
@@ -175,6 +178,25 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
         id: { type: 'string', description: 'Action item ID (UUID)' },
       },
       required: ['id'],
+    },
+  },
+  {
+    name: 'create_note',
+    description:
+      'Create a new note in the knowledge base. Use this when the user asks to create, write, draft, or generate a note, document, summary, or any piece of structured content. ' +
+      'Format the content as Markdown: ## for headings, - for bullets, - [ ] for task checkboxes, **bold**, *italic*, `code`. ' +
+      'The note will be rendered with full rich-text formatting in the editor.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Note title — short and descriptive' },
+        content: {
+          type: 'string',
+          description:
+            'Note body in Markdown. Use ## for section headings, - for bullet lists, - [ ] for actionable tasks, **bold** for emphasis.',
+        },
+      },
+      required: ['title', 'content'],
     },
   },
 ]
@@ -309,6 +331,20 @@ function executeTool(toolName: string, input: Record<string, unknown>): Executed
       return { type: 'deleted_action', payload: row }
     }
 
+    case 'create_note': {
+      const inp = input as { title: string; content: string }
+      const id = randomUUID()
+      const contentNodes = parseMarkdownToTipTap(inp.content)
+      const doc = { type: 'doc', content: contentNodes }
+      const now = new Date().toISOString()
+      db.prepare(
+        `INSERT INTO notes (id, title, body, body_plain, updated_at) VALUES (?, ?, ?, ?, ?)`,
+      ).run(id, inp.title, JSON.stringify(doc), inp.content, now)
+      // Fire-and-forget: trigger NER + action extraction + embeddings
+      scheduleEmbedding(id)
+      return { type: 'created_note', payload: { id, title: inp.title } }
+    }
+
     default:
       throw new Error(`Unknown tool: ${toolName}`)
   }
@@ -436,10 +472,11 @@ export async function sendChatMessage(
     'and think through problems using their accumulated context.\n\n' +
     'Always reply in the same language the user writes in.\n\n' +
     'Be concise and actionable. When you don\'t have relevant context, say so rather than guessing.\n\n' +
-    'You have tools available to create, update, and delete calendar events and action items. ' +
-    'Use them when the user asks you to make a change (schedule, add, create, mark, update, move, cancel, delete, etc.). ' +
+    'You have tools available to create, update, and delete calendar events and action items, and to create notes. ' +
+    'Use them when the user asks you to make a change (schedule, add, create, write, draft, generate, mark, update, move, cancel, delete, etc.). ' +
     'For creates and updates: execute immediately without asking. ' +
-    'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool.'
+    'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool. ' +
+    'When creating a note, generate rich, well-structured Markdown content — use headings, bullet lists, and task checkboxes as appropriate.'
 
   if (contextNotes.length > 0) {
     let contextStr = contextNotes
@@ -503,7 +540,7 @@ export async function sendChatMessage(
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const response = await _client.messages.create({
       model,
-      max_tokens: 1500,
+      max_tokens: 4000,
       system: systemPrompt,
       tools: WIZZ_TOOLS,
       messages: loopMessages,

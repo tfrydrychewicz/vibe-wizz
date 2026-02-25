@@ -67,7 +67,7 @@ function buildParagraphNodes(text: string): TipTapNode[] {
  * Parse Claude's markdown output into TipTap nodes.
  * Handles ## headings, - [ ] task lists, - bullet lists, and plain paragraphs.
  */
-function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
+export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
   const nodes: TipTapNode[] = []
   const lines = markdown.split('\n')
   let i = 0
