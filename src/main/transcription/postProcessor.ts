@@ -65,7 +65,7 @@ function buildParagraphNodes(text: string): TipTapNode[] {
 
 /**
  * Parse Claude's markdown output into TipTap nodes.
- * Handles ## headings, - bullet lists, and plain paragraphs.
+ * Handles ## headings, - [ ] task lists, - bullet lists, and plain paragraphs.
  */
 function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
   const nodes: TipTapNode[] = []
@@ -85,6 +85,30 @@ function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
     if (headingMatch) {
       nodes.push(heading(headingMatch[1].length, headingMatch[2]))
       i++
+      continue
+    }
+
+    // Task list — collect consecutive - [ ] / - [x] items into a taskList node
+    if (line.match(/^- \[[ xX]\] /)) {
+      const taskItems: TipTapNode[] = []
+      while (i < lines.length) {
+        const tl = lines[i].trim()
+        const taskMatch = tl.match(/^- \[([ xX])\] (.+)$/)
+        if (taskMatch) {
+          taskItems.push({
+            type: 'taskItem',
+            attrs: { checked: taskMatch[1].toLowerCase() === 'x' },
+            content: [{ type: 'paragraph', content: [textNode(taskMatch[2])] }],
+          })
+          i++
+        } else if (!tl) {
+          i++
+          break
+        } else {
+          break
+        }
+      }
+      if (taskItems.length > 0) nodes.push({ type: 'taskList', content: taskItems })
       continue
     }
 
@@ -153,7 +177,8 @@ Rules:
 - Preserve all information from the manual notes (user's intent takes priority)
 - Add key context, decisions, and follow-ups from the transcript not already in the notes
 - Use the same language as the transcript and notes
-- Use markdown: ## for section headings, - for bullet points
+- Use markdown: ## for section headings, - for regular bullets, - [ ] for action items and tasks
+- In the "Action Items / Follow-ups" section use - [ ] checkbox syntax for every task so they render as interactive checkboxes in the editor
 - Include sections only where there is relevant content: Meeting Summary, Key Decisions, Action Items / Follow-ups
 
 Manual notes:
@@ -165,7 +190,7 @@ ${truncatedTranscript}
 Write only the note content, no preamble or meta-commentary.`
     : `You are summarizing a meeting transcript. Produce a concise, well-structured note using the same language as the transcript.
 
-Use markdown (## headings, - bullets). Include sections only where relevant: Meeting Summary, Key Decisions, Action Items / Follow-ups.
+Use markdown: ## headings, - for regular bullets, - [ ] for action items and tasks. In the "Action Items / Follow-ups" section use - [ ] checkbox syntax for every task so they render as interactive checkboxes in the editor. Include sections only where relevant: Meeting Summary, Key Decisions, Action Items / Follow-ups.
 
 Transcript:
 ${truncatedTranscript}
