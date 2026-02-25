@@ -235,6 +235,9 @@ CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity   ON entity_mentions(entit
 
 CREATE INDEX IF NOT EXISTS idx_note_chunks_note         ON note_chunks(note_id);
 
+CREATE INDEX IF NOT EXISTS idx_note_relations_source    ON note_relations(source_note_id);
+CREATE INDEX IF NOT EXISTS idx_note_relations_target    ON note_relations(target_note_id);
+
 CREATE INDEX IF NOT EXISTS idx_action_items_status      ON action_items(status);
 CREATE INDEX IF NOT EXISTS idx_action_items_source_note ON action_items(source_note_id);
 CREATE INDEX IF NOT EXISTS idx_action_items_assigned    ON action_items(assigned_entity_id);

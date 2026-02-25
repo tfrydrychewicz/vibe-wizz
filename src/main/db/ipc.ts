@@ -1186,13 +1186,12 @@ export function registerDbIpcHandlers(): void {
       // Step 3: LIKE substring fallback for any keywords not yet covered — handles
       //         inflected forms and non-ASCII characters that FTS5 may tokenize differently.
       const contextNotes: { id: string; title: string; excerpt: string }[] = []
+      const seen = new Set<string>()
       if (query.trim()) {
         // Pass prior messages so Haiku can resolve follow-ups ("a kiedy to bylo?" → "Bifrost")
         const keywords = await extractSearchKeywords(query, messages.slice(0, -1))
 
         if (keywords.length > 0) {
-          const seen = new Set<string>()
-
           function addNote(row: { id: string; title: string; body_plain: string }): void {
             if (seen.has(row.id) || contextNotes.length >= 5) return
             seen.add(row.id)
@@ -1248,6 +1247,73 @@ export function registerDbIpcHandlers(): void {
           }
         }
       }
+
+      // ── Graph RAG expansion ─────────────────────────────────────────────
+      // Expand context by 1 hop in the knowledge graph using two queries:
+      //  A) Direct [[wiki-link]] neighbors (bidirectional) via note_relations
+      //  B) Entity co-occurrence neighbors (same @mentions) via entity_mentions
+      // Both rank by overlap count (how many seeds share the connection).
+      // Budget: up to 5 per query. Global dedup via the hoisted `seen` Set.
+      if (contextNotes.length > 0) {
+        try {
+          const seedIds = contextNotes.map((n) => n.id)
+          const sp = seedIds.map(() => '?').join(',')
+
+          function addGraphNote(row: { id: string; title: string; body_plain: string }): boolean {
+            if (seen.has(row.id)) return false
+            seen.add(row.id)
+            contextNotes.push({
+              id: row.id,
+              title: row.title,
+              excerpt: row.body_plain.length > 600 ? row.body_plain.slice(0, 600) + '…' : row.body_plain,
+            })
+            return true
+          }
+
+          // Query A: bidirectional 1-hop link neighbors
+          const directRows = db
+            .prepare(
+              `SELECT n.id, n.title, n.body_plain, COUNT(*) AS overlap
+               FROM (
+                 SELECT target_note_id AS neighbor_id FROM note_relations WHERE source_note_id IN (${sp})
+                 UNION ALL
+                 SELECT source_note_id AS neighbor_id FROM note_relations WHERE target_note_id IN (${sp})
+               ) edges
+               JOIN notes n ON n.id = edges.neighbor_id
+               WHERE n.archived_at IS NULL
+               GROUP BY n.id ORDER BY overlap DESC LIMIT 5`,
+            )
+            .all(...seedIds, ...seedIds) as { id: string; title: string; body_plain: string; overlap: number }[]
+
+          let da = 0
+          for (const row of directRows) {
+            if (da >= 5) break
+            if (addGraphNote(row)) da++
+          }
+
+          // Query B: entity co-occurrence neighbors
+          const cooccRows = db
+            .prepare(
+              `SELECT n.id, n.title, n.body_plain, COUNT(DISTINCT em2.entity_id) AS overlap
+               FROM entity_mentions em1
+               JOIN entity_mentions em2 ON em2.entity_id = em1.entity_id
+                 AND em2.note_id NOT IN (${sp})
+               JOIN notes n ON n.id = em2.note_id
+               WHERE em1.note_id IN (${sp}) AND n.archived_at IS NULL
+               GROUP BY n.id ORDER BY overlap DESC LIMIT 5`,
+            )
+            .all(...seedIds, ...seedIds) as { id: string; title: string; body_plain: string; overlap: number }[]
+
+          let co = 0
+          for (const row of cooccRows) {
+            if (co >= 5) break
+            if (addGraphNote(row)) co++
+          }
+        } catch (err) {
+          console.warn('[Chat] Graph RAG expansion error:', err)
+        }
+      }
+      // ── End Graph RAG expansion ──────────────────────────────────────────
 
       // Fetch calendar events (past 7 days → next 30 days) for temporal awareness
       const calendarEvents: CalendarEventContext[] = (() => {

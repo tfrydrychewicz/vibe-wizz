@@ -495,7 +495,8 @@ export async function sendChatMessage(
     }
 
     systemPrompt +=
-      '\n\nHere are relevant notes from the user\'s knowledge base:\n\n' +
+      '\n\nHere are relevant notes from the user\'s knowledge base, ' +
+      'including related notes retrieved via knowledge graph connections (wiki-links and shared entity mentions):\n\n' +
       contextStr +
       '\n\nWhen referencing information from a specific note, cite it as [Note: "Title"]. ' +
       'Use the exact note title as it appears above.'
