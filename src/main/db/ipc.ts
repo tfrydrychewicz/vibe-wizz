@@ -1353,4 +1353,15 @@ export function registerDbIpcHandlers(): void {
       )
       .get(note_id) as (CalendarEventRow & { linked_note_title: string | null }) | null)
   })
+
+  /** transcriptions:list — all transcription sessions for a note, newest first. */
+  ipcMain.handle('transcriptions:list', (_event, { noteId }: { noteId: string }) => {
+    const db = getDatabase()
+    return db
+      .prepare(
+        `SELECT id, note_id, started_at, ended_at, raw_transcript, summary
+         FROM note_transcriptions WHERE note_id = ? ORDER BY started_at DESC`,
+      )
+      .all(noteId)
+  })
 }

@@ -164,6 +164,19 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 );
 
 -- ─────────────────────────────────────────────
+-- Transcription sessions (one row per start/stop cycle)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS note_transcriptions (
+  id              TEXT PRIMARY KEY,
+  note_id         TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  started_at      TEXT NOT NULL,
+  ended_at        TEXT,
+  raw_transcript  TEXT NOT NULL DEFAULT '',
+  summary         TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_note_transcriptions_note ON note_transcriptions(note_id);
+
+-- ─────────────────────────────────────────────
 -- Daily briefs
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS daily_briefs (

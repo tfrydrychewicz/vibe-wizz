@@ -8,6 +8,7 @@
  * 4. Push transcription:complete to the renderer so the editor reloads
  */
 
+import { randomUUID } from 'crypto'
 import Anthropic from '@anthropic-ai/sdk'
 import { getDatabase } from '../db/index'
 import { scheduleEmbedding } from '../embedding/pipeline'
@@ -161,6 +162,8 @@ export async function processTranscript(
   noteId: string,
   rawTranscript: string,
   anthropicKey: string,
+  startedAt?: string,
+  endedAt?: string,
 ): Promise<void> {
   if (!rawTranscript.trim()) {
     // Still push completion so the editor knows recording stopped
@@ -170,8 +173,23 @@ export async function processTranscript(
 
   console.log('[Transcription] Post-processing note', noteId)
 
+  // Persist the transcription session row
+  const db = getDatabase()
+  const transcriptionId = randomUUID()
+  if (startedAt) {
+    db.prepare(
+      `INSERT INTO note_transcriptions (id, note_id, started_at, ended_at, raw_transcript)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(transcriptionId, noteId, startedAt, endedAt ?? null, rawTranscript)
+  }
+
   // Generate AI summary (graceful on failure)
   const summary = await generateTranscriptSummary(rawTranscript, anthropicKey)
+
+  // Update the transcription row with the summary
+  if (startedAt && summary) {
+    db.prepare('UPDATE note_transcriptions SET summary = ? WHERE id = ?').run(summary, transcriptionId)
+  }
 
   // Append to note in DB
   appendTranscriptToNote(noteId, summary, rawTranscript)

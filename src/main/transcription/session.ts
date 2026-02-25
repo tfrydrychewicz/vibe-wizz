@@ -44,6 +44,7 @@ import {
 let isTranscribing = false
 let sessionNoteId: string | null = null
 let sessionEventId: number | null = null
+let sessionStartedAt: string | null = null
 let ws: WebSocket | null = null
 let accumulatedTranscript = ''
 // Most recent non-final transcript (shown while streaming, not included in accumulated)
@@ -211,6 +212,7 @@ function cleanupSession(): void {
   isTranscribing = false
   sessionNoteId = null
   sessionEventId = null
+  sessionStartedAt = null
   accumulatedTranscript = ''
   partialBuffer = ''
   activeBackend = 'deepgram'
@@ -229,6 +231,7 @@ async function startSession(
   }
   sessionNoteId = noteId
   sessionEventId = eventId
+  sessionStartedAt = new Date().toISOString()
   accumulatedTranscript = ''
   partialBuffer = ''
   activeBackend = backend
@@ -245,6 +248,7 @@ async function startSession(
 async function stopSession(): Promise<void> {
   if (!isTranscribing || !ws) return
   const noteId = sessionNoteId!
+  const startedAt = sessionStartedAt
   const finalTranscript = accumulatedTranscript + (partialBuffer ? ' ' + partialBuffer : '')
 
   // ElevenLabs: send a final audio chunk with commit:true to flush the last segment,
@@ -256,6 +260,8 @@ async function stopSession(): Promise<void> {
     } catch { /* ignore */ }
   }
 
+  const endedAt = new Date().toISOString()
+
   if (ws.readyState === WebSocket.OPEN) {
     ws.close()
   }
@@ -263,6 +269,7 @@ async function stopSession(): Promise<void> {
   isTranscribing = false
   sessionNoteId = null
   sessionEventId = null
+  sessionStartedAt = null
   accumulatedTranscript = ''
   partialBuffer = ''
   activeBackend = 'deepgram'
@@ -270,7 +277,7 @@ async function stopSession(): Promise<void> {
   // Post-processing runs fire-and-forget
   const db = getDatabase()
   const anthRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined
-  processTranscript(noteId, finalTranscript, anthRow?.value ?? '').catch((err) => {
+  processTranscript(noteId, finalTranscript, anthRow?.value ?? '', startedAt ?? undefined, endedAt).catch((err) => {
     console.error('[Transcription] Post-processing error:', err)
     pushToRenderer('transcription:error', { message: 'Post-processing failed' })
   })
@@ -307,6 +314,7 @@ export function registerTranscriptionIpcHandlers(): void {
           isTranscribing = true
           sessionNoteId = noteId
           sessionEventId = eventId
+          sessionStartedAt = new Date().toISOString()
           await startSwiftTranscriber(noteId)
           console.log('[Transcription] Swift (macOS) started for note', noteId)
           return { ok: true, audioFormat: 'none' }
@@ -314,6 +322,7 @@ export function registerTranscriptionIpcHandlers(): void {
           isTranscribing = false
           sessionNoteId = null
           sessionEventId = null
+          sessionStartedAt = null
           const msg = err instanceof Error ? err.message : 'Unknown error'
           return { ok: false, error: msg }
         }
@@ -357,10 +366,12 @@ export function registerTranscriptionIpcHandlers(): void {
   /** transcription:stop — stops whichever backend is active and kicks off post-processing */
   ipcMain.handle('transcription:stop', async () => {
     if (isSwiftTranscriberActive()) {
-      await stopSwiftTranscriber()
+      const endedAt = new Date().toISOString()
+      await stopSwiftTranscriber(sessionStartedAt ?? undefined, endedAt)
       isTranscribing = false
       sessionNoteId = null
       sessionEventId = null
+      sessionStartedAt = null
     } else {
       await stopSession()
     }

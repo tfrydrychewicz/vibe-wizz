@@ -130,7 +130,7 @@ export function startSwiftTranscriber(noteId: string): Promise<void> {
  * Send SIGTERM to the binary, wait for it to flush its final result and exit,
  * then run the post-meeting processing pipeline.
  */
-export async function stopSwiftTranscriber(): Promise<void> {
+export async function stopSwiftTranscriber(startedAt?: string, endedAt?: string): Promise<void> {
   const noteId = transcribeNoteId
   if (!child) return
 
@@ -159,7 +159,7 @@ export async function stopSwiftTranscriber(): Promise<void> {
     .prepare('SELECT value FROM settings WHERE key = ?')
     .get('anthropic_api_key') as { value: string } | undefined
 
-  processTranscript(noteId, captured.text, anthRow?.value ?? '').catch((err) => {
+  processTranscript(noteId, captured.text, anthRow?.value ?? '', startedAt, endedAt).catch((err) => {
     console.error('[SwiftTranscriber] Post-processing error:', err)
     pushToRenderer('transcription:error', { message: 'Post-processing failed' })
   })

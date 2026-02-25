@@ -132,7 +132,6 @@ function formatMeetingTime(ev: LinkedCalendarEvent): string {
 const isTranscribing = ref(false)
 const transcriptText = ref('')      // finalized partial transcripts accumulated
 const transcriptPartial = ref('')   // current non-final partial (shown while streaming)
-const transcriptPanelOpen = ref(true)
 const transcriptionError = ref<string | null>(null)
 let mediaRecorder: MediaRecorder | null = null
 let mediaStream: MediaStream | null = null
@@ -140,6 +139,49 @@ let mediaStream: MediaStream | null = null
 let audioContext: AudioContext | null = null
 // eslint-disable-next-line @typescript-eslint/no-deprecated
 let scriptProcessor: ScriptProcessorNode | null = null
+
+// ── Stored transcription sessions ─────────────────────────────────────────────
+
+interface StoredTranscription {
+  id: string
+  note_id: string
+  started_at: string
+  ended_at: string | null
+  raw_transcript: string
+  summary: string
+}
+
+const storedTranscriptions = ref<StoredTranscription[]>([])
+const expandedTranscriptIds = ref<string[]>([])
+
+async function loadTranscriptions(): Promise<void> {
+  storedTranscriptions.value = []
+  const result = await window.api.invoke('transcriptions:list', { noteId: props.noteId })
+  storedTranscriptions.value = result as StoredTranscription[]
+  // Auto-expand the most recent session
+  if (storedTranscriptions.value.length > 0 && expandedTranscriptIds.value.length === 0) {
+    expandedTranscriptIds.value = [storedTranscriptions.value[0].id]
+  }
+}
+
+function toggleTranscript(id: string): void {
+  const idx = expandedTranscriptIds.value.indexOf(id)
+  if (idx >= 0) {
+    expandedTranscriptIds.value.splice(idx, 1)
+  } else {
+    expandedTranscriptIds.value.push(id)
+  }
+}
+
+function formatTranscriptTime(startedAt: string, endedAt: string | null): string {
+  const start = new Date(startedAt)
+  const dateStr = start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const timeStr = start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (!endedAt) return `${dateStr}, ${timeStr}`
+  const durationMs = new Date(endedAt).getTime() - start.getTime()
+  const mins = Math.round(durationMs / 60000)
+  return `${dateStr}, ${timeStr} · ${mins} min`
+}
 
 async function startTranscription(): Promise<void> {
   if (!linkedCalendarEvent.value) return
@@ -234,9 +276,12 @@ const unsubTranscriptPartial = window.api.on('transcription:partial', (...args: 
 const unsubTranscriptComplete = window.api.on('transcription:complete', (...args: unknown[]) => {
   const { noteId } = args[0] as { noteId: string }
   if (noteId === props.noteId) {
+    // Clear the live stream display; the session will appear in storedTranscriptions
     transcriptText.value = ''
     transcriptPartial.value = ''
-    void loadNote(props.noteId)
+    // Expand the incoming session when it loads
+    expandedTranscriptIds.value = []
+    void loadNote(props.noteId)  // also calls loadTranscriptions() at the end
   }
 })
 
@@ -696,6 +741,8 @@ async function loadNote(noteId: string): Promise<void> {
   void fetchAndSetAutoDetections(noteId)
   // Reconcile task-item checked states against live action item statuses
   void syncTaskItemsWithDB()
+  // Load all transcription sessions for this note
+  void loadTranscriptions()
 }
 
 function extractMentionIdsFromBody(bodyJson: string): string[] {
@@ -1218,21 +1265,39 @@ onBeforeUnmount(() => {
       <EditorContent :editor="editor" />
     </div>
 
-    <!-- Live transcript panel (shown during/after recording) -->
+    <!-- Transcriptions panel (live + all stored sessions) -->
     <div
-      v-if="linkedCalendarEvent && (isTranscribing || transcriptText || transcriptPartial)"
+      v-if="linkedCalendarEvent && (isTranscribing || storedTranscriptions.length > 0)"
       class="transcript-panel"
     >
-      <button class="transcript-panel-toggle" @click="transcriptPanelOpen = !transcriptPanelOpen">
+      <div class="transcript-panel-header">
         <span class="transcript-panel-label">
           <span v-if="isTranscribing" class="transcript-recording-dot" />
-          Live Transcript
+          Transcriptions
         </span>
-        <ChevronDownIcon :size="12" :class="{ 'rotate-180': !transcriptPanelOpen }" />
-      </button>
-      <div v-if="transcriptPanelOpen" class="transcript-panel-body">
-        <span v-if="!transcriptText && !transcriptPartial" class="transcript-waiting">Listening…</span>
-        <span v-else>{{ transcriptText }}<span v-if="transcriptPartial" class="transcript-partial"> {{ transcriptPartial }}</span></span>
+      </div>
+
+      <!-- Live session (current recording) -->
+      <div v-if="isTranscribing" class="transcript-session transcript-session--live">
+        <div class="transcript-session-body">
+          <span v-if="!transcriptText && !transcriptPartial" class="transcript-waiting">Listening…</span>
+          <span v-else>{{ transcriptText }}<span v-if="transcriptPartial" class="transcript-partial"> {{ transcriptPartial }}</span></span>
+        </div>
+      </div>
+
+      <!-- Stored sessions (most recent first) -->
+      <div v-for="t in storedTranscriptions" :key="t.id" class="transcript-session">
+        <button class="transcript-session-toggle" @click="toggleTranscript(t.id)">
+          <span class="transcript-session-time">{{ formatTranscriptTime(t.started_at, t.ended_at) }}</span>
+          <ChevronDownIcon :size="11" :class="{ 'rotate-180': expandedTranscriptIds.includes(t.id) }" />
+        </button>
+        <div v-if="expandedTranscriptIds.includes(t.id)" class="transcript-session-content">
+          <div v-if="t.summary" class="transcript-summary">{{ t.summary }}</div>
+          <details v-if="t.raw_transcript" class="transcript-raw">
+            <summary class="transcript-raw-label">Raw transcript</summary>
+            <div class="transcript-raw-text">{{ t.raw_transcript }}</div>
+          </details>
+        </div>
       </div>
     </div>
 
