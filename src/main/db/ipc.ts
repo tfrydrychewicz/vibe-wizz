@@ -5,7 +5,7 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords } from '../embedding/chat'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, CalendarEventContext, ActionItemContext } from '../embedding/chat'
 
 type NoteRow = {
   id: string
@@ -1203,9 +1203,85 @@ export function registerDbIpcHandlers(): void {
         }
       }
 
+      // Fetch calendar events (past 7 days → next 30 days) for temporal awareness
+      const calendarEvents: CalendarEventContext[] = (() => {
+        try {
+          const now = new Date()
+          const rangeStart = new Date(now)
+          rangeStart.setDate(rangeStart.getDate() - 7)
+          const rangeEnd = new Date(now)
+          rangeEnd.setDate(rangeEnd.getDate() + 30)
+          return db
+            .prepare(
+              `SELECT ce.id, ce.title, ce.start_at, ce.end_at, ce.attendees,
+                      ce.linked_note_id, n.title as linked_note_title
+               FROM calendar_events ce
+               LEFT JOIN notes n ON n.id = ce.linked_note_id
+               WHERE ce.start_at >= ? AND ce.start_at <= ?
+               ORDER BY ce.start_at ASC
+               LIMIT 50`,
+            )
+            .all(rangeStart.toISOString(), rangeEnd.toISOString()) as CalendarEventContext[]
+        } catch {
+          return []
+        }
+      })()
+
+      // Fetch open/in-progress action items
+      const actionItems: ActionItemContext[] = (() => {
+        try {
+          return db
+            .prepare(
+              `SELECT ai.id, ai.title, ai.status, ai.due_date,
+                      e.name as assigned_entity_name,
+                      ai.source_note_id, n.title as source_note_title
+               FROM action_items ai
+               LEFT JOIN entities e ON e.id = ai.assigned_entity_id
+               LEFT JOIN notes n ON n.id = ai.source_note_id
+               WHERE ai.status IN ('open', 'in_progress')
+               ORDER BY ai.due_date ASC NULLS LAST, ai.created_at DESC
+               LIMIT 50`,
+            )
+            .all() as ActionItemContext[]
+        } catch {
+          return []
+        }
+      })()
+
+      // Fetch full content of notes linked to events / action items and append to context
+      try {
+        const existingIds = new Set(contextNotes.map((n) => n.id))
+        const linkedIds = new Set<string>()
+        for (const ev of calendarEvents) {
+          if (ev.linked_note_id && !existingIds.has(ev.linked_note_id)) linkedIds.add(ev.linked_note_id)
+        }
+        for (const item of actionItems) {
+          if (item.source_note_id && !existingIds.has(item.source_note_id)) linkedIds.add(item.source_note_id)
+        }
+        if (linkedIds.size > 0) {
+          const ids = [...linkedIds].slice(0, 20)
+          const placeholders = ids.map(() => '?').join(',')
+          const rows = db
+            .prepare(
+              `SELECT id, title, body_plain FROM notes
+               WHERE id IN (${placeholders}) AND archived_at IS NULL`,
+            )
+            .all(...ids) as { id: string; title: string; body_plain: string }[]
+          for (const row of rows) {
+            contextNotes.push({
+              id: row.id,
+              title: row.title,
+              excerpt: row.body_plain.length > 800 ? row.body_plain.slice(0, 800) + '…' : row.body_plain,
+            })
+          }
+        }
+      } catch {
+        // non-critical — skip linked note injection on error
+      }
+
       let content: string
       try {
-        content = await sendChatMessage(messages, contextNotes)
+        content = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems)
       } catch (err) {
         console.error('[Chat] Claude API error:', err)
         return {

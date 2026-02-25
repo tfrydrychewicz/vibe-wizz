@@ -16,6 +16,53 @@ const KEYWORD_MODEL = 'claude-haiku-4-5-20251001'
 
 const MAX_CONTEXT_CHARS = 8000
 
+export type CalendarEventContext = {
+  id: number
+  title: string
+  start_at: string
+  end_at: string
+  attendees: string // raw JSON string of {name?, email?}[]
+  linked_note_id: string | null
+  linked_note_title: string | null
+}
+
+export type ActionItemContext = {
+  id: string
+  title: string
+  status: string
+  due_date: string | null
+  assigned_entity_name: string | null
+  source_note_id: string | null
+  source_note_title: string | null
+}
+
+function formatCalendarEvent(ev: CalendarEventContext): string {
+  const start = new Date(ev.start_at)
+  const end = new Date(ev.end_at)
+  const dateStr = start.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+  const startTime = start.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })
+  const endTime = end.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })
+  let line = `- "${ev.title}" on ${dateStr} ${startTime}–${endTime}`
+  try {
+    const attendees = JSON.parse(ev.attendees) as { name?: string; email?: string }[]
+    if (attendees.length > 0) {
+      line += ` · attendees: ${attendees.map((a) => a.name || a.email || '?').join(', ')}`
+    }
+  } catch {
+    // ignore malformed JSON
+  }
+  if (ev.linked_note_title) line += ` [notes: "${ev.linked_note_title}"]`
+  return line
+}
+
+function formatActionItem(item: ActionItemContext): string {
+  let line = `- [${item.status}] "${item.title}"`
+  if (item.due_date) line += ` (due: ${item.due_date})`
+  if (item.assigned_entity_name) line += ` → ${item.assigned_entity_name}`
+  if (item.source_note_title) line += ` (from: "${item.source_note_title}")`
+  return line
+}
+
 /** Update (or clear) the Anthropic client when the API key changes. */
 export function setChatAnthropicKey(apiKey: string): void {
   if (apiKey === _currentKey) return
@@ -83,7 +130,9 @@ export async function extractSearchKeywords(
  * Send a chat message with optional knowledge base context.
  *
  * contextNotes: top search results injected into the system prompt.
- * Claude is instructed to cite them as [Note: "Title"] and to reply
+ * calendarEvents: upcoming/recent calendar events for temporal awareness.
+ * actionItems: open/in-progress action items.
+ * Claude is instructed to cite notes as [Note: "Title"] and to reply
  * in the same language the user used.
  *
  * Returns the assistant's response text.
@@ -92,6 +141,8 @@ export async function extractSearchKeywords(
 export async function sendChatMessage(
   messages: { role: 'user' | 'assistant'; content: string }[],
   contextNotes: { id: string; title: string; excerpt: string }[],
+  calendarEvents: CalendarEventContext[] = [],
+  actionItems: ActionItemContext[] = [],
 ): Promise<string> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
@@ -116,6 +167,20 @@ export async function sendChatMessage(
       contextStr +
       '\n\nWhen referencing information from a specific note, cite it as [Note: "Title"]. ' +
       'Use the exact note title as it appears above.'
+  }
+
+  if (calendarEvents.length > 0) {
+    const evLines = calendarEvents.map(formatCalendarEvent).join('\n')
+    systemPrompt +=
+      '\n\nHere are the user\'s upcoming and recent calendar events (past 7 days + next 30 days):\n' +
+      evLines
+  }
+
+  if (actionItems.length > 0) {
+    const itemLines = actionItems.map(formatActionItem).join('\n')
+    systemPrompt +=
+      '\n\nHere are the user\'s open and in-progress action items:\n' +
+      itemLines
   }
 
   const response = await _client.messages.create({

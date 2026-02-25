@@ -767,7 +767,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [ ] Calendar sync (Google Calendar)
 
 ### Phase 4 — Proactive AI
-- [ ] Make the AI also aware of the meetings and actions 
+- [x] Make the AI also aware of the meetings and actions
 - [ ] Daily Brief generation
 - [ ] Cluster summaries (L3) + nightly batch
 - [ ] Graph RAG (note_relations)
