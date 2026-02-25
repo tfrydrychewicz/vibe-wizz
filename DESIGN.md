@@ -27,7 +27,7 @@ Senior engineering managers / directors managing 5-15 direct reports, multiple p
 | Local DB | SQLite + sqlite-vec | Zero-config, embedded, vector search |
 | FTS | SQLite FTS5 | Built-in, fast, good enough for local |
 | AI inference | Claude API (Sonnet for bulk, Opus for synthesis) | Best reasoning, good multilingual |
-| STT | Deepgram Nova-3 (cloud) + Whisper.cpp (fallback) | Nova-3 for accuracy + diarization; Whisper for offline/Polish |
+| STT | ElevenLabs Scribe v2 Realtime (primary cloud) + Deepgram Nova-3 (secondary cloud) + macOS SFSpeechRecognizer via Swift (offline fallback) | Scribe v2: 99 languages, <150ms latency, Polish WER ≤5%; Deepgram: speaker diarization; SFSpeechRecognizer: fully offline, no API key |
 | Native helper | Swift binary (mic detection) | CoreAudio metadata, no permissions needed |
 | Sync (future) | CRDTs (Automerge) | Conflict-free multi-device sync |
 
@@ -131,6 +131,14 @@ calendar_events
 ├── transcript_note_id? → notes.id
 ├── recurrence_rule?
 └── synced_at
+
+note_transcriptions
+├── id (UUID)
+├── note_id → notes.id (ON DELETE CASCADE)
+├── started_at (ISO 8601 — when recording started)
+├── ended_at? (ISO 8601 — when recording stopped; null if session crashed)
+├── raw_transcript (TEXT — accumulated STT output)
+└── summary (TEXT — Claude Haiku-generated; written after recording ends; empty if AI fails or key not set)
 
 daily_briefs
 ├── id
@@ -246,28 +254,56 @@ On user confirmation:
 
 **Note**: System audio capture on macOS requires a virtual audio device (e.g., BlackHole or a custom Audio Server Plugin). Wizz bundles a lightweight virtual audio driver installed during onboarding.
 
-#### Transcription
+#### Transcription Backends
 
-**Primary**: Deepgram Nova-3 via WebSocket streaming
-- Real-time partial transcripts displayed in floating overlay
-- Speaker diarization (distinguishes speakers)
-- Language detection (auto-switches between English and Polish)
-- Punctuation and formatting
+Backend is selected automatically at session start based on which API keys are set in Settings (AI section):
 
-**Fallback (offline)**: Whisper.cpp (medium model) running locally
-- Triggered when Deepgram is unreachable
-- Lower accuracy, no real-time streaming, but functional
-- Good Polish language support with the medium multilingual model
+**Tier 1 — ElevenLabs Scribe v2 Realtime** (when `elevenlabs_api_key` is set; takes priority over Deepgram)
+- WebSocket: `wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime[&language=xx]`
+- Auth: `xi-api-key` header; audio sent as base64-encoded PCM 16kHz Int16 JSON messages
+- Message format: `{ message_type: "input_audio_buffer.append", audio_base_64: "<base64>" }`
+- Stop gracefully: send `{ message_type: "input_audio_buffer.commit" }`, wait 500ms, then close
+- Events: `partial_transcript` → live preview; `committed_transcript` → accumulated to final
+- 99 languages including Polish (WER ≤5%), <150ms latency
+
+**Tier 2 — Deepgram Nova-3** (when `deepgram_api_key` is set and ElevenLabs key is absent)
+- WebSocket: `wss://api.deepgram.com/v1/listen` with `encoding=webm`, `language=multi` (or specific), `punctuate`, `diarize`, `smart_format`
+- Audio sent as raw WebM/Opus binary chunks (250ms `MediaRecorder` slices)
+- Speaker diarization available; strong multilingual coverage
+
+**Tier 3 — macOS SFSpeechRecognizer** (offline fallback; used when neither cloud key is set)
+- Spawns `resources/Transcriber` Swift binary (build with `npm run build:transcriber`)
+- On-device Apple SFSpeechRecognizer; no API key required; works fully offline
+- Language mapped from `transcription_language` setting via `LOCALE_MAP` in `swiftTranscriber.ts`
+- Emits JSON lines (`ready`, `partial`, `error`) on stdout; graceful SIGTERM shutdown with up to 5s wait for final result
+
+**Audio capture path per backend:**
+
+| Backend | Renderer capture | IPC payload | Main → service |
+|---------|-----------------|-------------|----------------|
+| ElevenLabs | `ScriptProcessorNode` (PCM 16kHz Int16) | `ArrayBuffer` | base64 JSON message |
+| Deepgram | `MediaRecorder` (WebM/Opus, 250ms) | `ArrayBuffer` | raw binary |
+| Swift | none (binary accesses mic directly) | — | — |
+
+`transcription:start` returns `{ ok, audioFormat }` where `audioFormat` is `'pcm'` (ElevenLabs), `'webm'` (Deepgram), or `'none'` (Swift), signaling the renderer which capture path to activate.
+
+**Transcription Settings:**
+
+| Setting key | Purpose | Default |
+|-------------|---------|---------|
+| `elevenlabs_api_key` | ElevenLabs Scribe v2 API key (tier 1) | — |
+| `deepgram_api_key` | Deepgram Nova-3 API key (tier 2) | — |
+| `transcription_language` | Language code (`multi`, `pl`, `en`, etc.) | `multi` |
 
 #### Live Note-Taking During Transcription
 
-While a transcription session is active and linked to a note, the NoteEditor remains fully editable — the user can type notes, action items, or observations in real time alongside the live transcript. The transcript appears as a separate collapsible section below the editor body (not inline), so it never interrupts the manual note-taking flow.
+While a transcription session is active and linked to a note, the NoteEditor remains fully editable — the user can type notes, action items, or observations in real time alongside the live transcript. The **Transcriptions panel** (persistent, below the editor body) displays the live partial transcript stream during recording. After recording stops, the panel transitions seamlessly to show all stored sessions from `note_transcriptions` in reverse chronological order — each session as a collapsible row with timestamp, duration, AI summary, and expandable raw transcript. A note can be transcribed multiple times (start/stop cycles); every session is preserved.
 
 #### Post-Meeting Processing
 
 When meeting ends (mic deactivates for >60s or user manually stops):
 
-1. **Merge transcript + manual notes**: the raw transcript (processed by Deepgram) and the user's hand-typed note content are merged into a single unified note. The merge strategy:
+1. **Merge transcript + manual notes**: the raw transcript (streamed from the active STT backend) and the user's hand-typed note content are merged into a single unified note. The merge strategy:
    - Manual notes take precedence and appear first (the user's intent is preserved)
    - Processed transcript (AI-structured: summary, topics, decisions) is appended as a distinct section (e.g. `## Transcript Summary`) so it's clearly attributed
    - Raw verbatim transcript stored separately (accessible but collapsed by default)
@@ -468,8 +504,13 @@ When a note is opened that has a calendar event linked to it (`calendar-events:g
 - Event title
 - Formatted time range (e.g. "Mon, Feb 25 · 10:00am – 11:00am")
 - Attendee chips (parsed from the event's JSON attendees array)
-- **"Start Transcription" button** — second entry point for transcription (in addition to the meeting detection prompt); clicking it triggers the same transcription flow as the meeting prompt's "Transcribe" action, pre-linked to the note's calendar event; visible whenever the note has a linked event (mic does not need to be active — user can manually trigger)
-- **Live transcript panel** (shown while recording): a collapsible section below the editor body displays the real-time partial transcript as it arrives from Deepgram; the editor body above it remains fully editable so the user can take manual notes simultaneously; the two streams are kept separate during recording and merged at the end (see §3 Post-Meeting Processing)
+- **"Start Transcription" / "Stop" button** — second entry point for transcription (in addition to the meeting detection prompt); clicking "Start Transcription" invokes `transcription:start`, selects the appropriate backend based on configured API keys, and begins audio capture; button changes to "Stop" while active; visible whenever the note has a linked event (mic does not need to be active)
+- **Transcriptions panel** (persistent, below the editor body): present whenever the note has any transcription history or an active recording session. During recording: shows the live partial transcript stream at the top. After recording ends (`transcription:complete`): reloads from `transcriptions:list` and renders all stored sessions as collapsible rows. Each row shows:
+  - Start date/time and session duration
+  - AI-generated summary (Claude Haiku, produced asynchronously after recording ends)
+  - "Raw Transcript" expandable section with the full verbatim text
+  - The most recent session auto-expands after each recording stops
+  - Sessions are ordered newest-first; all are preserved (multi-session history per note)
 
 This gives the note authoring context without needing to open the calendar, and lets users start transcription directly from their meeting notes while continuing to write by hand.
 
@@ -483,7 +524,7 @@ A frameless always-on-top `BrowserWindow` (320×190px, `floating` level so it ap
 1. Swift `MicMonitor` binary polls CoreAudio every 1s, emits JSON on stdout
 2. `monitor.ts` parses events and fires `micEvents`
 3. `meetingWindow.ts` listens: on `mic:active` starts a **5-second debounce** before showing the prompt (avoids false positives from brief mic activations); resets if mic goes inactive
-4. If `auto_transcribe_meetings = 'true'` in settings, the prompt is skipped and transcription is triggered directly (currently a no-op until Deepgram integration)
+4. If `auto_transcribe_meetings = 'true'` in settings, the prompt is skipped and transcription is triggered directly
 5. On `mic:inactive` the prompt is hidden with a 250ms animation delay
 
 **Prompt UI:**
@@ -535,12 +576,49 @@ interface CalendarEvent {
 
 ---
 
-#### 7f. Planned (Future Phases)
+#### 7f. IPC Reference — Transcription
+
+Transcription IPC channels registered in `src/main/transcription/session.ts`:
+
+| Channel | Direction | Payload | Returns |
+|---------|-----------|---------|---------|
+| `transcription:start` | invoke | `{ noteId, eventId? }` | `{ ok, audioFormat: 'pcm'\|'webm'\|'none', error? }` |
+| `transcription:stop` | invoke | — | `{ ok }` |
+| `transcription:audio-chunk` | send | `ArrayBuffer` | — (one-way) |
+| `transcription:status` | invoke | — | `{ isTranscribing, noteId }` |
+| `transcription:partial` | push | `{ text, isFinal }` | — |
+| `transcription:complete` | push | `{ noteId }` | — |
+| `transcription:error` | push | `{ message }` | — |
+| `transcription:open-note` | push | `{ noteId, eventId, autoStart }` | — |
+| `transcriptions:list` | invoke | `{ noteId }` | `NoteTranscription[]` sorted by `started_at DESC` |
+
+**`NoteTranscription` type:**
+```ts
+interface NoteTranscription {
+  id: string
+  note_id: string
+  started_at: string        // ISO 8601
+  ended_at: string | null
+  raw_transcript: string
+  summary: string           // empty string if AI unavailable
+}
+```
+
+**`audioFormat` behaviour:**
+- `'pcm'` → renderer uses `ScriptProcessorNode` at 16kHz; chunks sent as `Int16Array` buffers
+- `'webm'` → renderer uses `MediaRecorder` (WebM/Opus, 250ms); chunks sent as raw binary
+- `'none'` → Swift binary captures mic internally; renderer sends no audio chunks
+
+---
+
+#### 7g. Planned (Future Phases)
 
 - **Google Calendar / Outlook sync**: OAuth2 pull every 5 min, match attendees to Person entities by email; populate `external_id`, `recurrence_rule`
 - **Meeting prep notifications**: desktop notification 5 min before event; click opens a prep note with AI-generated context from previous meetings with the same attendees
 - **Smart linking**: suggest linking an open note to today's events; auto-link transcript to matching event by time overlap
-- **Deepgram streaming transcription** (Phase 3.2): triggered from either (a) the meeting detection prompt ("Transcribe" / "Always transcribe" buttons) or (b) the "Start Transcription" button in the NoteEditor meeting context header; both paths: capture system audio + mic via `desktopCapturer`, stream to Deepgram Nova-3 WebSocket; live partial transcript displayed as a separate collapsible panel in the NoteEditor (below the editable body) so the user can keep taking manual notes simultaneously; on meeting end, merge manual notes + AI-processed transcript into the single linked note (`linked_note_id`) — manual content first, structured transcript summary appended as a distinct section; run speaker diarization + entity matching; extract action items linked to the note
+- **System audio capture** (loopback): capture all meeting participants' audio, not just the local mic; requires a virtual audio device (e.g., BlackHole or a custom Audio Server Plugin) on macOS; Wizz would bundle a lightweight virtual audio driver installed during onboarding
+- **Speaker diarization + entity matching**: match Deepgram diarized speakers to Person entities using voice profile (built over time) or calendar attendee list; label transcript segments by speaker name
+- **Post-meeting action extraction from transcript**: dedicated transcript-aware extraction pass that runs after `postProcessor.ts`; extracts action items with assignees and deadlines, creates rows in `action_items`, links to source note
 
 ### 8. Command Palette & AI Chat
 
@@ -583,7 +661,7 @@ interface CalendarEvent {
 | Note editing | ✅ | ✅ |
 | FTS search | ✅ | ✅ |
 | Vector search | ✅ (new embeddings) | ✅ (cached embeddings only) |
-| Meeting transcription | ✅ (Deepgram) | ✅ (Whisper.cpp, reduced quality) |
+| Meeting transcription | ✅ (ElevenLabs / Deepgram) | ✅ (macOS SFSpeechRecognizer, on-device, no API key) |
 | AI summaries / extraction | ✅ (Claude) | ❌ (queued for when online) |
 | Daily Brief | ✅ | ❌ (generated when reconnected) |
 | Calendar sync | ✅ | ✅ (cached events, no updates) |
@@ -679,10 +757,12 @@ Offline-created notes are queued for embedding/processing and handled automatica
     - NoteEditor shows meeting context header (title, time, attendees) for notes linked to a calendar event
 - [x] Attendee entity configuration in Settings
     - Choose entity type, name field, and email field for attendee autocomplete in MeetingModal
-- [x] Deepgram streaming transcription (triggered from meeting prompt **and** from NoteEditor meeting context header)
-- [ ] Transcript → structured note pipeline
+- [x] Multi-backend streaming transcription: ElevenLabs Scribe v2 Realtime (tier 1), Deepgram Nova-3 (tier 2), macOS SFSpeechRecognizer via Swift binary (tier 3 / offline) — triggered from meeting prompt **and** NoteEditor meeting context header; backend auto-selected based on configured API keys
+- [x] Transcript → structured note pipeline (`postProcessor.ts`: Claude Haiku summary + raw transcript appended as TipTap nodes to linked note; `note_transcriptions` row persisted per session; embedding pipeline triggered after)
+- [x] Post-meeting summary (basic): Claude Haiku generates structured meeting summary (Meeting Summary / Key Decisions / Follow-ups); stored in `note_transcriptions.summary` and appended to note body
+- [x] Multi-session transcription history: each start/stop cycle persists to `note_transcriptions`; Transcriptions panel in NoteEditor shows all sessions (newest-first) with timestamps, durations, AI summaries, and expandable raw transcripts
 - [ ] Speaker diarization + entity matching
-- [ ] Post-meeting summary + action extraction
+- [ ] Post-meeting action extraction from transcript (action items currently extracted from note body by general pipeline; dedicated transcript-aware extraction pending)
 - [ ] Meeting prep notifications
 - [ ] Calendar sync (Google Calendar)
 
@@ -698,7 +778,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [ ] Import (Markdown, Notion, CSV)
 - [ ] Export (Markdown, JSON, SQLite)
 - [ ] Automatic backups
-- [ ] Offline mode (Whisper.cpp fallback)
+- [ ] Improved offline mode (macOS SFSpeechRecognizer already implemented as tier 3 fallback; this item covers improving quality and on-device model selection)
 - [ ] Kanban views
 - [ ] Keyboard shortcuts + command palette
 - [ ] Performance optimization
@@ -712,6 +792,6 @@ Offline-created notes are queued for embedding/processing and handled automatica
 | macOS audio capture requires virtual driver | High friction at install | Bundle BlackHole or build minimal Audio Server Plugin; clear onboarding UX |
 | Claude API costs at scale (millions of chunks) | Expensive | Use Haiku for NER/re-ranking, Sonnet for synthesis; batch embeddings; cache aggressively |
 | sqlite-vec maturity | Potential bugs | Keep pgvector as fallback path; sqlite-vec is actively maintained by Alex Garcia |
-| Deepgram cost for heavy meeting users | ~$0.01/min adds up | Offer Whisper.cpp as free-tier default; Deepgram as premium |
+| STT API cost for heavy users | ~$0.01/min adds up | Three-tier fallback: ElevenLabs → Deepgram → macOS SFSpeechRecognizer (free, offline); users without API keys get working transcription at zero cost |
 | Scope creep (notes + CRM + tasks + calendar + AI) | Never ships | Phase 1 is usable standalone; each phase adds value independently |
-| Polish language STT accuracy | Core user need | Deepgram Nova-3 supports Polish; Whisper medium is strong for Polish; test early |
+| Polish language STT accuracy | Core user need | ElevenLabs Scribe v2 WER ≤5% for Polish; SFSpeechRecognizer has strong Polish support on macOS 13+; test early with real recordings |
