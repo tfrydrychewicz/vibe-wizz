@@ -4,14 +4,15 @@
   "description": "AI-Native Second Brain for Engineering Managers",
   "main": "out/main/index.js",
   "scripts": {
-    "postinstall": "plutil -replace NSSpeechRecognitionUsageDescription -string \"Wizz uses on-device speech recognition to transcribe meeting audio.\" node_modules/electron/dist/Electron.app/Contents/Info.plist 2>/dev/null || true && codesign --sign - --force --deep node_modules/electron/dist/Electron.app 2>/dev/null || true",
+    "postinstall": "plutil -replace NSSpeechRecognitionUsageDescription -string \"Wizz uses on-device speech recognition to transcribe meeting audio.\" node_modules/electron/dist/Electron.app/Contents/Info.plist 2>/dev/null || true && plutil -replace NSScreenCaptureUsageDescription -string \"Wizz records system audio to capture what meeting participants say.\" node_modules/electron/dist/Electron.app/Contents/Info.plist 2>/dev/null || true && codesign --sign - --force --deep node_modules/electron/dist/Electron.app 2>/dev/null || true",
     "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "build": "env -u ELECTRON_RUN_AS_NODE electron-vite build && electron-builder",
     "preview": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
     "typecheck": "vue-tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "build:swift": "swiftc swift/MicMonitor/Sources/main.swift -o resources/MicMonitor -O",
-    "build:transcriber": "mkdir -p resources/Transcriber.app/Contents/MacOS && swiftc swift/Transcriber/Sources/main.swift -o resources/Transcriber.app/Contents/MacOS/Transcriber -O && cp swift/Transcriber/Info.plist resources/Transcriber.app/Contents/Info.plist && codesign --sign - --force --deep resources/Transcriber.app"
+    "build:transcriber": "mkdir -p resources/Transcriber.app/Contents/MacOS && swiftc swift/Transcriber/Sources/main.swift -o resources/Transcriber.app/Contents/MacOS/Transcriber -O && cp swift/Transcriber/Info.plist resources/Transcriber.app/Contents/Info.plist && codesign --sign - --force --deep resources/Transcriber.app",
+    "build:audiocapture": "mkdir -p resources/AudioCapture.app/Contents/MacOS && swiftc swift/AudioCapture/Sources/main.swift -framework CoreAudio -framework AVFoundation -framework Foundation -o resources/AudioCapture.app/Contents/MacOS/AudioCapture -O && cp swift/AudioCapture/Info.plist resources/AudioCapture.app/Contents/Info.plist && codesign --sign - --force --deep resources/AudioCapture.app"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -63,12 +64,14 @@
       "category": "public.app-category.productivity",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Wizz uses your microphone to detect and transcribe meeting audio.",
-        "NSSpeechRecognitionUsageDescription": "Wizz uses on-device speech recognition to transcribe meeting audio when no Deepgram API key is configured."
+        "NSSpeechRecognitionUsageDescription": "Wizz uses on-device speech recognition to transcribe meeting audio when no Deepgram API key is configured.",
+        "NSScreenCaptureUsageDescription": "Wizz records system audio to capture what meeting participants say through your speakers or headphones."
       }
     },
     "extraResources": [
       { "from": "resources/MicMonitor", "to": "MicMonitor" },
-      { "from": "resources/Transcriber.app", "to": "Transcriber.app" }
+      { "from": "resources/Transcriber.app", "to": "Transcriber.app" },
+      { "from": "resources/AudioCapture.app", "to": "AudioCapture.app" }
     ],
     "files": [
       "out/**/*",

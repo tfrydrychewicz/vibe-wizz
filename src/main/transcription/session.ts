@@ -28,8 +28,10 @@
  *   transcription:process     (invoke) — { noteId, transcript } → { ok }
  */
 
-import { ipcMain } from 'electron'
+import { ipcMain, app, shell } from 'electron'
 import WebSocket from 'ws'
+import { writeFileSync, mkdirSync } from 'fs'
+import { join } from 'path'
 import { getDatabase } from '../db/index'
 import { pushToRenderer } from '../push'
 import { processTranscript } from './postProcessor'
@@ -38,6 +40,7 @@ import {
   stopSwiftTranscriber,
   isSwiftTranscriberActive,
 } from './swiftTranscriber'
+import { startAudioCapture, stopAudioCapture } from './audioCapture'
 
 // ── Session state ──────────────────────────────────────────────────────────────
 
@@ -59,6 +62,34 @@ let activeBackend: 'deepgram' | 'elevenlabs' | 'elevenlabs-batch' = 'deepgram'
 let batchAudioChunks: Buffer[] = []
 // Speaker-labeled segments from Deepgram diarization: [{speakerId, text}]
 let speakerSegments: Array<{ speakerId: number; text: string }> = []
+// Whether this session uses AudioCapture.app (system audio + mic) instead of renderer audio
+let usingSystemAudio = false
+// Debug audio recording — when save_debug_audio='true', all audio chunks are accumulated
+// and written to a WAV/WebM file in the debug-audio folder when the session ends.
+let collectDebugAudio = false
+let debugAudioChunks: Buffer[] = []
+
+/** Write accumulated audio chunks to a debug WAV or WebM file in userData/debug-audio/. */
+function saveDebugAudioFile(chunks: Buffer[], format: 'pcm' | 'webm'): void {
+  try {
+    const dir = join(app.getPath('userData'), 'debug-audio')
+    mkdirSync(dir, { recursive: true })
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    if (format === 'pcm') {
+      const wav = buildWavBuffer(chunks)
+      const filePath = join(dir, `audio-${ts}.wav`)
+      writeFileSync(filePath, wav)
+      console.log('[Transcription] Debug audio saved:', filePath)
+    } else {
+      const raw = Buffer.concat(chunks)
+      const filePath = join(dir, `audio-${ts}.webm`)
+      writeFileSync(filePath, raw)
+      console.log('[Transcription] Debug audio saved:', filePath)
+    }
+  } catch (err) {
+    console.error('[Transcription] Failed to save debug audio:', err)
+  }
+}
 
 /** Build a speaker-labeled transcript string from accumulated diarization segments.
  *  Consecutive segments from the same speaker are merged into one block.
@@ -202,6 +233,45 @@ async function stopElevenLabsBatch(
   return labeled
 }
 
+// ── Unexpected WebSocket close handler ────────────────────────────────────────
+
+/**
+ * Called when a cloud backend WebSocket closes while a session is still active
+ * (i.e. not triggered by our own cleanupSession / stopSession call).
+ * Saves whatever transcript was accumulated and kicks off post-processing so
+ * the user doesn't lose their transcript.
+ */
+function handleUnexpectedClose(code: number): void {
+  if (!isTranscribing) return   // graceful stop already cleaned up
+
+  console.warn('[Transcription] WebSocket closed unexpectedly (code:', code, ')')
+  pushToRenderer('transcription:error', {
+    message: `Transcription service disconnected (code ${code}). Saving partial transcript.`,
+  })
+
+  const noteId = sessionNoteId!
+  const startedAt = sessionStartedAt
+  const eventId = sessionEventId
+  const finalText = accumulatedTranscript + (partialBuffer ? ' ' + partialBuffer : '')
+  const labeledText = speakerSegments.length > 0 ? buildSpeakerLabeledTranscript() : ''
+  const endedAt = new Date().toISOString()
+  cleanupSession()   // sets isTranscribing=false, ws=null, etc.
+
+  if (!finalText.trim()) return
+  const db = getDatabase()
+  const anthKey =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as
+      | { value: string }
+      | undefined)?.value ?? ''
+  const attendeeNames = readAttendeeNames(eventId)
+  processTranscript(noteId, labeledText || finalText, anthKey, startedAt ?? undefined, endedAt, attendeeNames).catch(
+    (err) => {
+      console.error('[Transcription] Post-processing error after unexpected close:', err)
+      pushToRenderer('transcription:error', { message: 'Post-processing failed' })
+    },
+  )
+}
+
 // ── Deepgram connection ────────────────────────────────────────────────────────
 
 const DEEPGRAM_BASE_URL = 'wss://api.deepgram.com/v1/listen'
@@ -301,8 +371,99 @@ function openDeepgramSocket(apiKey: string, language: string): Promise<void> {
       }
     })
 
-    ws.on('close', () => {
-      console.log('[Transcription] Deepgram WebSocket closed')
+    ws.on('close', (code) => {
+      console.log('[Transcription] Deepgram WebSocket closed (code:', code, ')')
+      handleUnexpectedClose(code)
+    })
+  })
+}
+
+/**
+ * Like openDeepgramSocket() but accepts raw PCM Int16 16kHz mono (linear16 encoding)
+ * instead of WebM/Opus. Used when AudioCapture.app provides the audio stream.
+ */
+function openDeepgramSocketPcm(apiKey: string, language: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const params = new URLSearchParams({
+      model: 'nova-3',
+      language,
+      punctuate: 'true',
+      smart_format: 'true',
+      diarize: 'true',
+      encoding: 'linear16',
+      sample_rate: '16000',
+    })
+    const url = `${DEEPGRAM_BASE_URL}?${params.toString()}`
+    console.log('[Transcription] Connecting to Deepgram (PCM):', url.replace(/Token [^&]+/, 'Token ***'))
+
+    ws = new WebSocket(url, {
+      headers: { Authorization: `Token ${apiKey}` },
+    })
+
+    ws.on('open', () => {
+      console.log('[Transcription] Deepgram PCM WebSocket connected (language:', language, ')')
+      resolve()
+    })
+
+    ws.on('unexpected-response', (_req, res) => {
+      let body = ''
+      res.on('data', (chunk: Buffer) => { body += chunk.toString() })
+      res.on('end', () => {
+        const msg = `Deepgram rejected connection (HTTP ${res.statusCode}): ${body}`
+        console.error('[Transcription]', msg)
+        reject(new Error(msg))
+      })
+    })
+
+    ws.on('error', (err) => {
+      console.error('[Transcription] Deepgram PCM WS error:', err.message)
+      if (!isTranscribing) {
+        reject(err)
+      } else {
+        pushToRenderer('transcription:error', { message: err.message })
+        cleanupSession()
+      }
+    })
+
+    ws.on('message', (data: WebSocket.Data) => {
+      try {
+        const msg = JSON.parse(data.toString()) as DeepgramResult
+        if (msg.type !== 'Results') return
+        const text = msg.channel?.alternatives?.[0]?.transcript ?? ''
+        if (!text) return
+        if (msg.is_final) {
+          accumulatedTranscript += (accumulatedTranscript ? ' ' : '') + text
+          partialBuffer = ''
+          pushToRenderer('transcription:partial', { text, isFinal: true })
+          const words = msg.channel?.alternatives?.[0]?.words
+          if (words && words.length > 0 && words.some((w) => w.speaker !== undefined)) {
+            let segText = ''
+            let segSpeaker = words[0].speaker ?? 0
+            for (const w of words) {
+              const wordSpeaker = w.speaker ?? segSpeaker
+              const wordText = w.punctuated_word || w.word
+              if (wordSpeaker !== segSpeaker && segText) {
+                speakerSegments.push({ speakerId: segSpeaker, text: segText.trim() })
+                segText = wordText
+                segSpeaker = wordSpeaker
+              } else {
+                segText += (segText ? ' ' : '') + wordText
+              }
+            }
+            if (segText) speakerSegments.push({ speakerId: segSpeaker, text: segText.trim() })
+          }
+        } else {
+          partialBuffer = text
+          pushToRenderer('transcription:partial', { text, isFinal: false })
+        }
+      } catch {
+        // Ignore parse errors from Deepgram metadata messages
+      }
+    })
+
+    ws.on('close', (code) => {
+      console.log('[Transcription] Deepgram PCM WebSocket closed (code:', code, ')')
+      handleUnexpectedClose(code)
     })
   })
 }
@@ -370,8 +531,9 @@ function openElevenLabsSocket(apiKey: string, language: string): Promise<void> {
       }
     })
 
-    ws.on('close', () => {
-      console.log('[Transcription] ElevenLabs WebSocket closed')
+    ws.on('close', (code) => {
+      console.log('[Transcription] ElevenLabs WebSocket closed (code:', code, ')')
+      handleUnexpectedClose(code)
     })
   })
 }
@@ -379,6 +541,15 @@ function openElevenLabsSocket(apiKey: string, language: string): Promise<void> {
 // ── Session lifecycle ──────────────────────────────────────────────────────────
 
 function cleanupSession(): void {
+  if (usingSystemAudio) stopAudioCapture()
+  // Save debug audio before resetting state (needs activeBackend + usingSystemAudio)
+  if (collectDebugAudio && debugAudioChunks.length > 0) {
+    const fmt = activeBackend === 'deepgram' && !usingSystemAudio ? 'webm' : 'pcm'
+    saveDebugAudioFile(debugAudioChunks, fmt)
+  }
+  usingSystemAudio = false
+  collectDebugAudio = false
+  debugAudioChunks = []
   if (ws && ws.readyState === WebSocket.OPEN) {
     try { ws.close() } catch { /* ignore */ }
   }
@@ -484,15 +655,19 @@ async function stopSession(): Promise<void> {
   const labeledTranscript = speakerSegments.length > 0 ? buildSpeakerLabeledTranscript() : ''
 
   // ElevenLabs Realtime: flush the last segment before closing
-  if (activeBackend === 'elevenlabs' && ws!.readyState === WebSocket.OPEN) {
+  if (activeBackend === 'elevenlabs' && ws && ws.readyState === WebSocket.OPEN) {
     try {
-      ws!.send(JSON.stringify({ message_type: 'input_audio_chunk', audio_base_64: '', commit: true }))
+      ws.send(JSON.stringify({ message_type: 'input_audio_chunk', audio_base_64: '', commit: true }))
       await new Promise<void>((resolve) => setTimeout(resolve, 500))
     } catch { /* ignore */ }
   }
 
+  // Guard: if ElevenLabs closed the connection during the 500ms commit wait,
+  // handleUnexpectedClose() already ran cleanupSession() and kicked off post-processing.
+  if (!isTranscribing) return
+
   const endedAt = new Date().toISOString()
-  if (ws!.readyState === WebSocket.OPEN) ws!.close()
+  if (ws && ws.readyState === WebSocket.OPEN) ws.close()
   cleanupSession()
 
   const db = getDatabase()
@@ -538,6 +713,13 @@ export function registerTranscriptionIpcHandlers(): void {
         .get('transcription_language') as { value: string } | undefined
       const language = langRow?.value || 'multi'
 
+      // Debug audio: reset collection state before starting any backend
+      const debugRow = db
+        .prepare('SELECT value FROM settings WHERE key = ?')
+        .get('save_debug_audio') as { value: string } | undefined
+      collectDebugAudio = debugRow?.value === 'true'
+      debugAudioChunks = []
+
       if (model === 'macos') {
         // Offline: Swift SFSpeechRecognizer (always uses system locale)
         try {
@@ -571,8 +753,38 @@ export function registerTranscriptionIpcHandlers(): void {
           .get('elevenlabs_diarize') as { value: string } | undefined
         const useBatch = diarizeRow?.value === 'true'
         const backend = useBatch ? 'elevenlabs-batch' : 'elevenlabs'
+        const sysAudioRow = db
+          .prepare('SELECT value FROM settings WHERE key = ?')
+          .get('system_audio_capture') as { value: string } | undefined
+        const useSystemAudio = sysAudioRow?.value === 'true'
         try {
           await startSession(noteId, eventId, elevenLabsKey, language, backend)
+          if (useSystemAudio) {
+            await startAudioCapture(
+              (buf: Buffer) => {
+                if (!isTranscribing) return
+                if (collectDebugAudio) debugAudioChunks.push(buf)
+                if (activeBackend === 'elevenlabs-batch') {
+                  batchAudioChunks.push(buf)
+                  return
+                }
+                if (!ws || ws.readyState !== WebSocket.OPEN) return
+                try {
+                  ws.send(JSON.stringify({
+                    message_type: 'input_audio_chunk',
+                    audio_base_64: buf.toString('base64'),
+                  }))
+                } catch (e) {
+                  console.error('[Transcription] Failed to forward audio chunk to ElevenLabs:', e)
+                }
+              },
+              (msg: string) => {
+                pushToRenderer('transcription:error', { message: `System audio: ${msg}` })
+              },
+            )
+            usingSystemAudio = true
+            return { ok: true, audioFormat: 'system-audio' }
+          }
           return { ok: true, audioFormat: 'pcm' }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Unknown error'
@@ -580,7 +792,7 @@ export function registerTranscriptionIpcHandlers(): void {
         }
       }
 
-      // Deepgram Nova-3 — WebM/Opus audio from renderer
+      // Deepgram Nova-3 — WebM/Opus from renderer (default) or PCM from AudioCapture.app
       const deepgramRow = db
         .prepare('SELECT value FROM settings WHERE key = ?')
         .get('deepgram_api_key') as { value: string } | undefined
@@ -588,7 +800,39 @@ export function registerTranscriptionIpcHandlers(): void {
       if (!deepgramKey) {
         return { ok: false, error: 'Deepgram API key not configured. Add it in Settings → AI.' }
       }
+      const dgSysAudioRow = db
+        .prepare('SELECT value FROM settings WHERE key = ?')
+        .get('system_audio_capture') as { value: string } | undefined
+      const dgUseSystemAudio = dgSysAudioRow?.value === 'true'
       try {
+        if (dgUseSystemAudio) {
+          // PCM path: open a linear16 WebSocket and feed raw PCM buffers from AudioCapture.app
+          await openDeepgramSocketPcm(deepgramKey, language)
+          sessionNoteId = noteId
+          sessionEventId = eventId
+          sessionStartedAt = new Date().toISOString()
+          accumulatedTranscript = ''
+          partialBuffer = ''
+          speakerSegments = []
+          batchAudioChunks = []
+          activeBackend = 'deepgram'
+          isTranscribing = true
+          await startAudioCapture(
+            (buf: Buffer) => {
+              if (!isTranscribing) return
+              if (collectDebugAudio) debugAudioChunks.push(buf)
+              if (!ws || ws.readyState !== WebSocket.OPEN) return
+              try { ws.send(buf) } catch (e) {
+                console.error('[Transcription] Failed to forward PCM chunk to Deepgram:', e)
+              }
+            },
+            (msg: string) => {
+              pushToRenderer('transcription:error', { message: `System audio: ${msg}` })
+            },
+          )
+          usingSystemAudio = true
+          return { ok: true, audioFormat: 'system-audio' }
+        }
         await startSession(noteId, eventId, deepgramKey, language, 'deepgram')
         return { ok: true, audioFormat: 'webm' }
       } catch (err) {
@@ -621,17 +865,19 @@ export function registerTranscriptionIpcHandlers(): void {
    * No-op when using the Swift fallback (binary captures audio directly).
    */
   ipcMain.on('transcription:audio-chunk', (_event, chunk: ArrayBuffer) => {
-    if (!isTranscribing || isSwiftTranscriberActive()) return
+    if (!isTranscribing || isSwiftTranscriberActive() || usingSystemAudio) return
+    const buf = Buffer.from(chunk)
+    if (collectDebugAudio) debugAudioChunks.push(buf)
     if (activeBackend === 'elevenlabs-batch') {
-      batchAudioChunks.push(Buffer.from(chunk))
+      batchAudioChunks.push(buf)
       return
     }
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     try {
       if (activeBackend === 'elevenlabs') {
-        ws.send(JSON.stringify({ message_type: 'input_audio_chunk', audio_base_64: Buffer.from(chunk).toString('base64') }))
+        ws.send(JSON.stringify({ message_type: 'input_audio_chunk', audio_base_64: buf.toString('base64') }))
       } else {
-        ws.send(Buffer.from(chunk))
+        ws.send(buf)
       }
     } catch (err) {
       console.error('[Transcription] Failed to send audio chunk:', err)
@@ -663,4 +909,16 @@ export function registerTranscriptionIpcHandlers(): void {
       return { ok: true }
     },
   )
+
+  /** debug:open-audio-folder — opens the debug-audio directory in Finder. */
+  ipcMain.handle('debug:open-audio-folder', () => {
+    const dir = join(app.getPath('userData'), 'debug-audio')
+    mkdirSync(dir, { recursive: true })
+    shell.openPath(dir)
+  })
+
+  /** debug:get-audio-folder — returns the absolute path to the debug-audio directory. */
+  ipcMain.handle('debug:get-audio-folder', () => {
+    return join(app.getPath('userData'), 'debug-audio')
+  })
 }

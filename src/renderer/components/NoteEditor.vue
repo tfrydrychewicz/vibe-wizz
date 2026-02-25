@@ -221,8 +221,8 @@ async function startTranscription(): Promise<void> {
     return
   }
 
-  // audioFormat:'none' means Swift captured audio directly — nothing to set up
-  if (result.audioFormat === 'none') {
+  // audioFormat:'none' = Swift captures directly; 'system-audio' = AudioCapture.app handles it
+  if (result.audioFormat === 'none' || result.audioFormat === 'system-audio') {
     isTranscribing.value = true
     transcriptText.value = ''
     transcriptPartial.value = ''

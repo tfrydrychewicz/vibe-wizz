@@ -247,12 +247,84 @@ If calendar integration is active, the prompt shows the matching calendar event 
 
 #### Audio Capture
 
-On user confirmation:
-1. Electron uses `desktopCapturer` to capture system audio (loopback) — this captures all meeting participants
-2. Simultaneously capture microphone input for the local user's voice
-3. Stream both channels to the STT service
+On user confirmation, Wizz activates the configured transcription backend and — when **System Audio Capture** is enabled — simultaneously launches the `AudioCapture.app` binary that mixes system output + microphone into one PCM stream:
 
-**Note**: System audio capture on macOS requires a virtual audio device (e.g., BlackHole or a custom Audio Server Plugin). Wizz bundles a lightweight virtual audio driver installed during onboarding.
+1. **Microphone only** (default): renderer captures mic via `getUserMedia` and sends chunks to the cloud STT service
+2. **System Audio Capture** (opt-in, requires macOS 14.2+): `AudioCapture.app` captures both system output (Zoom/Meet remote participants) and the local microphone, mixes them, and streams them to the cloud STT service — the renderer captures no audio itself
+
+#### System Audio Capture — `AudioCapture.app`
+
+`AudioCapture.app` is a Swift `.app` bundle (`swift/AudioCapture/Sources/main.swift`) packaged under `resources/AudioCapture.app/Contents/MacOS/AudioCapture`. Built with `npm run build:audiocapture`.
+
+**Capture approach — ScreenCaptureKit SCStream:**
+
+Wizz uses Apple's `ScreenCaptureKit` framework (`SCStream` with `capturesAudio=true`) to tap system audio output, which is the officially supported macOS API for capturing what plays through speakers/headphones during Zoom/Meet calls. A separate `AVAudioEngine` captures the microphone input.
+
+This approach was chosen over Core Audio Taps (`AudioHardwareCreateProcessTap`) for its stability; SCStream is the Apple-supported way to get system audio on macOS 13+.
+
+**Binary architecture:**
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  AudioCapture.app (Swift binary — runs as child of main proc)  │
+│                                                                 │
+│  SCStream (capturesAudio=true)    AVAudioEngine.inputNode       │
+│   ├── Float32 PCM (any rate/ch)    ├── Float32 PCM (native fmt) │
+│   └── resample → 16kHz mono        └── resample → 16kHz mono   │
+│            │   appendSysAudio()              │  appendMicAudio() │
+│            ▼                                ▼                   │
+│   sysBuf[32768]  (sysPos)       micBuf[32768]  (micPos)        │
+│            └─────────── NSLock (bufLock) ─────────────┘        │
+│                                 │                               │
+│   DispatchSourceTimer (256ms)   │                               │
+│   ├── sysF = min(sysPos, 4096)  │                               │
+│   ├── micF = min(micPos, 4096)  │                               │
+│   ├── outBuf[max(sysF, micF)]   │                               │
+│   ├── outBuf += sysBuf[0..sysF] + micBuf[0..micF] (additive)  │
+│   ├── compact each buffer independently                         │
+│   ├── attenuate × 0.6, clamp, convert to Int16                  │
+│   └── emit {"type":"audio_chunk","data":"<base64 PCM Int16>"}  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Key design decision — separate buffers:**
+
+Each audio source has its own ring buffer (`sysBuf`/`sysPos` for SCStream, `micBuf`/`micPos` for AVAudioEngine). The timer mixes them additively at drain time. This prevents the "sequential overflow" bug: if both sources write to a single shared buffer, their combined input rate (~32kHz effective) doubles the drain rate (~16kHz/256ms), filling the buffer in ~2 seconds and silently dropping all subsequent audio.
+
+**Resampling:**
+
+SCStream may deliver audio at the native device rate (e.g. 48kHz stereo) regardless of the requested 16kHz. A windowed box-filter averages input samples over each output sample's window (`halfW = max(0.5, ratio * 0.5)`) for anti-aliased downsampling. Fast path for already-16kHz mono audio (common when SCStream honors the configuration).
+
+**Protocol (stdout JSON lines):**
+
+| Message | Meaning |
+|---------|---------|
+| `{"type":"ready"}` | Binary started, both streams active |
+| `{"type":"audio_chunk","data":"<base64>"}` | 256ms PCM Int16 16kHz mono chunk |
+| `{"type":"error","message":"..."}` | Fatal error (permission denied, etc.) |
+
+**Requirements:**
+- macOS 14.2+ (SCStream audio on 13+; the setting is shown for 14.2+ to be safe)
+- "Screen & System Audio Recording" permission (TCC: `NSScreenCaptureUsageDescription`)
+- `NSMicrophoneUsageDescription` for AVAudioEngine mic access
+- Both keys declared in `swift/AudioCapture/Info.plist` and in `mac.extendInfo` in `package.json`
+
+**TypeScript wrapper** (`src/main/transcription/audioCapture.ts`):
+- Spawns binary, parses stdout JSON lines, resolves `startAudioCapture()` promise on `ready`
+- Calls `onChunk(Buffer)` for each PCM chunk; routes chunk to active WS backend
+- `stopAudioCapture()` sends SIGTERM; binary flushes and exits cleanly
+- Rejects promise (surfaces as `transcriptionError` in NoteEditor) if binary not found, crashes, or emits error before ready
+
+**Integration with transcription backends when `system_audio_capture = 'true'`:**
+
+| Backend | WS URL change | Chunk routing |
+|---------|--------------|---------------|
+| ElevenLabs realtime | none | `onChunk` sends `{message_type:'input_audio_chunk', audio_base_64: buf.toString('base64')}` |
+| ElevenLabs batch | none | `onChunk` pushes `buf` into `batchAudioChunks[]` |
+| Deepgram | `encoding=linear16&sample_rate=16000` added | `onChunk` sends raw Buffer bytes |
+| macOS Swift | N/A (mic captured inside binary) | N/A |
+
+Returns `audioFormat: 'system-audio'` from `transcription:start` → renderer skips `getUserMedia` entirely.
 
 #### Transcription Backends
 
@@ -272,20 +344,22 @@ Backend is selected automatically at session start based on which API keys are s
 - Speaker diarization available; strong multilingual coverage
 
 **Tier 3 — macOS SFSpeechRecognizer** (offline fallback; used when neither cloud key is set)
-- Spawns `resources/Transcriber` Swift binary (build with `npm run build:transcriber`)
+- Spawns `resources/Transcriber.app/Contents/MacOS/Transcriber` bundle (build with `npm run build:transcriber`)
 - On-device Apple SFSpeechRecognizer; no API key required; works fully offline
 - Language mapped from `transcription_language` setting via `LOCALE_MAP` in `swiftTranscriber.ts`
 - Emits JSON lines (`ready`, `partial`, `error`) on stdout; graceful SIGTERM shutdown with up to 5s wait for final result
 
 **Audio capture path per backend:**
 
-| Backend | Renderer capture | IPC payload | Main → service |
-|---------|-----------------|-------------|----------------|
-| ElevenLabs | `ScriptProcessorNode` (PCM 16kHz Int16) | `ArrayBuffer` | base64 JSON message |
-| Deepgram | `MediaRecorder` (WebM/Opus, 250ms) | `ArrayBuffer` | raw binary |
-| Swift | none (binary accesses mic directly) | — | — |
+| Backend | `system_audio_capture` | Renderer capture | IPC payload | Main → service |
+|---------|----------------------|-----------------|-------------|----------------|
+| ElevenLabs | `'false'` | `ScriptProcessorNode` (PCM 16kHz Int16) | `ArrayBuffer` | base64 JSON message |
+| ElevenLabs | `'true'` | none | — | `AudioCapture.app` chunks via `onChunk` |
+| Deepgram | `'false'` | `MediaRecorder` (WebM/Opus, 250ms) | `ArrayBuffer` | raw binary |
+| Deepgram | `'true'` | none | — | `AudioCapture.app` chunks via `onChunk` (PCM WS) |
+| Swift | either | none (binary accesses mic directly) | — | — |
 
-`transcription:start` returns `{ ok, audioFormat }` where `audioFormat` is `'pcm'` (ElevenLabs), `'webm'` (Deepgram), or `'none'` (Swift), signaling the renderer which capture path to activate.
+`transcription:start` returns `{ ok, audioFormat }` where `audioFormat` is `'pcm'` (ElevenLabs mic-only), `'webm'` (Deepgram mic-only), `'none'` (Swift), or `'system-audio'` (AudioCapture.app active for either cloud backend), signaling the renderer which capture path to activate.
 
 **Transcription Settings:**
 
@@ -294,6 +368,8 @@ Backend is selected automatically at session start based on which API keys are s
 | `elevenlabs_api_key` | ElevenLabs Scribe v2 API key (tier 1) | — |
 | `deepgram_api_key` | Deepgram Nova-3 API key (tier 2) | — |
 | `transcription_language` | Language code (`multi`, `pl`, `en`, etc.) | `multi` |
+| `system_audio_capture` | `'true'`/`'false'` — enable `AudioCapture.app` (macOS 14.2+, ElevenLabs/Deepgram only) | `'false'` |
+| `save_debug_audio` | `'true'`/`'false'` — save each session's audio to `{userData}/debug-audio/` as WAV or WebM | `'false'` |
 
 #### Live Note-Taking During Transcription
 
@@ -608,6 +684,7 @@ interface NoteTranscription {
 - `'pcm'` → renderer uses `ScriptProcessorNode` at 16kHz; chunks sent as `Int16Array` buffers
 - `'webm'` → renderer uses `MediaRecorder` (WebM/Opus, 250ms); chunks sent as raw binary
 - `'none'` → Swift binary captures mic internally; renderer sends no audio chunks
+- `'system-audio'` → `AudioCapture.app` is active; renderer skips `getUserMedia` entirely; `transcription:audio-chunk` IPC is a no-op
 
 ---
 
@@ -616,8 +693,7 @@ interface NoteTranscription {
 - **Google Calendar / Outlook sync**: OAuth2 pull every 5 min, match attendees to Person entities by email; populate `external_id`, `recurrence_rule`
 - **Meeting prep notifications**: desktop notification 5 min before event; click opens a prep note with AI-generated context from previous meetings with the same attendees
 - **Smart linking**: suggest linking an open note to today's events; auto-link transcript to matching event by time overlap
-- **System audio capture** (loopback): capture all meeting participants' audio, not just the local mic; requires a virtual audio device (e.g., BlackHole or a custom Audio Server Plugin) on macOS; Wizz would bundle a lightweight virtual audio driver installed during onboarding
-- **Speaker diarization + entity matching**: match Deepgram diarized speakers to Person entities using voice profile (built over time) or calendar attendee list; label transcript segments by speaker name
+- **Speaker diarization + entity matching** (deeper): match Deepgram/ElevenLabs diarized speakers to Person entities using voice profile (built over time); current implementation matches by calendar attendee name via Claude Haiku post-processing
 - **Post-meeting action extraction from transcript**: dedicated transcript-aware extraction pass that runs after `postProcessor.ts`; extracts action items with assignees and deadlines, creates rows in `action_items`, links to source note
 
 ### 8. Command Palette & AI Chat
@@ -942,6 +1018,9 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Multi-session transcription history: each start/stop cycle persists to `note_transcriptions`; Transcriptions panel in NoteEditor shows all sessions (newest-first) with timestamps, durations, AI summaries, and expandable raw transcripts
 - [x] Speaker diarization + entity matching: Deepgram word-level `words` array parsed into speaker segments (`[Speaker N]: text`); on stop, calendar event attendee names fetched and passed to `postProcessor.ts`; Claude Haiku maps speaker IDs → attendee names; labels replaced before storing `raw_transcript` and generating merged note
 - [x] Post-meeting action extraction from transcript (action items currently extracted from note body by general pipeline; dedicated transcript-aware extraction pending)
+- [x] System audio capture — `AudioCapture.app` Swift bundle using ScreenCaptureKit SCStream (system output) + AVAudioEngine (mic), separate buffers for each source, windowed-average resampler, 256ms PCM Int16 chunks to ElevenLabs/Deepgram; `system_audio_capture` setting in Settings → AI (ElevenLabs/Deepgram tabs only); returns `audioFormat:'system-audio'` → renderer skips `getUserMedia`; Deepgram opens PCM WebSocket variant (`encoding=linear16&sample_rate=16000`); `stopAudioCapture()` on `cleanupSession()`
+- [x] WebSocket disconnect handling — `handleUnexpectedClose(code)` in `session.ts` called from all three WS close handlers (`openElevenLabsSocket`, `openDeepgramSocket`, `openDeepgramSocketPcm`); saves partial transcript and runs post-processing when server closes connection mid-session
+- [x] Debug audio saving — `save_debug_audio` setting in Settings → Debug tab; when enabled, PCM chunks (or WebM) collected during session and written as WAV/WebM to `{userData}/debug-audio/` on session end; `debug:open-audio-folder` IPC opens folder in Finder
 - [ ] Meeting prep notifications
 - [ ] Calendar sync (Google Calendar)
 
@@ -970,7 +1049,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| macOS audio capture requires virtual driver | High friction at install | Bundle BlackHole or build minimal Audio Server Plugin; clear onboarding UX |
+| System audio capture permission (Screen &amp; System Audio Recording) | User may deny TCC prompt | Graceful error surfaced in NoteEditor; mic-only fallback works without permission; `NSScreenCaptureUsageDescription` declared in `AudioCapture.app` Info.plist and `mac.extendInfo` |
 | Claude API costs at scale (millions of chunks) | Expensive | Use Haiku for NER/re-ranking, Sonnet for synthesis; batch embeddings; cache aggressively |
 | sqlite-vec maturity | Potential bugs | Keep pgvector as fallback path; sqlite-vec is actively maintained by Alex Garcia |
 | STT API cost for heavy users | ~$0.01/min adds up | Three-tier fallback: ElevenLabs → Deepgram → macOS SFSpeechRecognizer (free, offline); users without API keys get working transcription at zero cost |

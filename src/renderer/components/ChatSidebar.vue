@@ -19,7 +19,10 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 marked.setOptions({ breaks: true })
 
 onMounted(() => {
-  nextTick(() => textareaRef.value?.focus())
+  nextTick(() => {
+    textareaRef.value?.focus()
+    messagesEndRef.value?.scrollIntoView({ behavior: 'instant' })
+  })
 })
 
 function scrollToBottom(): void {

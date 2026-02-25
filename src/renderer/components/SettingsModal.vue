@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { X, Eye, EyeOff, BrainCircuit, CalendarDays } from 'lucide-vue-next'
+import { X, Eye, EyeOff, BrainCircuit, CalendarDays, Bug } from 'lucide-vue-next'
 
 const emit = defineEmits<{ close: [] }>()
 
 // ── Category navigation ───────────────────────────────────────────────────────
-type CategoryId = 'ai' | 'calendar'
+type CategoryId = 'ai' | 'calendar' | 'debug'
 const selectedCategory = ref<CategoryId>('ai')
 
 const categories: { id: CategoryId; label: string; icon: typeof BrainCircuit }[] = [
   { id: 'ai', label: 'AI', icon: BrainCircuit },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'debug', label: 'Debug', icon: Bug },
 ]
 
 // ── AI settings ───────────────────────────────────────────────────────────────
@@ -25,6 +26,15 @@ const deepgramKey = ref('')
 const showDeepgramKey = ref(false)
 const transcriptionModel = ref<'elevenlabs' | 'deepgram' | 'macos'>('macos')
 const transcriptionLanguage = ref('multi')
+const systemAudioCapture = ref(false)
+
+// ── Debug settings ────────────────────────────────────────────────────────────
+const saveDebugAudio = ref(false)
+const debugAudioFolder = ref('')
+
+function openDebugAudioFolder(): void {
+  window.api.invoke('debug:open-audio-folder')
+}
 
 // ── Calendar settings ─────────────────────────────────────────────────────────
 const calendarSlotDuration = ref('30')
@@ -78,7 +88,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList] = await Promise.all([
+  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
@@ -86,12 +96,15 @@ onMounted(async () => {
     window.api.invoke('settings:get', { key: 'transcription_model' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'transcription_language' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'elevenlabs_diarize' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'system_audio_capture' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'calendar_slot_duration' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'meeting_note_title_template' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_name_field' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
     window.api.invoke('entity-types:list') as Promise<EntityTypeRow[]>,
+    window.api.invoke('settings:get', { key: 'save_debug_audio' }) as Promise<string | null>,
+    window.api.invoke('debug:get-audio-folder') as Promise<string>,
   ])
   apiKey.value = openai ?? ''
   anthropicKey.value = anthropic ?? ''
@@ -100,10 +113,13 @@ onMounted(async () => {
   transcriptionModel.value = (transcModel as 'elevenlabs' | 'deepgram' | 'macos' | null) ?? 'macos'
   transcriptionLanguage.value = transcLang ?? 'multi'
   elevenLabsDiarize.value = elDiarize === 'true'
+  systemAudioCapture.value = sysAudio === 'true'
   calendarSlotDuration.value = slotDuration ?? '30'
   meetingNoteTitleTemplate.value = noteTitleTemplate ?? '{date} - {title}'
   entityTypes.value = etList ?? []
   attendeeEntityTypeId.value = attTypeId ?? ''
+  saveDebugAudio.value = debugAudio === 'true'
+  debugAudioFolder.value = folder ?? ''
   await nextTick()
   attendeeNameField.value = attNameField ?? ''
   attendeeEmailField.value = attEmailField ?? ''
@@ -116,6 +132,7 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'anthropic_api_key', value: anthropicKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'elevenlabs_api_key', value: elevenLabsKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'elevenlabs_diarize', value: elevenLabsDiarize.value ? 'true' : 'false' }),
+    window.api.invoke('settings:set', { key: 'system_audio_capture', value: systemAudioCapture.value ? 'true' : 'false' }),
     window.api.invoke('settings:set', { key: 'deepgram_api_key', value: deepgramKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'transcription_model', value: transcriptionModel.value }),
     window.api.invoke('settings:set', { key: 'transcription_language', value: transcriptionLanguage.value }),
@@ -124,6 +141,7 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'attendee_entity_type_id', value: attendeeEntityTypeId.value }),
     window.api.invoke('settings:set', { key: 'attendee_name_field', value: attendeeNameField.value }),
     window.api.invoke('settings:set', { key: 'attendee_email_field', value: attendeeEmailField.value }),
+    window.api.invoke('settings:set', { key: 'save_debug_audio', value: saveDebugAudio.value ? 'true' : 'false' }),
   ])
   saving.value = false
   savedFeedback.value = true
@@ -271,6 +289,17 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                   </span>
                 </p>
               </div>
+              <div class="field-group">
+                <label class="field-label">System Audio Capture</label>
+                <label class="toggle-row">
+                  <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
+                  <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
+                </label>
+                <p class="field-hint">
+                  Records both your microphone and what meeting participants say via Core Audio Taps.
+                  Requires Screen &amp; System Audio Recording permission in System Settings.
+                </p>
+              </div>
             </template>
 
             <!-- Deepgram: key + language -->
@@ -316,6 +345,17 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                   <option value="nl">Dutch</option>
                 </select>
               </div>
+              <div class="field-group">
+                <label class="field-label">System Audio Capture</label>
+                <label class="toggle-row">
+                  <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
+                  <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
+                </label>
+                <p class="field-hint">
+                  Records both your microphone and what meeting participants say via Core Audio Taps.
+                  Requires Screen &amp; System Audio Recording permission in System Settings.
+                </p>
+              </div>
             </template>
 
             <!-- macOS: no key, no language (uses system locale) -->
@@ -327,6 +367,28 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                 </p>
               </div>
             </template>
+          </template>
+
+          <!-- Debug -->
+          <template v-if="selectedCategory === 'debug'">
+            <h3 class="pane-title">Debug</h3>
+
+            <div class="field-group">
+              <label class="field-label">Transcription Audio</label>
+              <label class="toggle-row">
+                <input v-model="saveDebugAudio" type="checkbox" class="toggle-checkbox" />
+                <span class="toggle-label">Save audio file after each session</span>
+              </label>
+              <p class="field-hint">
+                When enabled, each transcription session is written to a WAV file (system audio
+                or microphone paths) or WebM file (Deepgram browser capture) when the session ends.
+                Useful for diagnosing transcription quality.
+              </p>
+              <div v-if="debugAudioFolder" class="debug-folder-row">
+                <span class="debug-folder-path">{{ debugAudioFolder }}</span>
+                <button class="open-folder-btn" @click="openDebugAudioFolder">Open</button>
+              </div>
+            </div>
           </template>
 
           <!-- Calendar -->
@@ -748,6 +810,42 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* ── Debug folder row ─────────────────────────────────────────────────────── */
+.debug-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.debug-folder-path {
+  flex: 1;
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--color-text-muted);
+  word-break: break-all;
+}
+
+.open-folder-btn {
+  flex-shrink: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.open-folder-btn:hover {
+  background: color-mix(in srgb, var(--color-text) 10%, transparent);
 }
 
 /* ── Footer ───────────────────────────────────────────────────────────────── */
