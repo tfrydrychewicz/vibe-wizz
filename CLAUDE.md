@@ -17,6 +17,11 @@ npm run build:transcriber  # Compile Swift Transcriber .app bundle → resources
 
 There is no test suite currently. TypeScript strict mode is enforced across both renderer and main/preload processes.
 
+**If `npm`/`node` is not on PATH** (common in non-interactive shells): find the node binary with `find /Users/tfrydrychewicz -name "node" -type f` (expect `~/.nvm/versions/node/<version>/bin/node`), then prepend its bin dir inline:
+```bash
+export PATH="$HOME/.nvm/versions/node/v20.19.1/bin:$PATH" && npm run typecheck
+```
+
 ## Design & Roadmap
 
 Full product design, feature specifications, data model details, and implementation phases/checklist are in [DESIGN.md](DESIGN.md). Read it before implementing new features.

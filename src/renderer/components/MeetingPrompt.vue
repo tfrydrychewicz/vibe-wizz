@@ -85,9 +85,13 @@ let unsubInactive: (() => void) | null = null
 onMounted(() => {
   unsubActive = window.api.on('mic:active', (data: unknown) => {
     const event = data as { deviceName: string | null }
-    deviceName.value = event.deviceName
-    visible.value = true
-    void loadTodayEvents()
+    void window.api.invoke('transcription:status').then((status: unknown) => {
+      const s = status as { isTranscribing: boolean }
+      if (s.isTranscribing) return
+      deviceName.value = event.deviceName
+      visible.value = true
+      void loadTodayEvents()
+    })
   })
   unsubInactive = window.api.on('mic:inactive', () => {
     visible.value = false
