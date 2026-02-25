@@ -12,10 +12,18 @@ import { getDatabase } from '../db/index'
 let _client: Anthropic | null = null
 let _currentKey = ''
 
-// Sonnet: better reasoning quality for interactive synthesis
-const CHAT_MODEL = 'claude-sonnet-4-6'
+// Default chat model — overridable per-request
+const DEFAULT_CHAT_MODEL = 'claude-sonnet-4-6'
 // Haiku: fast and cheap for keyword extraction (query expansion)
 const KEYWORD_MODEL = 'claude-haiku-4-5-20251001'
+
+export const AVAILABLE_MODELS = [
+  { id: 'claude-opus-4-6',          label: 'Opus 4.6' },
+  { id: 'claude-sonnet-4-6',        label: 'Sonnet 4.6' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+] as const
+
+export type ChatModelId = typeof AVAILABLE_MODELS[number]['id']
 
 const MAX_CONTEXT_CHARS = 8000
 const MAX_TOOL_ITERATIONS = 10
@@ -418,6 +426,7 @@ export async function sendChatMessage(
   calendarEvents: CalendarEventContext[] = [],
   actionItems: ActionItemContext[] = [],
   images?: { dataUrl: string; mimeType: string }[],
+  model: ChatModelId = DEFAULT_CHAT_MODEL,
 ): Promise<{ content: string; actions: ExecutedAction[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
@@ -493,7 +502,7 @@ export async function sendChatMessage(
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const response = await _client.messages.create({
-      model: CHAT_MODEL,
+      model,
       max_tokens: 1500,
       system: systemPrompt,
       tools: WIZZ_TOOLS,

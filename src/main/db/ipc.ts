@@ -5,7 +5,7 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, CalendarEventContext, ActionItemContext, ExecutedAction } from '../embedding/chat'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, CalendarEventContext, ActionItemContext, ExecutedAction, type ChatModelId } from '../embedding/chat'
 
 type NoteRow = {
   id: string
@@ -1111,10 +1111,12 @@ export function registerDbIpcHandlers(): void {
         messages,
         searchQuery,
         images,
+        model,
       }: {
         messages: { role: 'user' | 'assistant'; content: string }[]
         searchQuery?: string
         images?: { dataUrl: string; mimeType: string }[]
+        model?: string
       },
     ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }> => {
       const db = getDatabase()
@@ -1291,7 +1293,7 @@ export function registerDbIpcHandlers(): void {
       let content: string
       let executedActions: ExecutedAction[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, model as ChatModelId | undefined)
         content = result.content
         executedActions = result.actions
       } catch (err) {

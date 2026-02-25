@@ -11,11 +11,19 @@ const emit = defineEmits<{
   'open-view': [view: string]
 }>()
 
+const MODELS = [
+  { id: 'claude-opus-4-6',          label: 'Opus 4.6' },
+  { id: 'claude-sonnet-4-6',        label: 'Sonnet 4.6' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+] as const
+type ModelId = typeof MODELS[number]['id']
+
 const inputText = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const attachedImages = ref<AttachedImage[]>([])
 const isDragOver = ref(false)
+const selectedModel = ref<ModelId>('claude-sonnet-4-6')
 
 // Configure marked: no GFM tables/extensions needed beyond basic, keep it safe
 marked.setOptions({ breaks: true })
@@ -110,6 +118,7 @@ async function send(): Promise<void> {
       messages: apiMessages,
       searchQuery: text,
       images: imagesToSend,
+      model: selectedModel.value,
     })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }
 
     messages.value.push({
@@ -245,6 +254,9 @@ function renderMessage(content: string, references: { id: string; title: string 
     <div class="chat-header">
       <span class="chat-header-icon"><MessageSquare :size="14" /></span>
       <span class="chat-header-title">Ask Wizz</span>
+      <select v-model="selectedModel" class="chat-model-select" title="Claude model">
+        <option v-for="m in MODELS" :key="m.id" :value="m.id">{{ m.label }}</option>
+      </select>
       <button
         v-if="messages.length > 0"
         class="chat-action-btn"
@@ -423,6 +435,27 @@ function renderMessage(content: string, references: { id: string; title: string 
 
 .chat-action-btn:hover {
   background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.chat-model-select {
+  appearance: none;
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 6px;
+  height: 22px;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.chat-model-select:hover,
+.chat-model-select:focus {
+  border-color: var(--color-accent);
   color: var(--color-text);
 }
 
