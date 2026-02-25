@@ -22,9 +22,14 @@ const MAX_NOTE_CHARS = 4000
 
 // ── TipTap JSON helpers ────────────────────────────────────────────────────────
 
+interface TipTapMark {
+  type: string
+}
+
 interface TipTapTextNode {
   type: 'text'
   text: string
+  marks?: TipTapMark[]
 }
 
 interface TipTapNode {
@@ -38,19 +43,51 @@ interface TipTapDoc {
   content: TipTapNode[]
 }
 
-function textNode(text: string): TipTapTextNode {
-  return { type: 'text', text }
+/**
+ * Parse inline markdown into TipTap text nodes with marks.
+ * Priority: ***___ bold+italic > **__ bold > *_ italic > `code`
+ */
+function parseInlineMarkdown(text: string): TipTapTextNode[] {
+  const nodes: TipTapTextNode[] = []
+  // Groups: [1]=***  [2]=___  [3]=**  [4]=__  [5]=*  [6]=_  [7]=`code`
+  const pattern = /\*\*\*(.+?)\*\*\*|___(.+?)___|\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push({ type: 'text', text: text.slice(lastIndex, match.index) })
+    }
+
+    if (match[1] !== undefined || match[2] !== undefined) {
+      nodes.push({ type: 'text', text: (match[1] ?? match[2])!, marks: [{ type: 'bold' }, { type: 'italic' }] })
+    } else if (match[3] !== undefined || match[4] !== undefined) {
+      nodes.push({ type: 'text', text: (match[3] ?? match[4])!, marks: [{ type: 'bold' }] })
+    } else if (match[5] !== undefined || match[6] !== undefined) {
+      nodes.push({ type: 'text', text: (match[5] ?? match[6])!, marks: [{ type: 'italic' }] })
+    } else if (match[7] !== undefined) {
+      nodes.push({ type: 'text', text: match[7], marks: [{ type: 'code' }] })
+    }
+
+    lastIndex = match.index + match[0].length
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push({ type: 'text', text: text.slice(lastIndex) })
+  }
+
+  return nodes.length > 0 ? nodes : [{ type: 'text', text }]
 }
 
 function paragraph(text: string): TipTapNode {
-  return { type: 'paragraph', content: [textNode(text)] }
+  return { type: 'paragraph', content: parseInlineMarkdown(text) }
 }
 
 function heading(level: number, text: string): TipTapNode {
   return {
     type: 'heading',
     attrs: { level },
-    content: [textNode(text)],
+    content: parseInlineMarkdown(text),
   }
 }
 
@@ -65,7 +102,8 @@ function buildParagraphNodes(text: string): TipTapNode[] {
 
 /**
  * Parse Claude's markdown output into TipTap nodes.
- * Handles ## headings, - [ ] task lists, - bullet lists, and plain paragraphs.
+ * Handles headings, horizontal rules, blockquotes, fenced code blocks,
+ * task lists, bullet lists, and plain paragraphs.
  */
 export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
   const nodes: TipTapNode[] = []
@@ -88,6 +126,52 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
       continue
     }
 
+    // Horizontal rule: ---, ***, ___  (3+ chars, all same)
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
+      nodes.push({ type: 'horizontalRule' })
+      i++
+      continue
+    }
+
+    // Fenced code block: ```lang … ```
+    if (line.startsWith('```')) {
+      const lang = line.slice(3).trim() || null
+      const codeLines: string[] = []
+      i++
+      while (i < lines.length) {
+        if (lines[i].trim() === '```') { i++; break }
+        codeLines.push(lines[i])
+        i++
+      }
+      nodes.push({
+        type: 'codeBlock',
+        attrs: { language: lang },
+        content: [{ type: 'text', text: codeLines.join('\n') }],
+      })
+      continue
+    }
+
+    // Blockquote: collect consecutive "> " lines
+    if (line.startsWith('> ')) {
+      const quoteLines: string[] = []
+      while (i < lines.length) {
+        const ql = lines[i].trim()
+        if (ql.startsWith('> ')) {
+          quoteLines.push(ql.slice(2))
+          i++
+        } else if (!ql) {
+          i++; break
+        } else {
+          break
+        }
+      }
+      nodes.push({
+        type: 'blockquote',
+        content: quoteLines.map((l) => ({ type: 'paragraph', content: parseInlineMarkdown(l) })),
+      })
+      continue
+    }
+
     // Task list — collect consecutive - [ ] / - [x] items into a taskList node
     if (line.match(/^- \[[ xX]\] /)) {
       const taskItems: TipTapNode[] = []
@@ -98,7 +182,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
           taskItems.push({
             type: 'taskItem',
             attrs: { checked: taskMatch[1].toLowerCase() === 'x' },
-            content: [{ type: 'paragraph', content: [textNode(taskMatch[2])] }],
+            content: [{ type: 'paragraph', content: parseInlineMarkdown(taskMatch[2]) }],
           })
           i++
         } else if (!tl) {
@@ -120,7 +204,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
         if (bl.startsWith('- ') || bl.startsWith('* ')) {
           items.push({
             type: 'listItem',
-            content: [{ type: 'paragraph', content: [textNode(bl.slice(2))] }],
+            content: [{ type: 'paragraph', content: parseInlineMarkdown(bl.slice(2)) }],
           })
           i++
         } else if (!bl) {
@@ -139,7 +223,12 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
     while (i < lines.length) {
       const pl = lines[i].trim()
       if (!pl) { i++; break }
-      if (pl.match(/^#{1,6}\s/) || pl.startsWith('- ') || pl.startsWith('* ')) break
+      if (
+        pl.match(/^#{1,6}\s/) ||
+        pl.startsWith('- ') || pl.startsWith('* ') ||
+        pl.startsWith('> ') || pl.startsWith('```') ||
+        /^(-{3,}|\*{3,}|_{3,})$/.test(pl)
+      ) break
       paraLines.push(pl)
       i++
     }
