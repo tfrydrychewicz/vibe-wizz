@@ -65,6 +65,7 @@ import {
   Check, ExternalLink, Trash2,
   Palette,
   Mic, MicOff, ChevronDown as ChevronDownIcon,
+  ScrollText, X,
 } from 'lucide-vue-next'
 import { pendingAutoStartNoteId } from '../stores/transcriptionStore'
 
@@ -153,6 +154,15 @@ interface StoredTranscription {
 
 const storedTranscriptions = ref<StoredTranscription[]>([])
 const expandedTranscriptIds = ref<string[]>([])
+const showTranscriptPanel = ref(false)
+
+/** Last ~120 chars of the live stream — shown in the status bar while recording. */
+const lastTranscriptLine = computed(() => {
+  if (transcriptPartial.value) return transcriptPartial.value.slice(-120)
+  const full = transcriptText.value.trim()
+  if (!full) return ''
+  return full.length > 120 ? '…' + full.slice(-120) : full
+})
 
 async function loadTranscriptions(): Promise<void> {
   storedTranscriptions.value = []
@@ -276,11 +286,11 @@ const unsubTranscriptPartial = window.api.on('transcription:partial', (...args: 
 const unsubTranscriptComplete = window.api.on('transcription:complete', (...args: unknown[]) => {
   const { noteId } = args[0] as { noteId: string }
   if (noteId === props.noteId) {
-    // Clear the live stream display; the session will appear in storedTranscriptions
     transcriptText.value = ''
     transcriptPartial.value = ''
-    // Expand the incoming session when it loads
+    // Expand the incoming session when it loads; open the side panel
     expandedTranscriptIds.value = []
+    showTranscriptPanel.value = true
     void loadNote(props.noteId)  // also calls loadTranscriptions() at the end
   }
 })
@@ -1258,47 +1268,56 @@ onBeforeUnmount(() => {
           <Mic v-else :size="12" />
           {{ isTranscribing ? 'Stop' : 'Start Transcription' }}
         </button>
-      </div>
-    </div>
-
-    <div class="note-body">
-      <EditorContent :editor="editor" />
-    </div>
-
-    <!-- Transcriptions panel (live + all stored sessions) -->
-    <div
-      v-if="linkedCalendarEvent && (isTranscribing || storedTranscriptions.length > 0)"
-      class="transcript-panel"
-    >
-      <div class="transcript-panel-header">
-        <span class="transcript-panel-label">
-          <span v-if="isTranscribing" class="transcript-recording-dot" />
-          Transcriptions
-        </span>
-      </div>
-
-      <!-- Live session (current recording) -->
-      <div v-if="isTranscribing" class="transcript-session transcript-session--live">
-        <div class="transcript-session-body">
-          <span v-if="!transcriptText && !transcriptPartial" class="transcript-waiting">Listening…</span>
-          <span v-else>{{ transcriptText }}<span v-if="transcriptPartial" class="transcript-partial"> {{ transcriptPartial }}</span></span>
-        </div>
-      </div>
-
-      <!-- Stored sessions (most recent first) -->
-      <div v-for="t in storedTranscriptions" :key="t.id" class="transcript-session">
-        <button class="transcript-session-toggle" @click="toggleTranscript(t.id)">
-          <span class="transcript-session-time">{{ formatTranscriptTime(t.started_at, t.ended_at) }}</span>
-          <ChevronDownIcon :size="11" :class="{ 'rotate-180': expandedTranscriptIds.includes(t.id) }" />
+        <button
+          class="transcript-toggle-btn"
+          :class="{ active: showTranscriptPanel }"
+          title="Transcript history"
+          @click="showTranscriptPanel = !showTranscriptPanel"
+        >
+          <ScrollText :size="12" />
         </button>
-        <div v-if="expandedTranscriptIds.includes(t.id)" class="transcript-session-content">
-          <div v-if="t.summary" class="transcript-summary">{{ t.summary }}</div>
-          <details v-if="t.raw_transcript" class="transcript-raw">
-            <summary class="transcript-raw-label">Raw transcript</summary>
-            <div class="transcript-raw-text">{{ t.raw_transcript }}</div>
-          </details>
+      </div>
+    </div>
+
+    <!-- Editor + optional transcript side panel -->
+    <div class="note-content-row">
+      <div class="note-body">
+        <EditorContent :editor="editor" />
+      </div>
+
+      <!-- Transcript side panel (opened via toggle button in meeting header) -->
+      <div v-if="showTranscriptPanel && linkedCalendarEvent" class="transcript-side-panel">
+        <div class="transcript-sp-header">
+          <span class="transcript-sp-title">Transcripts</span>
+          <button class="transcript-sp-close" title="Close" @click="showTranscriptPanel = false">
+            <X :size="12" />
+          </button>
+        </div>
+        <div v-if="storedTranscriptions.length === 0" class="transcript-sp-empty">
+          No transcripts yet
+        </div>
+        <div v-for="t in storedTranscriptions" :key="t.id" class="transcript-session">
+          <button class="transcript-session-toggle" @click="toggleTranscript(t.id)">
+            <span class="transcript-session-time">{{ formatTranscriptTime(t.started_at, t.ended_at) }}</span>
+            <ChevronDownIcon :size="11" :class="{ 'rotate-180': expandedTranscriptIds.includes(t.id) }" />
+          </button>
+          <div v-if="expandedTranscriptIds.includes(t.id)" class="transcript-session-content">
+            <div v-if="t.summary" class="transcript-summary">{{ t.summary }}</div>
+            <details v-if="t.raw_transcript" class="transcript-raw">
+              <summary class="transcript-raw-label">Raw transcript</summary>
+              <div class="transcript-raw-text">{{ t.raw_transcript }}</div>
+            </details>
+          </div>
         </div>
       </div>
+    </div>
+
+    <!-- Live transcription status bar (only while recording is active) -->
+    <div v-if="isTranscribing" class="transcript-live-bar">
+      <span class="transcript-recording-dot" />
+      <span class="transcript-live-label">Recording</span>
+      <span v-if="lastTranscriptLine" class="transcript-live-text">{{ lastTranscriptLine }}</span>
+      <span v-else class="transcript-live-waiting">Listening…</span>
     </div>
 
     <TrashedMentionPopup
