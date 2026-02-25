@@ -380,19 +380,156 @@ Every action item links back to its source note. This is critical — you can al
 
 ### 7. Calendar Integration
 
-**Sync**: OAuth2 with Google Calendar and/or Microsoft Graph (Outlook).
-- Pull events every 5 minutes
-- Store in `calendar_events` table
-- Match attendees to Person entities (by email)
+#### 7a. Calendar View (`CalendarView.vue`) — Implemented
 
-**Smart Linking**:
-- When creating a note, suggest linking to today's/recent calendar events
-- When a transcript is generated, auto-link to the matching event
-- Before a meeting, show a "prep" panel: previous notes from meetings with same attendees, open action items for attendees, relevant project context
+**Four view modes**, selectable from the toolbar and persisted to settings (`calendar_view_mode`):
 
-**Meeting Prep** (triggered 5 min before event, optional):
-- Desktop notification: "Meeting with @Sarah in 5 min"
-- Click to open a prep note with AI-generated context from previous interactions
+| Mode | Columns | Range |
+|------|---------|-------|
+| Day | 1 | Single date |
+| Work Week | 5 | Mon–Fri of current week |
+| Week | 7 | Sun–Sat of current week |
+| Month | 7×N | Full calendar month grid |
+
+**Time grid** (Day / Work Week / Week):
+- Spans 7am–9pm (14 hours)
+- Hour height is responsive: fills the scroll container, minimum 56px/hr
+- Left gutter shows hour labels (7am…8pm in 12h format)
+- Each day column is a separate scrollable vertical lane
+- Today's column header shows the day number highlighted with a filled blue circle
+
+**Interactions in time-grid views:**
+- **Drag-to-create**: Click and drag on an empty slot → blue dashed preview block grows as you drag → on mouse-up opens `MeetingModal` in create mode with start/end pre-filled, snapped to `calendar_slot_duration` increments
+- **Click event → edit**: A stationary click (no drag) on an event block opens `MeetingModal` in edit mode
+- **Drag-to-move**: Click and hold on an event block → the original fades to 35% opacity, a dashed ghost follows the cursor across days and times → on mouse-up the event is updated in place (optimistic) and `calendar-events:update` is called
+- **Resize**: Bottom edge of every event block has a 6px resize handle (`ns-resize` cursor) → drag to stretch/shrink the end time → updated optimistically and persisted on mouse-up
+- **Slot duration**: Snap granularity loaded from settings (`calendar_slot_duration`, default 30 min); all drag operations snap to this increment
+
+**Month view:**
+- 7-column grid; rows auto-sized to `minmax(90px, 1fr)`
+- Days outside the current month shown at 35% opacity
+- Each day cell shows event chips (title + start time); click chip → edit modal; click empty cell → create modal pre-filled to 9:00–10:00am
+- Today's date number highlighted with filled blue circle
+
+**Toolbar:**
+- ← / → navigation (previous/next day, week, or month depending on mode)
+- "Today" button — jumps `currentDate` to now without changing view mode
+- View mode switcher (segmented button group)
+- "New" button — opens create modal with current timestamp
+
+**Data fetching:** `calendar-events:list` called whenever `rangeStart`/`rangeEnd` computed values change (i.e., on navigation or mode switch). Local event list updated optimistically for move/resize; modal-saved events are upserted without a full reload.
+
+---
+
+#### 7b. Meeting Modal (`MeetingModal.vue`) — Implemented
+
+Used for both creating and editing calendar events. Opened from `CalendarView` and (planned) other entry points.
+
+**Fields:**
+- **Title** — free text input, required; `Enter` submits
+- **Date** — `<input type="date">`, YYYY-MM-DD
+- **Start / End time** — `<input type="time">`, HH:MM; combined with date via `buildISO()` to produce a local-timezone ISO 8601 string (no `Z` suffix — stored as local time)
+- **Attendees** — two modes depending on settings:
+  - *Entity search mode* (when `attendee_entity_type_id` + `attendee_name_field` + `attendee_email_field` are all set in Settings): autocomplete searches entities of the configured type; selecting an entity reads `nameField` and `emailField` from the entity's field JSON; stored with `entity_id`
+  - *Free-form mode* (default): separate Name + Email inputs, added on Enter or `+` button
+  - Attendee chips show name (bold) + email; × button removes; stored as JSON array in `calendar_events.attendees`
+
+**Meeting Notes section** (edit mode only — hidden in create mode):
+- If `linked_note_id` is set: shows the note title as a clickable link (opens the note, all 3 open modes supported via click modifiers) + an unlink `×` button
+- If no linked note: two options side by side:
+  1. **"Create Meeting Notes"** dashed button — calls `notes:create` with title generated from `meeting_note_title_template` setting (default `{date} - {title}`, where `{date}` = long locale date string and `{title}` = event title), then calls `calendar-events:update` to link it, then emits `open-note` to open it in the active pane
+  2. **"or attach existing note…"** search input — FTS search via `notes:search`; selecting a result links it via `calendar-events:update` and persists immediately
+
+**Save:** `calendar-events:create` (create mode) or `calendar-events:update` (edit mode) with all fields. Attendees serialised as JSON. Error shown inline below the form.
+
+**Delete:** Two-step confirmation (Delete button → "Delete this meeting? Yes / Cancel"). Calls `calendar-events:delete`.
+
+**Settings that affect MeetingModal:**
+
+| Setting key | Purpose | Fallback |
+|-------------|---------|---------|
+| `attendee_entity_type_id` | Entity type ID for attendee search | free-form mode |
+| `attendee_name_field` | Field name for attendee name (`__name__` = entity primary name) | entity.name |
+| `attendee_email_field` | Field name for attendee email | empty |
+| `meeting_note_title_template` | Template for auto-generated note title | `{date} - {title}` |
+
+---
+
+#### 7c. Meeting Context Header in NoteEditor — Implemented
+
+When a note is opened that has a calendar event linked to it (`calendar-events:get-by-note`), a non-editable header bar appears above the editor body showing:
+- Event title
+- Formatted time range (e.g. "Mon, Feb 25 · 10:00am – 11:00am")
+- Attendee chips (parsed from the event's JSON attendees array)
+
+This gives the note authoring context without needing to open the calendar.
+
+---
+
+#### 7d. Meeting Detection Prompt (`MeetingPrompt.vue` + `meetingWindow.ts`) — Implemented
+
+A frameless always-on-top `BrowserWindow` (320×190px, `floating` level so it appears above fullscreen apps) managed by `meetingWindow.ts`.
+
+**Trigger flow:**
+1. Swift `MicMonitor` binary polls CoreAudio every 1s, emits JSON on stdout
+2. `monitor.ts` parses events and fires `micEvents`
+3. `meetingWindow.ts` listens: on `mic:active` starts a **5-second debounce** before showing the prompt (avoids false positives from brief mic activations); resets if mic goes inactive
+4. If `auto_transcribe_meetings = 'true'` in settings, the prompt is skipped and transcription is triggered directly (currently a no-op until Deepgram integration)
+5. On `mic:inactive` the prompt is hidden with a 250ms animation delay
+
+**Prompt UI:**
+- "Meeting detected" header with red mic icon + close button
+- Microphone device name (or "Microphone active" if unknown)
+- **Meeting dropdown** (`<select>`): fetches today's calendar events via `calendar-events:list` on each `mic:active` event; lists events as "Title (9:00am–10:00am)"; "+ New Meeting" option always at the bottom
+- **Auto-selection**: the dropdown auto-selects whichever event is **currently in progress** (now ≥ start && now ≤ end) or **starts within the next 10 minutes**; falls back to "+ New Meeting" if none qualify
+- Action buttons: **Transcribe** · **Always transcribe** · **Skip**
+
+**Actions:**
+- **Skip / close ×**: sends `meeting-prompt:skip` IPC → `dismissed = true`, window hides; dismissed flag resets on next `mic:active`
+- **Transcribe**: if "+ New Meeting" is selected, creates a `calendar-events:create` entry titled "New Meeting" (start = now, end = now + 1hr) before firing `meeting-prompt:transcribe` IPC (transcription is a no-op until Phase 3.2)
+- **Always transcribe**: same as Transcribe but also writes `auto_transcribe_meetings = 'true'` to settings; future mic activations skip the prompt entirely
+- **Dismissed state**: once dismissed in a mic session (any of the three actions), the prompt won't reappear until the mic goes inactive and becomes active again
+
+---
+
+#### 7e. IPC Reference — Calendar
+
+| Channel | Direction | Payload | Returns |
+|---------|-----------|---------|---------|
+| `calendar-events:list` | invoke | `{ start_at: ISO, end_at: ISO }` | `CalendarEvent[]` with `linked_note_title` via LEFT JOIN, ordered by `start_at` |
+| `calendar-events:create` | invoke | `{ title, start_at, end_at, attendees?, linked_note_id? }` | full `CalendarEvent` row |
+| `calendar-events:update` | invoke | `{ id, title?, start_at?, end_at?, attendees?, linked_note_id? }` | `{ ok }` (dynamic SET) |
+| `calendar-events:delete` | invoke | `{ id }` | `{ ok }` (hard-delete) |
+| `calendar-events:get-by-note` | invoke | `{ note_id }` | `CalendarEvent & { linked_note_title }` \| null |
+| `meeting-prompt:skip` | send | — | hides prompt, sets dismissed |
+| `meeting-prompt:transcribe` | send | — | hides prompt, triggers transcription (Phase 3.2) |
+| `meeting-prompt:always-transcribe` | send | — | saves setting, hides prompt, triggers transcription |
+
+**`CalendarEvent` type** (exported from `MeetingModal.vue`):
+```ts
+interface CalendarEvent {
+  id: number                    // INTEGER PRIMARY KEY (not ULID)
+  external_id: string | null    // future: Google/Outlook event ID
+  title: string
+  start_at: string              // ISO 8601 local time (no Z)
+  end_at: string
+  attendees: string             // raw JSON string → AttendeeItem[]
+  linked_note_id: string | null
+  transcript_note_id: string | null
+  recurrence_rule: string | null
+  synced_at: string
+  linked_note_title: string | null  // JOIN field, not in DB column
+}
+```
+
+---
+
+#### 7f. Planned (Future Phases)
+
+- **Google Calendar / Outlook sync**: OAuth2 pull every 5 min, match attendees to Person entities by email; populate `external_id`, `recurrence_rule`
+- **Meeting prep notifications**: desktop notification 5 min before event; click opens a prep note with AI-generated context from previous meetings with the same attendees
+- **Smart linking**: suggest linking an open note to today's events; auto-link transcript to matching event by time overlap
+- **Deepgram streaming transcription** (Phase 3.2): on Transcribe, capture system audio + mic via `desktopCapturer`, stream to Deepgram Nova-3 WebSocket; show real-time partial transcript in floating overlay; on meeting end, create `transcript_note_id` note, run speaker diarization + entity matching, generate structured summary + action items
 
 ### 8. Command Palette & AI Chat
 
@@ -518,6 +655,19 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Meetings + Meetings CRUD + Displaying meetings in the calendar
     - Meeting fields are editable
     - Calendar supports different views: single day, working days in the week, week, month
+    - Drag-to-create, drag-to-move, resize events in time-grid views
+    - Slot duration configurable in Settings; view mode persisted across sessions
+- [x] Meeting detection prompt with today's meeting selector
+    - Auto-selects the meeting in progress or starting within 10 minutes
+    - "New Meeting" option creates a calendar event and links it to the transcription session
+    - "Always transcribe" writes setting to skip the prompt on future mic activations
+- [x] Meeting Notes — create or attach a note to a calendar event
+    - "Create Meeting Notes" generates a note titled from `meeting_note_title_template` and links it
+    - "Attach existing note" FTS search input links any existing note
+    - Linked note shown as clickable chip in MeetingModal (all 3 open modes)
+    - NoteEditor shows meeting context header (title, time, attendees) for notes linked to a calendar event
+- [x] Attendee entity configuration in Settings
+    - Choose entity type, name field, and email field for attendee autocomplete in MeetingModal
 - [ ] Deepgram streaming transcription
 - [ ] Transcript → structured note pipeline
 - [ ] Speaker diarization + entity matching
