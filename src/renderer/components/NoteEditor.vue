@@ -155,6 +155,7 @@ interface StoredTranscription {
 const storedTranscriptions = ref<StoredTranscription[]>([])
 const expandedTranscriptIds = ref<string[]>([])
 const showTranscriptPanel = ref(false)
+const pendingDeleteTranscriptId = ref<string | null>(null)
 
 /** Last ~120 chars of the live stream — shown in the status bar while recording. */
 const lastTranscriptLine = computed(() => {
@@ -181,6 +182,19 @@ function toggleTranscript(id: string): void {
   } else {
     expandedTranscriptIds.value.push(id)
   }
+}
+
+async function deleteTranscription(id: string): Promise<void> {
+  if (pendingDeleteTranscriptId.value !== id) {
+    // First click: arm the confirm state
+    pendingDeleteTranscriptId.value = id
+    return
+  }
+  // Second click: confirmed — delete
+  pendingDeleteTranscriptId.value = null
+  await window.api.invoke('transcriptions:delete', { id })
+  storedTranscriptions.value = storedTranscriptions.value.filter((t) => t.id !== id)
+  expandedTranscriptIds.value = expandedTranscriptIds.value.filter((x) => x !== id)
 }
 
 function formatTranscriptTime(startedAt: string, endedAt: string | null): string {
@@ -1297,16 +1311,23 @@ onBeforeUnmount(() => {
           No transcripts yet
         </div>
         <div v-for="t in storedTranscriptions" :key="t.id" class="transcript-session">
-          <button class="transcript-session-toggle" @click="toggleTranscript(t.id)">
-            <span class="transcript-session-time">{{ formatTranscriptTime(t.started_at, t.ended_at) }}</span>
-            <ChevronDownIcon :size="11" :class="{ 'rotate-180': expandedTranscriptIds.includes(t.id) }" />
-          </button>
+          <div class="transcript-session-header">
+            <button class="transcript-session-toggle" @click="toggleTranscript(t.id)">
+              <span class="transcript-session-time">{{ formatTranscriptTime(t.started_at, t.ended_at) }}</span>
+              <ChevronDownIcon :size="11" :class="{ 'rotate-180': expandedTranscriptIds.includes(t.id) }" />
+            </button>
+            <button
+              class="transcript-delete-btn"
+              :class="{ confirm: pendingDeleteTranscriptId === t.id }"
+              :title="pendingDeleteTranscriptId === t.id ? 'Click again to confirm' : 'Delete transcript'"
+              @click.stop="deleteTranscription(t.id)"
+              @blur="pendingDeleteTranscriptId = pendingDeleteTranscriptId === t.id ? null : pendingDeleteTranscriptId"
+            >
+              {{ pendingDeleteTranscriptId === t.id ? 'Delete?' : '×' }}
+            </button>
+          </div>
           <div v-if="expandedTranscriptIds.includes(t.id)" class="transcript-session-content">
-            <div v-if="t.summary" class="transcript-summary">{{ t.summary }}</div>
-            <details v-if="t.raw_transcript" class="transcript-raw">
-              <summary class="transcript-raw-label">Raw transcript</summary>
-              <div class="transcript-raw-text">{{ t.raw_transcript }}</div>
-            </details>
+            <div v-if="t.raw_transcript" class="transcript-raw-text">{{ t.raw_transcript }}</div>
           </div>
         </div>
       </div>

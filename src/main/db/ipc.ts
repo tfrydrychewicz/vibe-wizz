@@ -1440,4 +1440,11 @@ export function registerDbIpcHandlers(): void {
       )
       .all(noteId)
   })
+
+  /** transcriptions:delete — hard-delete a single transcription session row. */
+  ipcMain.handle('transcriptions:delete', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    db.prepare('DELETE FROM note_transcriptions WHERE id = ?').run(id)
+    return { ok: true }
+  })
 }
