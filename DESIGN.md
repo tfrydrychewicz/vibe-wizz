@@ -1031,7 +1031,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Image attachments in AI chat — paste from clipboard or drag-and-drop onto sidebar; thumbnail bar above input; images forwarded as Anthropic Vision base64 content blocks on the last user message; thumbnails shown in conversation history
 - [x] Daily Brief generation
 - [x] Cluster summaries (L3) + nightly batch — K-means++ on L2 summary embeddings (K=√(N/2), 2–20), Claude Haiku cluster theme summaries, stored in `note_chunks(layer=3)` + `cluster_embeddings`; `scheduler.ts` runs at startup if >23h since last run; semantic search upgraded with +0.05 cluster boost on top of FTS5+L1 RRF
-- [ ] Graph RAG (note_relations)
+- [x] Graph RAG (note_relations) — after FTS5 seed retrieval in `chat:send`, walks 1-hop in the knowledge graph: bidirectional `[[wiki-link]]` neighbors via `note_relations` (up to 5, ranked by overlap count) + `@entity` co-occurrence neighbors via `entity_mentions` (up to 5); indexes added on `note_relations(source_note_id/target_note_id)`; system prompt updated to tell Claude context includes graph-connected notes; backlinks footer in `NoteEditor.vue` shows count of incoming `[[links]]` and expands to a clickable list (all 3 open modes) via new `notes:get-backlinks` IPC
 - [ ] Follow-up intelligence
 - [ ] Proactive related notes sidebar
 - [ ] Query expansion + re-ranking
