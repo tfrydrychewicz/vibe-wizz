@@ -67,7 +67,11 @@ import {
   Mic, MicOff, ChevronDown as ChevronDownIcon,
   ScrollText, X,
 } from 'lucide-vue-next'
-import { pendingAutoStartNoteId } from '../stores/transcriptionStore'
+import {
+  pendingAutoStartNoteId,
+  activeTranscriptionNoteId,
+  activeAudio,
+} from '../stores/transcriptionStore'
 
 const props = defineProps<{ noteId: string }>()
 const emit = defineEmits<{
@@ -134,12 +138,14 @@ const isTranscribing = ref(false)
 const transcriptText = ref('')      // finalized partial transcripts accumulated
 const transcriptPartial = ref('')   // current non-final partial (shown while streaming)
 const transcriptionError = ref<string | null>(null)
-let mediaRecorder: MediaRecorder | null = null
-let mediaStream: MediaStream | null = null
-// ElevenLabs path: PCM 16kHz capture via ScriptProcessorNode
-let audioContext: AudioContext | null = null
-// eslint-disable-next-line @typescript-eslint/no-deprecated
-let scriptProcessor: ScriptProcessorNode | null = null
+
+// Audio capture objects live in activeAudio (module scope) so they persist
+// across NoteEditor unmounts — see transcriptionStore.ts.
+
+/** True when a different note is currently being transcribed. */
+const isAnotherNoteTranscribing = computed(
+  () => activeTranscriptionNoteId.value !== null && activeTranscriptionNoteId.value !== props.noteId,
+)
 
 // ── Stored transcription sessions ─────────────────────────────────────────────
 
@@ -209,6 +215,11 @@ function formatTranscriptTime(startedAt: string, endedAt: string | null): string
 
 async function startTranscription(): Promise<void> {
   if (!linkedCalendarEvent.value) return
+  // Block if a different note is already being transcribed
+  if (isAnotherNoteTranscribing.value) {
+    transcriptionError.value = 'Another note is currently being transcribed'
+    return
+  }
   transcriptionError.value = null
 
   const result = (await window.api.invoke('transcription:start', {
@@ -221,6 +232,9 @@ async function startTranscription(): Promise<void> {
     return
   }
 
+  activeTranscriptionNoteId.value = props.noteId
+  activeAudio.format = result.audioFormat ?? null
+
   // audioFormat:'none' = Swift captures directly; 'system-audio' = AudioCapture.app handles it
   if (result.audioFormat === 'none' || result.audioFormat === 'system-audio') {
     isTranscribing.value = true
@@ -230,17 +244,17 @@ async function startTranscription(): Promise<void> {
   }
 
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    activeAudio.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
     if (result.audioFormat === 'pcm') {
       // ElevenLabs: capture raw PCM Int16 at 16kHz via ScriptProcessorNode
-      audioContext = new AudioContext({ sampleRate: 16000 })
-      const source = audioContext.createMediaStreamSource(mediaStream)
+      activeAudio.context = new AudioContext({ sampleRate: 16000 })
+      const source = activeAudio.context.createMediaStreamSource(activeAudio.mediaStream)
       // eslint-disable-next-line @typescript-eslint/no-deprecated
-      scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1)
-      source.connect(scriptProcessor)
-      scriptProcessor.connect(audioContext.destination)
-      scriptProcessor.onaudioprocess = (e) => {
+      activeAudio.scriptProcessor = activeAudio.context.createScriptProcessor(4096, 1, 1)
+      source.connect(activeAudio.scriptProcessor)
+      activeAudio.scriptProcessor.connect(activeAudio.context.destination)
+      activeAudio.scriptProcessor.onaudioprocess = (e) => {
         const f32 = e.inputBuffer.getChannelData(0)
         const i16 = new Int16Array(f32.length)
         for (let i = 0; i < f32.length; i++) {
@@ -253,13 +267,13 @@ async function startTranscription(): Promise<void> {
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm'
-      mediaRecorder = new MediaRecorder(mediaStream, { mimeType })
-      mediaRecorder.ondataavailable = async (e: BlobEvent) => {
+      activeAudio.mediaRecorder = new MediaRecorder(activeAudio.mediaStream, { mimeType })
+      activeAudio.mediaRecorder.ondataavailable = async (e: BlobEvent) => {
         if (e.data.size === 0) return
         const buf = await e.data.arrayBuffer()
         window.api.send('transcription:audio-chunk', buf)
       }
-      mediaRecorder.start(250) // 250ms chunks
+      activeAudio.mediaRecorder.start(250) // 250ms chunks
     }
 
     isTranscribing.value = true
@@ -268,21 +282,25 @@ async function startTranscription(): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Microphone access denied'
     transcriptionError.value = msg
+    activeTranscriptionNoteId.value = null
+    activeAudio.format = null
     void window.api.invoke('transcription:stop')
   }
 }
 
 async function stopTranscription(): Promise<void> {
   // ElevenLabs path cleanup
-  scriptProcessor?.disconnect()
-  scriptProcessor = null
-  await audioContext?.close()
-  audioContext = null
+  activeAudio.scriptProcessor?.disconnect()
+  activeAudio.scriptProcessor = null
+  await activeAudio.context?.close()
+  activeAudio.context = null
   // Deepgram path cleanup
-  mediaRecorder?.stop()
-  mediaStream?.getTracks().forEach((t) => t.stop())
-  mediaRecorder = null
-  mediaStream = null
+  activeAudio.mediaRecorder?.stop()
+  activeAudio.mediaStream?.getTracks().forEach((t) => t.stop())
+  activeAudio.mediaRecorder = null
+  activeAudio.mediaStream = null
+  activeAudio.format = null
+  activeTranscriptionNoteId.value = null
   isTranscribing.value = false
   await window.api.invoke('transcription:stop')
 }
@@ -302,6 +320,8 @@ const unsubTranscriptComplete = window.api.on('transcription:complete', (...args
   if (noteId === props.noteId) {
     transcriptText.value = ''
     transcriptPartial.value = ''
+    activeTranscriptionNoteId.value = null
+    activeAudio.format = null
     // Expand the incoming session when it loads; open the side panel
     expandedTranscriptIds.value = []
     showTranscriptPanel.value = true
@@ -313,6 +333,10 @@ const unsubTranscriptError = window.api.on('transcription:error', (...args: unkn
   const { message } = args[0] as { message: string }
   transcriptionError.value = message
   isTranscribing.value = false
+  if (activeTranscriptionNoteId.value === props.noteId) {
+    activeTranscriptionNoteId.value = null
+    activeAudio.format = null
+  }
 })
 
 // Loading state while /action slash command calls Claude to extract actions
@@ -1015,6 +1039,20 @@ watch(
       }
     }
     await loadNote(newId)
+    // Reconnect to an ongoing transcription session when returning to this note
+    if (activeTranscriptionNoteId.value === newId) {
+      const status = (await window.api.invoke('transcription:status')) as {
+        isTranscribing: boolean
+        noteId: string | null
+      }
+      if (status.isTranscribing && status.noteId === newId) {
+        isTranscribing.value = true
+      } else {
+        // Session ended while we were away — clean up store
+        activeTranscriptionNoteId.value = null
+        activeAudio.format = null
+      }
+    }
     // Auto-start transcription if triggered via meeting prompt
     if (pendingAutoStartNoteId.value === newId) {
       pendingAutoStartNoteId.value = null
@@ -1035,15 +1073,9 @@ onBeforeUnmount(() => {
   unsubTranscriptPartial()
   unsubTranscriptComplete()
   unsubTranscriptError()
-  if (isTranscribing.value) {
-    scriptProcessor?.disconnect()
-    scriptProcessor = null
-    void audioContext?.close()
-    audioContext = null
-    mediaRecorder?.stop()
-    mediaStream?.getTracks().forEach((t) => t.stop())
-    void window.api.invoke('transcription:stop')
-  }
+  // If transcription is active we intentionally do NOT stop it here.
+  // Audio objects live in activeAudio (module scope) and keep streaming to the
+  // main-process WebSocket while the user is on another note or view.
   if (saveTimer) {
     clearTimeout(saveTimer)
     flushSave()
@@ -1275,7 +1307,8 @@ onBeforeUnmount(() => {
         <button
           class="transcription-btn"
           :class="{ recording: isTranscribing }"
-          :title="isTranscribing ? 'Stop recording' : 'Start transcription'"
+          :disabled="isAnotherNoteTranscribing"
+          :title="isTranscribing ? 'Stop recording' : isAnotherNoteTranscribing ? 'Another note is currently being transcribed' : 'Start transcription'"
           @click="isTranscribing ? stopTranscription() : startTranscription()"
         >
           <MicOff v-if="isTranscribing" :size="12" />

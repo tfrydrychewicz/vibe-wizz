@@ -2,6 +2,7 @@
 import { X } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
 import type { Tab, ContentPane } from '../stores/tabStore'
+import { activeTranscriptionNoteId } from '../stores/transcriptionStore'
 
 const props = defineProps<{
   tabs: Tab[]
@@ -15,6 +16,13 @@ const emit = defineEmits<{
 
 function activePane(tab: Tab): ContentPane | undefined {
   return tab.panes.find((p) => p.id === tab.activePaneId) ?? tab.panes[0]
+}
+
+function isTranscribingTab(tab: Tab): boolean {
+  return (
+    activeTranscriptionNoteId.value !== null &&
+    tab.panes.some((p) => p.contentId === activeTranscriptionNoteId.value)
+  )
 }
 </script>
 
@@ -34,7 +42,9 @@ function activePane(tab: Tab): ContentPane | undefined {
           :color="activePane(tab)?.color ?? undefined"
         />
       </span>
-      <span class="tab-label">{{ activePane(tab)?.title || 'Untitled' }}</span>
+      <span class="tab-label">
+        <span v-if="isTranscribingTab(tab)" class="recording-dot" />{{ activePane(tab)?.title || 'Untitled' }}
+      </span>
       <span class="tab-close" @click.stop="emit('close-tab', tab.id)">
         <X :size="11" />
       </span>
@@ -106,6 +116,25 @@ function activePane(tab: Tab): ContentPane | undefined {
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.recording-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  flex-shrink: 0;
+  margin-right: 5px;
+  animation: rec-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .tab-close {

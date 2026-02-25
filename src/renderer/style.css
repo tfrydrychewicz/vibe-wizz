@@ -682,6 +682,12 @@ body {
   border-color: var(--color-accent);
 }
 
+.transcription-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
 .transcription-btn.recording {
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.4);
