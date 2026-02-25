@@ -1464,4 +1464,88 @@ export function registerDbIpcHandlers(): void {
     db.prepare('DELETE FROM note_transcriptions WHERE id = ?').run(id)
     return { ok: true }
   })
+
+  // ─── Daily Briefs ─────────────────────────────────────────────────────────────
+
+  type DailyBriefRow = {
+    id: number
+    date: string
+    content: string
+    calendar_snapshot: string
+    pending_actions_snapshot: string
+    generated_at: string
+    acknowledged_at: string | null
+  }
+
+  /**
+   * daily-briefs:get — returns the stored brief for a date (YYYY-MM-DD), or null.
+   * Does NOT auto-generate — caller triggers generation explicitly.
+   */
+  ipcMain.handle('daily-briefs:get', (_event, { date }: { date: string }) => {
+    const db = getDatabase()
+    return (db.prepare('SELECT * FROM daily_briefs WHERE date = ?').get(date) as DailyBriefRow | undefined) ?? null
+  })
+
+  /**
+   * daily-briefs:generate — (re)generates the daily brief for a date using Claude Sonnet.
+   * Persists the result and returns the full row.
+   * Returns { error } if no Anthropic API key is configured.
+   */
+  ipcMain.handle('daily-briefs:generate', async (_event, { date }: { date: string }) => {
+    const db = getDatabase()
+
+    const setting = db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get('anthropic_api_key') as { value: string } | undefined
+    const apiKey = setting?.value ?? ''
+
+    if (!apiKey) {
+      return { error: 'No Anthropic API key configured. Open Settings → AI to add one.' }
+    }
+
+    // Gather snapshots at generation time (for provenance / future replay)
+    const dayStart = `${date}T00:00:00`
+    const dayEnd = `${date}T23:59:59`
+    const calendarSnapshot = db
+      .prepare(
+        `SELECT id, title, start_at, end_at, attendees
+         FROM calendar_events WHERE start_at >= ? AND start_at <= ? ORDER BY start_at`,
+      )
+      .all(dayStart, dayEnd)
+    const actionsSnapshot = db
+      .prepare(
+        `SELECT id, title, status, due_date FROM action_items
+         WHERE status IN ('open', 'in_progress') ORDER BY due_date ASC NULLS LAST`,
+      )
+      .all()
+
+    const { generateDailyBrief } = await import('../embedding/dailyBrief')
+    const content = await generateDailyBrief(date, apiKey)
+    const now = new Date().toISOString()
+
+    db.prepare(
+      `INSERT INTO daily_briefs (date, content, calendar_snapshot, pending_actions_snapshot, generated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(date) DO UPDATE SET
+         content                   = excluded.content,
+         calendar_snapshot         = excluded.calendar_snapshot,
+         pending_actions_snapshot  = excluded.pending_actions_snapshot,
+         generated_at              = excluded.generated_at,
+         acknowledged_at           = NULL`,
+    ).run(date, content, JSON.stringify(calendarSnapshot), JSON.stringify(actionsSnapshot), now)
+
+    return (db.prepare('SELECT * FROM daily_briefs WHERE date = ?').get(date) as DailyBriefRow | undefined) ?? null
+  })
+
+  /**
+   * daily-briefs:acknowledge — marks a brief as read by setting acknowledged_at.
+   */
+  ipcMain.handle('daily-briefs:acknowledge', (_event, { date }: { date: string }) => {
+    const db = getDatabase()
+    db.prepare(`UPDATE daily_briefs SET acknowledged_at = ? WHERE date = ?`).run(
+      new Date().toISOString(),
+      date,
+    )
+    return { ok: true }
+  })
 }

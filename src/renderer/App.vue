@@ -16,6 +16,7 @@ import LucideIcon from './components/LucideIcon.vue'
 import TabBar from './components/TabBar.vue'
 import ChatSidebar from './components/ChatSidebar.vue'
 import CalendarView from './components/CalendarView.vue'
+import TodayView from './components/TodayView.vue'
 import {
   tabs,
   activeTabId,
@@ -559,6 +560,11 @@ onBeforeUnmount(() => {
       <!-- Trash view -->
       <template v-else-if="activeView === 'trash'">
         <TrashView />
+      </template>
+
+      <!-- Today / Daily Brief view -->
+      <template v-else-if="activeView === 'today'">
+        <TodayView />
       </template>
 
       <!-- All other fixed views -->

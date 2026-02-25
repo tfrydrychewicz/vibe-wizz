@@ -1029,7 +1029,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Make the AI also aware of the meetings and actions
 - [x] AI Actions — natural language calendar and action item CRUD via Claude tool use (§8a): extend `chat.ts` with `WIZZ_TOOLS` definitions + tool-call execution loop; extend `chat:send` response with `actions: ExecutedAction[]`; render action cards in `ChatSidebar.vue`
 - [x] Image attachments in AI chat — paste from clipboard or drag-and-drop onto sidebar; thumbnail bar above input; images forwarded as Anthropic Vision base64 content blocks on the last user message; thumbnails shown in conversation history
-- [ ] Daily Brief generation
+- [x] Daily Brief generation
 - [ ] Cluster summaries (L3) + nightly batch
 - [ ] Graph RAG (note_relations)
 - [ ] Follow-up intelligence
