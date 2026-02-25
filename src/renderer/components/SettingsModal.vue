@@ -28,6 +28,10 @@ const transcriptionModel = ref<'elevenlabs' | 'deepgram' | 'macos'>('macos')
 const transcriptionLanguage = ref('multi')
 const systemAudioCapture = ref(false)
 
+// ── Follow-up intelligence settings ──────────────────────────────────────────
+const followupStalenessDays = ref(7)
+const followupAssigneeEntityTypeId = ref('')
+
 // ── Debug settings ────────────────────────────────────────────────────────────
 const saveDebugAudio = ref(false)
 const debugAudioFolder = ref('')
@@ -88,7 +92,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder] = await Promise.all([
+  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder, followupDays, followupTypeId] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
@@ -105,6 +109,8 @@ onMounted(async () => {
     window.api.invoke('entity-types:list') as Promise<EntityTypeRow[]>,
     window.api.invoke('settings:get', { key: 'save_debug_audio' }) as Promise<string | null>,
     window.api.invoke('debug:get-audio-folder') as Promise<string>,
+    window.api.invoke('settings:get', { key: 'followup_staleness_days' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'followup_assignee_entity_type_id' }) as Promise<string | null>,
   ])
   apiKey.value = openai ?? ''
   anthropicKey.value = anthropic ?? ''
@@ -120,6 +126,8 @@ onMounted(async () => {
   attendeeEntityTypeId.value = attTypeId ?? ''
   saveDebugAudio.value = debugAudio === 'true'
   debugAudioFolder.value = folder ?? ''
+  followupStalenessDays.value = parseInt(followupDays ?? '7', 10)
+  followupAssigneeEntityTypeId.value = followupTypeId ?? ''
   await nextTick()
   attendeeNameField.value = attNameField ?? ''
   attendeeEmailField.value = attEmailField ?? ''
@@ -142,6 +150,8 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'attendee_name_field', value: attendeeNameField.value }),
     window.api.invoke('settings:set', { key: 'attendee_email_field', value: attendeeEmailField.value }),
     window.api.invoke('settings:set', { key: 'save_debug_audio', value: saveDebugAudio.value ? 'true' : 'false' }),
+    window.api.invoke('settings:set', { key: 'followup_staleness_days', value: String(followupStalenessDays.value) }),
+    window.api.invoke('settings:set', { key: 'followup_assignee_entity_type_id', value: followupAssigneeEntityTypeId.value }),
   ])
   saving.value = false
   savedFeedback.value = true
@@ -230,6 +240,40 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                   <EyeOff v-if="showAnthropicKey" :size="14" />
                   <Eye v-else :size="14" />
                 </button>
+              </div>
+            </div>
+
+            <div class="section-divider" />
+            <h4 class="section-subtitle">Follow-up Intelligence</h4>
+
+            <div class="field-group">
+              <label class="field-label" for="followup-entity-type">Assignee Entity Type</label>
+              <p class="field-hint">
+                Action items assigned to entities of this type will be monitored for staleness in the Daily Brief.
+                Set to "(disabled)" to turn off follow-up tracking.
+              </p>
+              <select id="followup-entity-type" v-model="followupAssigneeEntityTypeId" class="modal-input modal-select">
+                <option value="">(disabled)</option>
+                <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
+              </select>
+            </div>
+
+            <div v-if="followupAssigneeEntityTypeId" class="field-group">
+              <label class="field-label" for="followup-days">Staleness Threshold</label>
+              <p class="field-hint">
+                Flag action items with no updates after this many days.
+              </p>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <input
+                  id="followup-days"
+                  v-model.number="followupStalenessDays"
+                  type="number"
+                  min="1"
+                  max="90"
+                  class="modal-input"
+                  style="width: 72px;"
+                />
+                <span class="field-hint" style="margin: 0;">days</span>
               </div>
             </div>
 

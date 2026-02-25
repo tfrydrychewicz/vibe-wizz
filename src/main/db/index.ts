@@ -33,6 +33,8 @@ export function initDatabase(): Database.Database {
 
   // Migration: add trashed_at to entities (idempotent — ALTER TABLE fails silently if column exists)
   try { _db.exec('ALTER TABLE entities ADD COLUMN trashed_at TEXT') } catch { /* already exists */ }
+  // Migration: add updated_at to action_items (idempotent)
+  try { _db.exec('ALTER TABLE action_items ADD COLUMN updated_at TEXT') } catch { /* already exists */ }
 
   // Load sqlite-vec extension (graceful — app works without it, semantic search is just disabled)
   _vecLoaded = loadSqliteVec(_db)

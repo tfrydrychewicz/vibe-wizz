@@ -26,7 +26,10 @@ type ActionRow = {
   title: string
   status: string
   due_date: string | null
+  created_at: string
+  last_activity: string              // COALESCE(updated_at, created_at)
   assigned_entity_name: string | null
+  assigned_entity_type_id: string | null
   source_note_title: string | null
 }
 
@@ -75,7 +78,9 @@ export async function generateDailyBrief(date: string, apiKey: string): Promise<
   const actionItems = db
     .prepare(
       `SELECT ai.id, ai.title, ai.status, ai.due_date, ai.created_at,
-              e.name AS assigned_entity_name, n.title AS source_note_title
+              COALESCE(ai.updated_at, ai.created_at) AS last_activity,
+              e.name AS assigned_entity_name, e.type_id AS assigned_entity_type_id,
+              n.title AS source_note_title
        FROM action_items ai
        LEFT JOIN entities e ON e.id = ai.assigned_entity_id AND e.trashed_at IS NULL
        LEFT JOIN notes n ON n.id = ai.source_note_id AND n.archived_at IS NULL
@@ -87,6 +92,30 @@ export async function generateDailyBrief(date: string, apiKey: string): Promise<
          ai.created_at ASC`,
     )
     .all() as ActionRow[]
+
+  // ── Follow-up intelligence: stale action items ───────────────────────────────
+  const stalenessRaw = db
+    .prepare("SELECT value FROM settings WHERE key = 'followup_staleness_days'")
+    .get() as { value: string } | undefined
+  const stalenessDays = Math.max(1, parseInt(stalenessRaw?.value ?? '7', 10))
+
+  const assigneeTypeRaw = db
+    .prepare("SELECT value FROM settings WHERE key = 'followup_assignee_entity_type_id'")
+    .get() as { value: string } | undefined
+  const assigneeTypeId = assigneeTypeRaw?.value || null
+
+  const _staleCutoff = new Date(`${date}T12:00:00`)
+  _staleCutoff.setDate(_staleCutoff.getDate() - stalenessDays)
+  const staleCutoffStr = _staleCutoff.toISOString().slice(0, 10)
+
+  const staleFollowups = assigneeTypeId
+    ? actionItems.filter(
+        (a) =>
+          a.assigned_entity_type_id === assigneeTypeId &&
+          a.assigned_entity_name !== null &&
+          a.last_activity.slice(0, 10) < staleCutoffStr,
+      )
+    : []
 
   // ── Notes updated in the last 2 days ────────────────────────────────────────
   const recentNotes = db
@@ -207,13 +236,30 @@ export async function generateDailyBrief(date: string, apiKey: string): Promise<
 
   const histLines = historicalContext.join('\n\n')
 
+  // Stale follow-up formatted lines (uses today, so computed here)
+  function daysSince(isoStr: string): number {
+    return Math.floor((today.getTime() - new Date(isoStr).getTime()) / 86_400_000)
+  }
+
+  let staleLines = ''
+  if (staleFollowups.length > 0) {
+    staleLines = staleFollowups
+      .map((a) => {
+        const days = daysSince(a.last_activity)
+        let s = `- "${a.title}" → @${a.assigned_entity_name} (no updates in ${days} day${days !== 1 ? 's' : ''})`
+        if (a.source_note_title) s += ` — from: "${a.source_note_title}"`
+        return s
+      })
+      .join('\n')
+  }
+
   // ── Prompt ───────────────────────────────────────────────────────────────────
   const prompt =
     `You are generating a Daily Brief for an engineering manager. Today is ${todayStr}.\n\n` +
     `Generate a concise, actionable daily brief in Markdown. Follow this structure (skip any section that has no relevant content):\n\n` +
     `# ${todayStr} — Your Day\n\n` +
     `## 🔥 Needs Attention\n` +
-    `(overdue action items and anything urgent; omit section if nothing is overdue or urgent)\n\n` +
+    `(overdue action items, stale follow-ups, and anything urgent; omit section if nothing is overdue, stale, or urgent)\n\n` +
     `## 📅 Today's Meetings\n` +
     `(list each meeting with time; for 1:1s include relevant context from historical notes; omit if no meetings)\n\n` +
     `## ✅ Open Action Items\n` +
@@ -228,9 +274,11 @@ export async function generateDailyBrief(date: string, apiKey: string): Promise<
     `ACTION ITEMS:\n${actionLines}\n\n` +
     (notesLines ? `RECENT NOTES (last 2 days):\n${notesLines}\n\n` : '') +
     (histLines ? `HISTORICAL CONTEXT FOR 1:1s:\n${histLines}\n\n` : '') +
+    (staleLines ? `STALE FOLLOW-UPS (no updates in ${stalenessDays}+ days):\n${staleLines}\n\n` : '') +
     `INSTRUCTIONS:\n` +
     `- Be specific — use real names, titles, and due dates from the data above.\n` +
     `- Flag overdue items prominently in "Needs Attention".\n` +
+    (staleLines ? `- Surface stale follow-ups in "Needs Attention" with the assignee name and days since last update.\n` : '') +
     `- For 1:1 meetings, mention topics from the historical notes when available.\n` +
     `- Use - [ ] checkbox syntax for every action item line (not - or *).\n` +
     `- Keep the brief concise (aim for 300–600 words total).\n` +

@@ -856,6 +856,7 @@ export function registerDbIpcHandlers(): void {
       }
 
       if (!sets.length) return { ok: true }
+      sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')")
       params.push(opts.id)
       db.prepare(`UPDATE action_items SET ${sets.join(', ')} WHERE id = ?`).run(...(params as (string | number | null)[]))
 

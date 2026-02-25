@@ -1032,7 +1032,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Daily Brief generation
 - [x] Cluster summaries (L3) + nightly batch — K-means++ on L2 summary embeddings (K=√(N/2), 2–20), Claude Haiku cluster theme summaries, stored in `note_chunks(layer=3)` + `cluster_embeddings`; `scheduler.ts` runs at startup if >23h since last run; semantic search upgraded with +0.05 cluster boost on top of FTS5+L1 RRF
 - [x] Graph RAG (note_relations) — after FTS5 seed retrieval in `chat:send`, walks 1-hop in the knowledge graph: bidirectional `[[wiki-link]]` neighbors via `note_relations` (up to 5, ranked by overlap count) + `@entity` co-occurrence neighbors via `entity_mentions` (up to 5); indexes added on `note_relations(source_note_id/target_note_id)`; system prompt updated to tell Claude context includes graph-connected notes; backlinks footer in `NoteEditor.vue` shows count of incoming `[[links]]` and expands to a clickable list (all 3 open modes) via new `notes:get-backlinks` IPC
-- [ ] Follow-up intelligence
+- [x] Follow-up intelligence — `updated_at` column added to `action_items` (migration in `db/index.ts`); `action-items:update` stamps `updated_at` on every change; `dailyBrief.ts` reads `followup_staleness_days` (default 7) and `followup_assignee_entity_type_id` settings, filters stale open items assigned to entities of that type, injects a `STALE FOLLOW-UPS` section into the Daily Brief prompt; Settings → AI → "Follow-up Intelligence" subsection: pick assignee entity type + staleness threshold
 - [ ] Proactive related notes sidebar
 - [ ] Query expansion + re-ranking
 
