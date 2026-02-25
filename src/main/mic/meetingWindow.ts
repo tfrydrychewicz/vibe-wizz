@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto'
 import { micEvents, type MicChangeEvent } from './monitor'
 import { getDatabase } from '../db/index'
 import { pushToRenderer } from '../push'
+import { isTranscriptionActive } from '../transcription/session'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
@@ -163,6 +164,7 @@ export function createMeetingWindow(): void {
       debounceTimer = setTimeout(() => {
         debounceTimer = null
         if (dismissed) return
+        if (isTranscriptionActive()) return
 
         if (getAutoTranscribeSetting()) {
           // Auto-transcribe: find the current/upcoming event and open it

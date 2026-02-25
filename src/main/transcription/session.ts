@@ -42,6 +42,10 @@ import {
 // ── Session state ──────────────────────────────────────────────────────────────
 
 let isTranscribing = false
+
+export function isTranscriptionActive(): boolean {
+  return isTranscribing
+}
 let sessionNoteId: string | null = null
 let sessionEventId: number | null = null
 let sessionStartedAt: string | null = null
