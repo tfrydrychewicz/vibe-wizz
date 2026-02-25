@@ -161,6 +161,8 @@ interface StoredTranscription {
 const storedTranscriptions = ref<StoredTranscription[]>([])
 const expandedTranscriptIds = ref<string[]>([])
 const showTranscriptPanel = ref(false)
+const backlinks = ref<{ id: string; title: string }[]>([])
+const showBacklinks = ref(false)
 const pendingDeleteTranscriptId = ref<string | null>(null)
 
 /** Last ~120 chars of the live stream — shown in the status bar while recording. */
@@ -170,6 +172,17 @@ const lastTranscriptLine = computed(() => {
   if (!full) return ''
   return full.length > 120 ? '…' + full.slice(-120) : full
 })
+
+async function loadBacklinks(noteId: string): Promise<void> {
+  backlinks.value = (await window.api.invoke('notes:get-backlinks', {
+    id: noteId,
+  })) as { id: string; title: string }[]
+}
+
+function onOpenBacklink(e: MouseEvent, id: string, noteTitle: string): void {
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-note', { noteId: id, title: noteTitle, mode })
+}
 
 async function loadTranscriptions(): Promise<void> {
   storedTranscriptions.value = []
@@ -791,6 +804,9 @@ async function loadNote(noteId: string): Promise<void> {
   void syncTaskItemsWithDB()
   // Load all transcription sessions for this note
   void loadTranscriptions()
+  // Load backlinks (other notes that [[link]] to this one)
+  showBacklinks.value = false
+  void loadBacklinks(noteId)
 }
 
 function extractMentionIdsFromBody(bodyJson: string): string[] {
@@ -1374,6 +1390,25 @@ onBeforeUnmount(() => {
       <span v-else class="transcript-live-waiting">Listening…</span>
     </div>
 
+    <!-- Backlinks: notes that [[link]] to this note -->
+    <div v-if="backlinks.length > 0" class="backlinks-bar">
+      <button class="backlinks-toggle" @click="showBacklinks = !showBacklinks">
+        <Link2 :size="11" />
+        <span>{{ backlinks.length }} {{ backlinks.length === 1 ? 'note links here' : 'notes link here' }}</span>
+        <ChevronDownIcon :size="11" :class="{ 'rotate-180': showBacklinks }" />
+      </button>
+      <div v-if="showBacklinks" class="backlinks-list">
+        <button
+          v-for="bl in backlinks"
+          :key="bl.id"
+          class="backlinks-item"
+          @click="onOpenBacklink($event, bl.id, bl.title)"
+        >
+          {{ bl.title }}
+        </button>
+      </div>
+    </div>
+
     <TrashedMentionPopup
       v-if="popupEntityId && popupAnchorRect && entityTrashStatus.get(popupEntityId)"
       :key="`trashed-${popupEntityId}`"
@@ -1555,5 +1590,57 @@ onBeforeUnmount(() => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.backlinks-bar {
+  border-top: 1px solid var(--color-border);
+  padding: 0 20px;
+}
+
+.backlinks-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 6px 0;
+  width: 100%;
+  text-align: left;
+}
+
+.backlinks-toggle:hover {
+  color: var(--color-text);
+}
+
+.backlinks-toggle .rotate-180 {
+  transform: rotate(180deg);
+}
+
+.backlinks-list {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 6px;
+}
+
+.backlinks-item {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  padding: 3px 0 3px 16px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backlinks-item:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 </style>

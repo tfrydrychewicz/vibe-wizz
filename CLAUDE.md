@@ -42,7 +42,7 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - **better-sqlite3** with SQLite (WAL mode, FTS5, 64MB cache) + **sqlite-vec** for vector similarity search
 - Schema in `src/main/db/schema.ts` — 14 tables including `notes`, `note_templates`, `note_chunks`, `entities`, `entity_mentions`, `note_relations`, `action_items`, `calendar_events`, `settings` + vec0 virtual tables `chunk_embeddings`, `summary_embeddings`, `cluster_embeddings`
 - IPC handlers in `src/main/db/ipc.ts`:
-  - Notes: `db:status`, `notes:create`, `notes:get`, `notes:update`, `notes:list`, `notes:delete`, `notes:restore`, `notes:delete-forever`, `notes:search`, `notes:get-archived-status`, `notes:get-link-count`
+  - Notes: `db:status`, `notes:create`, `notes:get`, `notes:update`, `notes:list`, `notes:delete`, `notes:restore`, `notes:delete-forever`, `notes:search`, `notes:get-archived-status`, `notes:get-link-count`, `notes:get-backlinks`
   - Templates: `templates:list`, `templates:create`, `templates:get`, `templates:update`, `templates:delete`
   - Entity types: `entity-types:list`, `entity-types:create`, `entity-types:update`, `entity-types:delete`
   - Entities: `entities:list`, `entities:create`, `entities:get`, `entities:update`, `entities:delete`, `entities:restore`, `entities:delete-forever`, `entities:search`, `entities:get-mention-count`, `entities:get-trash-status`
@@ -57,6 +57,7 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 - `daily-briefs:acknowledge` — `{ date }` → `{ ok }`: sets `acknowledged_at` timestamp (brief has been viewed)
 - `notes:delete` is a soft-delete (sets `archived_at`) and also clears `linked_note_id` on any `calendar_events` that referenced it; `notes:restore` clears `archived_at`; `notes:delete-forever` replaces all `[[noteLink]]` nodes in other notes' bodies with plain text of the note title, cleans up `note_relations`, then hard-deletes (FK `ON DELETE SET NULL` auto-clears `calendar_events.linked_note_id`)
 - `notes:get-link-count` — `{ id }` → `{ count }`: count of distinct notes that `[[link]]` to this note (from `note_relations`); used for trash confirmation in `NoteList` and delete-forever confirmation in `TrashView`
+- `notes:get-backlinks` — `{ id }` → `{ id, title }[]`: list of non-archived notes that `[[link]]` to this note, ordered by `updated_at DESC`; used by `NoteEditor` backlinks footer
 - `entities:delete` is a soft-delete (sets `trashed_at`, returns `{ ok, mentionNoteCount }`); `entities:restore` clears `trashed_at`; `entities:delete-forever` replaces all `@mention` nodes in note bodies with plain text before hard-deleting
 - `entities:get-mention-count` — `{ id }` → `{ count }`: count of distinct notes mentioning the entity (from `entity_mentions`)
 - `entities:search` — `{ query, type_id? }` → up to 20 non-trashed entities matching name (LIKE); optional `type_id` restricts results to a specific entity type; used by `@mention` suggestion and attendee entity search

@@ -325,6 +325,24 @@ export function registerDbIpcHandlers(): void {
   })
 
   /**
+   * notes:get-backlinks — returns all non-archived notes that [[link]] to a given note,
+   * ordered by most recently updated. Used by NoteEditor to show the backlinks footer.
+   */
+  ipcMain.handle('notes:get-backlinks', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    return db
+      .prepare(
+        `SELECT n.id, n.title
+         FROM note_relations nr
+         JOIN notes n ON n.id = nr.source_note_id
+         WHERE nr.target_note_id = ? AND nr.relation_type = 'references'
+           AND n.archived_at IS NULL
+         ORDER BY n.updated_at DESC`
+      )
+      .all(id) as { id: string; title: string }[]
+  })
+
+  /**
    * notes:update — updates title, body, body_plain, and updated_at for a note.
    * Also syncs entity_mentions from the body JSON.
    * Called by the renderer's auto-save debounce.
