@@ -8,16 +8,19 @@ const apiKey = ref('')
 const showKey = ref(false)
 const anthropicKey = ref('')
 const showAnthropicKey = ref(false)
+const calendarSlotDuration = ref('30')
 const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [openai, anthropic] = await Promise.all([
+  const [openai, anthropic, slotDuration] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'calendar_slot_duration' }) as Promise<string | null>,
   ])
   apiKey.value = openai ?? ''
   anthropicKey.value = anthropic ?? ''
+  calendarSlotDuration.value = slotDuration ?? '30'
 })
 
 async function save(): Promise<void> {
@@ -25,6 +28,7 @@ async function save(): Promise<void> {
   await Promise.all([
     window.api.invoke('settings:set', { key: 'openai_api_key', value: apiKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'anthropic_api_key', value: anthropicKey.value.trim() }),
+    window.api.invoke('settings:set', { key: 'calendar_slot_duration', value: calendarSlotDuration.value }),
   ])
   saving.value = false
   savedFeedback.value = true
@@ -90,6 +94,25 @@ function onBackdropKeydown(e: KeyboardEvent): void {
               <button class="toggle-btn" :title="showAnthropicKey ? 'Hide' : 'Show'" @click="showAnthropicKey = !showAnthropicKey">
                 <EyeOff v-if="showAnthropicKey" :size="14" />
                 <Eye v-else :size="14" />
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3 class="section-title">Calendar</h3>
+          <div class="field-group">
+            <label class="modal-label">Default Slot Duration</label>
+            <p class="field-hint">Duration of a new meeting when clicking or dragging a time slot.</p>
+            <div class="slot-picker">
+              <button
+                v-for="opt in [{ label: '15 min', value: '15' }, { label: '30 min', value: '30' }, { label: '1 hour', value: '60' }]"
+                :key="opt.value"
+                class="slot-btn"
+                :class="{ active: calendarSlotDuration === opt.value }"
+                @click="calendarSlotDuration = opt.value"
+              >
+                {{ opt.label }}
               </button>
             </div>
           </div>
@@ -236,6 +259,46 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 
 .toggle-btn:hover {
   color: var(--color-text);
+}
+
+.settings-section + .settings-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+}
+
+.slot-picker {
+  display: flex;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  overflow: hidden;
+  width: fit-content;
+}
+
+.slot-btn {
+  padding: 6px 16px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.slot-btn:last-child {
+  border-right: none;
+}
+
+.slot-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.slot-btn.active {
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 500;
 }
 
 .modal-footer {

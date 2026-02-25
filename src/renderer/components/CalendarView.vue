@@ -24,6 +24,37 @@ const loading = ref(false)
 const showModal = ref(false)
 const modalEvent = ref<CalendarEvent | null>(null)
 const modalDefaultStart = ref('')
+const modalDefaultEnd = ref('')
+
+// Slot duration (minutes) loaded from settings
+const slotDuration = ref(30)
+
+// Drag-to-create state
+interface DragState {
+  day: Date
+  startMinutes: number
+  endMinutes: number
+}
+const activeDrag = ref<DragState | null>(null)
+
+// Move-event drag
+interface MoveDragState {
+  event: CalendarEvent
+  offsetMinutes: number  // how far into the event the user clicked
+  currentDay: Date
+  currentStartMinutes: number
+  startX: number
+  startY: number
+  hasMoved: boolean
+}
+const moveDrag = ref<MoveDragState | null>(null)
+
+// Resize-event drag
+interface ResizeDragState {
+  event: CalendarEvent
+  currentEndMinutes: number
+}
+const resizeDrag = ref<ResizeDragState | null>(null)
 
 // Time grid constants (7am–9pm = 14 hours)
 const HOUR_START = 7
@@ -183,8 +214,16 @@ async function loadEvents(): Promise<void> {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   void loadEvents()
+  const [slotSetting, viewSetting] = await Promise.all([
+    window.api.invoke('settings:get', { key: 'calendar_slot_duration' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'calendar_view_mode' }) as Promise<string | null>,
+  ])
+  slotDuration.value = slotSetting ? parseInt(slotSetting, 10) : 30
+  if (viewSetting && ['day', 'work-week', 'week', 'month'].includes(viewSetting)) {
+    viewMode.value = viewSetting as CalendarViewMode
+  }
   if (gridScrollRef.value) {
     containerHeight.value = gridScrollRef.value.clientHeight
     resizeObserver = new ResizeObserver(([entry]) => {
@@ -196,9 +235,20 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  window.removeEventListener('mousemove', onGlobalMouseMove)
+  window.removeEventListener('mouseup', onGlobalMouseUp)
+  window.removeEventListener('mousemove', onMoveMouseMove)
+  window.removeEventListener('mouseup', onMoveMouseUp)
+  window.removeEventListener('mousemove', onResizeMouseMove)
+  window.removeEventListener('mouseup', onResizeMouseUp)
 })
 
 watch([rangeStart, rangeEnd], loadEvents)
+watch(viewMode, (mode) => {
+  void window.api.invoke('settings:set', { key: 'calendar_view_mode', value: mode })
+})
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 
@@ -256,26 +306,197 @@ function formatEventTime(iso: string): string {
 
 // ── Modal helpers ─────────────────────────────────────────────────────────────
 
-function openCreateModal(defaultStart: string): void {
+function openCreateModal(defaultStart: string, defaultEnd?: string): void {
   modalEvent.value = null
   modalDefaultStart.value = defaultStart
+  modalDefaultEnd.value = defaultEnd ?? ''
   showModal.value = true
 }
 
 function openEditModal(ev: CalendarEvent): void {
   modalEvent.value = ev
   modalDefaultStart.value = ev.start_at
+  modalDefaultEnd.value = ''
   showModal.value = true
-}
-
-function onSlotClick(day: Date, hour: number): void {
-  const d = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, 0, 0)
-  openCreateModal(d.toISOString())
 }
 
 function onMonthDayClick(day: Date): void {
   const d = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0)
-  openCreateModal(d.toISOString())
+  const end = new Date(d.getTime() + 60 * 60 * 1000)
+  openCreateModal(d.toISOString(), end.toISOString())
+}
+
+// ── Drag-to-create ────────────────────────────────────────────────────────────
+
+function getMinutesFromMouseY(clientY: number): number {
+  if (!gridScrollRef.value) return HOUR_START * 60
+  const scrollEl = gridScrollRef.value
+  const rect = scrollEl.getBoundingClientRect()
+  const y = clientY - rect.top + scrollEl.scrollTop
+  const minutesSinceStart = (y / hourHeight.value) * 60
+  const totalMinutes = HOUR_START * 60 + minutesSinceStart
+  const snapped = Math.floor(totalMinutes / slotDuration.value) * slotDuration.value
+  return Math.max(HOUR_START * 60, Math.min(HOUR_END * 60 - slotDuration.value, snapped))
+}
+
+function onDayMouseDown(day: Date, e: MouseEvent): void {
+  if (e.button !== 0) return
+  e.preventDefault()
+  const startMinutes = getMinutesFromMouseY(e.clientY)
+  activeDrag.value = { day, startMinutes, endMinutes: startMinutes + slotDuration.value }
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onGlobalMouseMove)
+  window.addEventListener('mouseup', onGlobalMouseUp)
+}
+
+function onGlobalMouseMove(e: MouseEvent): void {
+  if (!activeDrag.value) return
+  const currentMinutes = getMinutesFromMouseY(e.clientY)
+  const endMinutes = Math.max(
+    activeDrag.value.startMinutes + slotDuration.value,
+    currentMinutes + slotDuration.value,
+  )
+  activeDrag.value = { ...activeDrag.value, endMinutes }
+}
+
+function onGlobalMouseUp(): void {
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', onGlobalMouseMove)
+  window.removeEventListener('mouseup', onGlobalMouseUp)
+  if (!activeDrag.value) return
+  const { day, startMinutes, endMinutes } = activeDrag.value
+  activeDrag.value = null
+  const startDate = new Date(day.getFullYear(), day.getMonth(), day.getDate(),
+    Math.floor(startMinutes / 60), startMinutes % 60, 0)
+  const endDate = new Date(day.getFullYear(), day.getMonth(), day.getDate(),
+    Math.floor(endMinutes / 60), endMinutes % 60, 0)
+  openCreateModal(startDate.toISOString(), endDate.toISOString())
+}
+
+// ── Event display helpers ─────────────────────────────────────────────────────
+
+function showEventTime(ev: CalendarEvent): boolean {
+  return new Date(ev.end_at).getTime() - new Date(ev.start_at).getTime() >= 45 * 60 * 1000
+}
+
+function getEventDisplayStyle(ev: CalendarEvent): Record<string, string> {
+  if (moveDrag.value?.event.id === ev.id) {
+    // Fade original while ghost is shown at new position
+    return { top: `${eventTopPx(ev)}px`, height: `${eventHeightPx(ev)}px`, opacity: '0.35' }
+  }
+  if (resizeDrag.value?.event.id === ev.id) {
+    const startMinutes = new Date(ev.start_at).getHours() * 60 + new Date(ev.start_at).getMinutes()
+    const heightPx = Math.max(
+      slotDuration.value / 60 * hourHeight.value,
+      (resizeDrag.value.currentEndMinutes - startMinutes) / 60 * hourHeight.value,
+    )
+    return { top: `${eventTopPx(ev)}px`, height: `${heightPx}px` }
+  }
+  return { top: `${eventTopPx(ev)}px`, height: `${eventHeightPx(ev)}px` }
+}
+
+// ── Move event (drag & drop) ───────────────────────────────────────────────────
+
+function onEventMouseDown(ev: CalendarEvent, e: MouseEvent): void {
+  if (e.button !== 0) return
+  e.preventDefault()
+  e.stopPropagation()
+  const eventStartMinutes = new Date(ev.start_at).getHours() * 60 + new Date(ev.start_at).getMinutes()
+  const clickMinutes = getMinutesFromMouseY(e.clientY)
+  moveDrag.value = {
+    event: ev,
+    offsetMinutes: Math.max(0, clickMinutes - eventStartMinutes),
+    currentDay: new Date(ev.start_at),
+    currentStartMinutes: eventStartMinutes,
+    startX: e.clientX,
+    startY: e.clientY,
+    hasMoved: false,
+  }
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onMoveMouseMove)
+  window.addEventListener('mouseup', onMoveMouseUp)
+}
+
+function onDayMouseEnter(day: Date): void {
+  if (moveDrag.value?.hasMoved) {
+    moveDrag.value = { ...moveDrag.value, currentDay: day }
+  }
+}
+
+function onMoveMouseMove(e: MouseEvent): void {
+  if (!moveDrag.value) return
+  const dx = Math.abs(e.clientX - moveDrag.value.startX)
+  const dy = Math.abs(e.clientY - moveDrag.value.startY)
+  if (dx < 4 && dy < 4) return
+  if (!moveDrag.value.hasMoved) document.body.style.cursor = 'grabbing'
+  const clickMinutes = getMinutesFromMouseY(e.clientY)
+  const rawStart = clickMinutes - moveDrag.value.offsetMinutes
+  const snapped = Math.round(rawStart / slotDuration.value) * slotDuration.value
+  const eventDurationMin = (new Date(moveDrag.value.event.end_at).getTime() - new Date(moveDrag.value.event.start_at).getTime()) / 60000
+  const clamped = Math.max(HOUR_START * 60, Math.min(HOUR_END * 60 - eventDurationMin, snapped))
+  moveDrag.value = { ...moveDrag.value, hasMoved: true, currentStartMinutes: clamped }
+}
+
+function onMoveMouseUp(): void {
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  window.removeEventListener('mousemove', onMoveMouseMove)
+  window.removeEventListener('mouseup', onMoveMouseUp)
+  if (!moveDrag.value) return
+  const { event, currentDay, currentStartMinutes, hasMoved } = moveDrag.value
+  moveDrag.value = null
+  if (!hasMoved) { openEditModal(event); return }
+  const durationMs = new Date(event.end_at).getTime() - new Date(event.start_at).getTime()
+  const newStart = new Date(currentDay.getFullYear(), currentDay.getMonth(), currentDay.getDate(),
+    Math.floor(currentStartMinutes / 60), currentStartMinutes % 60, 0)
+  const newEnd = new Date(newStart.getTime() + durationMs)
+  const newStartISO = newStart.toISOString()
+  const newEndISO = newEnd.toISOString()
+  if (newStartISO === event.start_at && newEndISO === event.end_at) return
+  const idx = events.value.findIndex((e) => e.id === event.id)
+  if (idx !== -1) events.value[idx] = { ...event, start_at: newStartISO, end_at: newEndISO }
+  void window.api.invoke('calendar-events:update', { id: event.id, start_at: newStartISO, end_at: newEndISO })
+}
+
+// ── Resize event (bottom edge drag) ──────────────────────────────────────────
+
+function onResizeStart(ev: CalendarEvent, e: MouseEvent): void {
+  if (e.button !== 0) return
+  e.preventDefault()
+  e.stopPropagation()
+  const end = new Date(ev.end_at)
+  resizeDrag.value = { event: ev, currentEndMinutes: end.getHours() * 60 + end.getMinutes() }
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'ns-resize'
+  window.addEventListener('mousemove', onResizeMouseMove)
+  window.addEventListener('mouseup', onResizeMouseUp)
+}
+
+function onResizeMouseMove(e: MouseEvent): void {
+  if (!resizeDrag.value) return
+  const currentMinutes = getMinutesFromMouseY(e.clientY)
+  const startMinutes = new Date(resizeDrag.value.event.start_at).getHours() * 60 + new Date(resizeDrag.value.event.start_at).getMinutes()
+  const endMinutes = Math.min(HOUR_END * 60, Math.max(startMinutes + slotDuration.value, currentMinutes + slotDuration.value))
+  resizeDrag.value = { ...resizeDrag.value, currentEndMinutes: endMinutes }
+}
+
+function onResizeMouseUp(): void {
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  window.removeEventListener('mousemove', onResizeMouseMove)
+  window.removeEventListener('mouseup', onResizeMouseUp)
+  if (!resizeDrag.value) return
+  const { event, currentEndMinutes } = resizeDrag.value
+  resizeDrag.value = null
+  const origEndMinutes = new Date(event.end_at).getHours() * 60 + new Date(event.end_at).getMinutes()
+  if (currentEndMinutes === origEndMinutes) return
+  const startDate = new Date(event.start_at)
+  const newEnd = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(),
+    Math.floor(currentEndMinutes / 60), currentEndMinutes % 60, 0)
+  const newEndISO = newEnd.toISOString()
+  const idx = events.value.findIndex((e) => e.id === event.id)
+  if (idx !== -1) events.value[idx] = { ...event, end_at: newEndISO }
+  void window.api.invoke('calendar-events:update', { id: event.id, end_at: newEndISO })
 }
 
 function onModalSaved(ev: CalendarEvent): void {
@@ -372,29 +593,50 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
             v-for="col in columns"
             :key="col.toISOString()"
             class="day-col"
+            @mousedown.prevent="onDayMouseDown(col, $event)"
+            @mouseenter="onDayMouseEnter(col)"
           >
-            <!-- Hour slots (clickable) -->
+            <!-- Hour slots (visual grid lines) -->
             <div
               v-for="h in hours"
               :key="h"
               class="hour-slot"
-              @click="onSlotClick(col, h)"
             />
+
+            <!-- Drag-to-create preview -->
+            <div
+              v-if="activeDrag && isSameDay(activeDrag.day, col)"
+              class="event-block drag-preview"
+              :style="{
+                top: `${(activeDrag.startMinutes - HOUR_START * 60) / 60 * hourHeight}px`,
+                height: `${(activeDrag.endMinutes - activeDrag.startMinutes) / 60 * hourHeight}px`,
+              }"
+            />
+
+            <!-- Move ghost (shows target position while dragging) -->
+            <div
+              v-if="moveDrag && moveDrag.hasMoved && isSameDay(moveDrag.currentDay, col)"
+              class="event-block move-ghost"
+              :style="{
+                top: `${(moveDrag.currentStartMinutes - HOUR_START * 60) / 60 * hourHeight}px`,
+                height: `${eventHeightPx(moveDrag.event)}px`,
+              }"
+            >
+              <span class="event-title">{{ moveDrag.event.title }}</span>
+            </div>
 
             <!-- Events -->
             <div
               v-for="ev in eventsForDay(col)"
               :key="ev.id"
               class="event-block"
-              :style="{
-                top: `${eventTopPx(ev)}px`,
-                height: `${eventHeightPx(ev)}px`,
-              }"
+              :style="getEventDisplayStyle(ev)"
               :title="`${ev.title}\n${formatEventTime(ev.start_at)}–${formatEventTime(ev.end_at)}`"
-              @click.stop="openEditModal(ev)"
+              @mousedown.prevent.stop="onEventMouseDown(ev, $event)"
             >
               <span class="event-title">{{ ev.title }}</span>
-              <span class="event-time">{{ formatEventTime(ev.start_at) }}</span>
+              <span v-if="showEventTime(ev)" class="event-time">{{ formatEventTime(ev.start_at) }}</span>
+              <div class="event-resize-handle" @mousedown.prevent.stop="onResizeStart(ev, $event)" />
             </div>
           </div>
         </div>
@@ -442,6 +684,7 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
       v-if="showModal"
       :event="modalEvent"
       :default-start="modalDefaultStart"
+      :default-end="modalDefaultEnd"
       @saved="onModalSaved"
       @deleted="onModalDeleted"
       @cancel="showModal = false"
@@ -699,9 +942,9 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
   border: 1px solid rgba(91, 141, 239, 0.4);
   border-left: 3px solid var(--color-accent);
   border-radius: 4px;
-  padding: 3px 6px;
+  padding: 3px 6px 6px;
   overflow: hidden;
-  cursor: pointer;
+  cursor: grab;
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -710,6 +953,46 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
 
 .event-block:hover {
   background: rgba(91, 141, 239, 0.25);
+}
+
+.event-block:active {
+  cursor: grabbing;
+}
+
+.drag-preview {
+  pointer-events: none;
+  opacity: 0.5;
+  border-style: dashed;
+  cursor: default;
+}
+
+.move-ghost {
+  pointer-events: none;
+  opacity: 0.75;
+  border-style: dashed;
+  cursor: grabbing;
+  z-index: 2;
+}
+
+.event-resize-handle {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.event-resize-handle::after {
+  content: '';
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.45);
+  border-radius: 1px;
 }
 
 .event-title {

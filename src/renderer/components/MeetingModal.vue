@@ -20,6 +20,7 @@ export interface CalendarEvent {
 const props = defineProps<{
   event: CalendarEvent | null   // null = create mode
   defaultStart: string          // ISO 8601, used when event is null
+  defaultEnd?: string           // ISO 8601, optional end time override for create mode
 }>()
 
 const emit = defineEmits<{
@@ -87,9 +88,14 @@ function populate(): void {
     if (!isNaN(start.getTime())) {
       dateStr.value = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
       startTime.value = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`
-      // Default 1-hour meeting
-      const end = new Date(start.getTime() + 60 * 60 * 1000)
-      endTime.value = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`
+      // End time: from defaultEnd if provided, otherwise default 1 hour
+      if (props.defaultEnd) {
+        const end = new Date(props.defaultEnd)
+        endTime.value = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`
+      } else {
+        const end = new Date(start.getTime() + 60 * 60 * 1000)
+        endTime.value = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`
+      }
     } else {
       dateStr.value = new Date().toISOString().slice(0, 10)
       startTime.value = '09:00'
