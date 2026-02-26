@@ -56,6 +56,12 @@ export type EntityContext = {
   type_name: string
 }
 
+export type EntityLinkedNote = {
+  id: string
+  title: string
+  excerpt: string
+}
+
 export type ExecutedAction = {
   type:
     | 'created_event'
@@ -637,6 +643,7 @@ export async function sendChatMessage(
   model: ChatModelId = DEFAULT_CHAT_MODEL,
   files?: AttachedFilePayload[],
   entityContext: EntityContext[] = [],
+  pinnedNotes: EntityLinkedNote[] = [],
 ): Promise<{ content: string; actions: ExecutedAction[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
@@ -651,6 +658,16 @@ export async function sendChatMessage(
     'For creates and updates: execute immediately without asking. ' +
     'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool. ' +
     'When creating a note, generate rich, well-structured Markdown content — use headings, bullet lists, task checkboxes, and GFM tables (| Col | Col |\\n| --- | --- |\\n| val | val |) as appropriate.'
+
+  if (pinnedNotes.length > 0) {
+    const pinnedStr = pinnedNotes
+      .map((n) => `### [[${n.title}]] [id:${n.id}]\n${n.excerpt}`)
+      .join('\n\n---\n\n')
+    systemPrompt +=
+      '\n\nThe user has explicitly attached the following notes to this conversation. ' +
+      'Treat them as primary source material and prioritise them over search results:\n\n' +
+      pinnedStr
+  }
 
   if (contextNotes.length > 0) {
     let contextStr = contextNotes

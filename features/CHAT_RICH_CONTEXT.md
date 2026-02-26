@@ -236,15 +236,15 @@ export async function sendChatMessage(
 
 ### Phase B — backend note pinning (ipc.ts + chat.ts)
 
-- [ ] **B1.** `ipc.ts` — accept `mentionedNoteIds?: string[]` from `chat:send` payload.
-- [ ] **B2.** `ipc.ts` — after entity context fetch, query pinned notes:
+- [x] **B1.** `ipc.ts` — accept `mentionedNoteIds?: string[]` from `chat:send` payload.
+- [x] **B2.** `ipc.ts` — after entity context fetch, query pinned notes:
   ```sql
   SELECT id, title, body_plain FROM notes
   WHERE id IN (?) AND archived_at IS NULL
   ```
   Build `pinnedNotes: EntityLinkedNote[]`, truncating `body_plain` at 4 000 chars.
-- [ ] **B3.** `ipc.ts` — pass `pinnedNotes` as new argument to `sendChatMessage()`.
-- [ ] **B4.** `chat.ts` — add `pinnedNotes: EntityLinkedNote[] = []` parameter to `sendChatMessage()`; if non-empty, prepend `## Notes pinned by user` section to system prompt.
+- [x] **B3.** `ipc.ts` — pass `pinnedNotes` as new argument to `sendChatMessage()`.
+- [x] **B4.** `chat.ts` — add `pinnedNotes: EntityLinkedNote[] = []` parameter to `sendChatMessage()`; if non-empty, prepend `## Notes pinned by user` section to system prompt.
 
 ### Phase C — rich entity context (ipc.ts + chat.ts)
 

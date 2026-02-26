@@ -5,7 +5,7 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, type ChatModelId } from '../embedding/chat'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, type ChatModelId } from '../embedding/chat'
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
 import { parseQuery } from '../entity-query/parser'
 import { evalQuery } from '../entity-query/evaluator'
@@ -703,6 +703,21 @@ export function registerDbIpcHandlers(): void {
     }
   )
 
+  /**
+   * entities:parse-query — validate a WQL query without executing it.
+   * Input:  { query: string }
+   * Returns: { ok: true } | { ok: false, error: string }
+   * Used by QueryFieldEditor to show inline parse errors while typing.
+   */
+  ipcMain.handle('entities:parse-query', (_event, { query }: { query: string }) => {
+    try {
+      parseQuery(query)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
+
   // ─── Note Templates ──────────────────────────────────────────────────────────
 
   /** templates:list — returns all note templates sorted by name. */
@@ -1389,6 +1404,7 @@ export function registerDbIpcHandlers(): void {
         files,
         model,
         mentionedEntityIds,
+        mentionedNoteIds,
       }: {
         messages: { role: 'user' | 'assistant'; content: string }[]
         searchQuery?: string
@@ -1396,6 +1412,7 @@ export function registerDbIpcHandlers(): void {
         files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
         model?: string
         mentionedEntityIds?: string[]
+        mentionedNoteIds?: string[]
       },
     ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }> => {
       const db = getDatabase()
@@ -1628,6 +1645,27 @@ export function registerDbIpcHandlers(): void {
         }
       })()
 
+      // Fetch full content of notes explicitly pinned via [[ in the chat input
+      const pinnedNotes: EntityLinkedNote[] = (() => {
+        if (!mentionedNoteIds?.length) return []
+        try {
+          const sp = mentionedNoteIds.map(() => '?').join(',')
+          const rows = db
+            .prepare(
+              `SELECT id, title, body_plain FROM notes
+               WHERE id IN (${sp}) AND archived_at IS NULL`,
+            )
+            .all(...mentionedNoteIds) as { id: string; title: string; body_plain: string }[]
+          return rows.map((r) => ({
+            id: r.id,
+            title: r.title,
+            excerpt: r.body_plain.length > 4000 ? r.body_plain.slice(0, 4000) + '…' : r.body_plain,
+          }))
+        } catch {
+          return []
+        }
+      })()
+
       // Fetch full content of notes linked to events / action items and append to context
       try {
         const existingIds = new Set(contextNotes.map((n) => n.id))
@@ -1662,7 +1700,7 @@ export function registerDbIpcHandlers(): void {
       let content: string
       let executedActions: ExecutedAction[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext, pinnedNotes)
         content = result.content
         executedActions = result.actions
       } catch (err) {
