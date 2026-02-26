@@ -499,6 +499,26 @@ export function registerDbIpcHandlers(): void {
     return { ok: true }
   })
 
+  /**
+   * entity-types:schema-for-autocomplete — returns all entity types with their
+   * field names, used by QueryFieldEditor to power WQL autocomplete suggestions.
+   */
+  ipcMain.handle('entity-types:schema-for-autocomplete', () => {
+    const db = getDatabase()
+    const rows = db.prepare(`SELECT id, name, schema FROM entity_types`).all() as {
+      id: string
+      name: string
+      schema: string
+    }[]
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      fields: ((JSON.parse(row.schema)?.fields ?? []) as { name: string }[]).map(
+        (f) => f.name,
+      ),
+    }))
+  })
+
   // ─── Entities ────────────────────────────────────────────────────────────────
 
   /**

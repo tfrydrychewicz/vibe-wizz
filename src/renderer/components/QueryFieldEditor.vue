@@ -4,6 +4,8 @@ import { EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/vi
 import { EditorState } from '@codemirror/state'
 import { history, defaultKeymap, historyKeymap } from '@codemirror/commands'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
+import { autocompletion } from '@codemirror/autocomplete'
+import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { tags } from '@lezer/highlight'
 import { wqlLanguage } from '../lib/wql-language'
 
@@ -18,6 +20,48 @@ const emit = defineEmits<{
 
 const containerRef = ref<HTMLDivElement | null>(null)
 let view: EditorView | null = null
+
+// ── Autocomplete schema ───────────────────────────────────────────────────────
+
+type EntityTypeSchema = { id: string; name: string; fields: string[] }
+let entityTypes: EntityTypeSchema[] = []
+
+function getCompletions(context: CompletionContext): CompletionResult | null {
+  const { state, pos } = context
+  const textBefore = state.doc.sliceString(0, pos)
+
+  // After FROM → suggest entity type names
+  const fromMatch = /FROM\s+(\w*)$/i.exec(textBefore)
+  if (fromMatch) {
+    return {
+      from: pos - fromMatch[1].length,
+      options: entityTypes.map((t) => ({ label: t.name, type: 'type' })),
+    }
+  }
+
+  // After alias. → suggest field names for that entity type
+  const dotMatch = /(\w+)\.(\w*)$/.exec(textBefore)
+  const aliasMatch = /SELECT\s+(\w+)\s+FROM\s+(\w+)/i.exec(textBefore)
+  if (dotMatch && aliasMatch && dotMatch[1] === aliasMatch[1]) {
+    const typeName = aliasMatch[2].toLowerCase()
+    const fields = entityTypes.find((t) => t.name.toLowerCase() === typeName)?.fields ?? []
+    return {
+      from: pos - dotMatch[2].length,
+      options: fields.map((f) => ({ label: f, type: 'property' })),
+    }
+  }
+
+  // After a comparison operator → suggest {this}
+  if (/(?:WHERE|AND|OR)\s+\S+\s*(?:!=|<=|>=|=|<|>|CONTAINS)\s*\{?$/i.test(textBefore)) {
+    const from = textBefore.endsWith('{') ? pos - 1 : pos
+    return {
+      from,
+      options: [{ label: '{this}', type: 'keyword' }],
+    }
+  }
+
+  return null
+}
 
 // ── WQL syntax highlight colours (Wizz dark palette) ─────────────────────────
 
@@ -70,14 +114,47 @@ const wqlTheme = EditorView.theme(
       color: 'var(--color-text-muted)',
       fontStyle: 'italic',
     },
+    // ── Autocomplete dropdown ──────────────────────────────────────────────────
+    '.cm-tooltip': {
+      border: '1px solid var(--color-border)',
+      borderRadius: '5px',
+      overflow: 'hidden',
+    },
+    '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+      background: 'var(--color-surface)',
+      fontFamily: "ui-monospace, 'Cascadia Code', 'Fira Code', monospace",
+      fontSize: '12px',
+      maxHeight: '160px',
+    },
+    '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
+      padding: '4px 10px',
+      color: 'var(--color-text)',
+    },
+    '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+      background: 'rgba(91, 141, 239, 0.25)',
+      color: 'var(--color-text)',
+    },
+    '.cm-completionIcon': {
+      display: 'none',
+    },
+    '.cm-completionDetail': {
+      color: 'var(--color-text-muted)',
+      fontStyle: 'normal',
+      marginLeft: '6px',
+    },
   },
   { dark: true },
 )
 
 // ── Editor lifecycle ──────────────────────────────────────────────────────────
 
-onMounted(() => {
+onMounted(async () => {
   if (!containerRef.value) return
+
+  // Fetch entity type schemas for autocomplete before creating the editor
+  entityTypes = (await window.api.invoke(
+    'entity-types:schema-for-autocomplete',
+  )) as EntityTypeSchema[]
 
   const state = EditorState.create({
     doc: props.modelValue,
@@ -88,6 +165,7 @@ onMounted(() => {
       EditorView.lineWrapping,
       history(),
       keymap.of([...defaultKeymap, ...historyKeymap]),
+      autocompletion({ override: [getCompletions], activateOnTyping: true }),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           emit('update:modelValue', update.state.doc.toString())

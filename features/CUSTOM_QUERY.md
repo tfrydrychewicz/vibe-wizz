@@ -574,11 +574,11 @@ Modified files:
 
 ### Phase 3 — Autocomplete (Stretch)
 
-- [ ] `src/main/db/ipc.ts` — `entity-types:schema-for-autocomplete` handler
-- [ ] `QueryFieldEditor.vue` — fetch schema on mount, build `getCompletions()` source
-- [ ] Autocomplete: entity type names after `FROM`
-- [ ] Autocomplete: field names after `alias.`
-- [ ] Autocomplete: `{this}` suggestion in value position
+- [x] `src/main/db/ipc.ts` — `entity-types:schema-for-autocomplete` handler
+- [x] `QueryFieldEditor.vue` — fetch schema on mount, build `getCompletions()` source
+- [x] Autocomplete: entity type names after `FROM`
+- [x] Autocomplete: field names after `alias.`
+- [x] Autocomplete: `{this}` suggestion in value position
 
 ### Phase 4 — Polish
 
