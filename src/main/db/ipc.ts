@@ -20,7 +20,9 @@ import {
 import { getProvider } from '../calendar/sync/registry'
 import { syncSourceNow } from '../calendar/sync/scheduler'
 import type { CalendarSource } from '../calendar/sync/provider'
-import { APPS_SCRIPT_SOURCE, APPS_SCRIPT_INSTRUCTIONS } from '../calendar/sync/providers/googleAppsScript'
+import { APPS_SCRIPT_SOURCE, APPS_SCRIPT_INSTRUCTIONS }                              from '../calendar/sync/providers/googleAppsScript'
+import { RELAY_PERSONAL_SCRIPT_SOURCE, RELAY_CORP_SCRIPT_SOURCE, RELAY_INSTRUCTIONS } from '../calendar/sync/providers/googleAppsScriptRelay'
+import { JSONBIN_SCRIPT_SOURCE, JSONBIN_INSTRUCTIONS }                                from '../calendar/sync/providers/jsonbin'
 
 type NoteRow = {
   id: string
@@ -798,6 +800,28 @@ export function registerDbIpcHandlers(): void {
     }
     return result
   })
+
+  /**
+   * entities:find-by-email — look up a non-trashed entity by an email field value.
+   * Used by SyncedEventPopup to match attendee emails to entities.
+   * Input:  { email: string, type_id: string, email_field: string }
+   * Returns: { id, name, type_id } or null
+   */
+  ipcMain.handle(
+    'entities:find-by-email',
+    (_event, { email, type_id, email_field }: { email: string; type_id: string; email_field: string }) => {
+      const db = getDatabase()
+      // JSON_EXTRACT accepts the path as a parameter — safe to pass field key here
+      const path = `$.${email_field}`
+      return db
+        .prepare(
+          `SELECT id, name, type_id FROM entities
+           WHERE type_id = ? AND trashed_at IS NULL AND JSON_EXTRACT(fields, ?) = ?
+           LIMIT 1`,
+        )
+        .get(type_id, path, email) as { id: string; name: string; type_id: string } | null ?? null
+    },
+  )
 
   /**
    * entities:computed-query — execute a WQL query scoped to a specific entity.
@@ -2252,9 +2276,19 @@ export function registerDbIpcHandlers(): void {
     }
   })
 
-  /** calendar-sources:get-script — returns the Apps Script source + instructions for display in the Settings UI. */
-  ipcMain.handle('calendar-sources:get-script', () => ({
-    source: APPS_SCRIPT_SOURCE,
-    instructions: APPS_SCRIPT_INSTRUCTIONS,
-  }))
+  /** calendar-sources:get-script — returns the script source + instructions for the given provider.
+   *  Relay provider returns secondSource (corp script) in addition to source (personal script). */
+  ipcMain.handle('calendar-sources:get-script', (_e, args: { provider_id?: string } = {}) => {
+    if (args.provider_id === 'jsonbin') {
+      return { source: JSONBIN_SCRIPT_SOURCE, instructions: JSONBIN_INSTRUCTIONS }
+    }
+    if (args.provider_id === 'google_apps_script_relay') {
+      return {
+        source: RELAY_PERSONAL_SCRIPT_SOURCE,
+        secondSource: RELAY_CORP_SCRIPT_SOURCE,
+        instructions: RELAY_INSTRUCTIONS,
+      }
+    }
+    return { source: APPS_SCRIPT_SOURCE, instructions: APPS_SCRIPT_INSTRUCTIONS }
+  })
 }

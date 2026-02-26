@@ -35,7 +35,9 @@ const selectedProvider = ref(props.source?.provider_id ?? 'google_apps_script')
 // Config fields
 const sourceName = ref(props.source?.name ?? '')
 const syncInterval = ref(props.source?.sync_interval_minutes ?? 60)
-const webAppUrl = ref('')
+const webAppUrl = ref('')       // google_apps_script
+const binId = ref('')           // jsonbin
+const accessKey = ref('')       // jsonbin (optional, for private bins)
 const selectedCalendarIds = ref<string[]>([])
 
 // Parse existing config when editing
@@ -43,6 +45,8 @@ if (props.source) {
   try {
     const cfg = JSON.parse(props.source.config) as Record<string, string>
     webAppUrl.value = cfg.webAppUrl ?? ''
+    binId.value = cfg.binId ?? ''
+    accessKey.value = cfg.accessKey ?? ''
     if (cfg.calendarIds) {
       selectedCalendarIds.value = cfg.calendarIds.split(',').map((s) => s.trim()).filter(Boolean)
     }
@@ -60,9 +64,11 @@ const discoveredCalendars = ref<DiscoveredCalendar[]>([])
 
 // Script panel
 const appsScriptSource = ref('')
+const appsScriptSecondSource = ref('')   // relay provider: corp script
 const appsScriptInstructions = ref<string[]>([])
 const showInstructions = ref(false)
 const copied = ref(false)
+const copiedSecond = ref(false)
 
 // Save
 const saving = ref(false)
@@ -76,21 +82,38 @@ const syncIntervalOptions = [
   { label: '24 hours', value: 1440 },
 ]
 
-onMounted(async () => {
-  const data = await window.api.invoke('calendar-sources:get-script') as {
+async function loadScriptFor(providerId: string): Promise<void> {
+  const data = await window.api.invoke('calendar-sources:get-script', { provider_id: providerId }) as {
     source: string
+    secondSource?: string
     instructions: readonly string[]
   }
   appsScriptSource.value = data.source
+  appsScriptSecondSource.value = data.secondSource ?? ''
   appsScriptInstructions.value = [...data.instructions]
-})
+}
+
+async function copyScript(second = false): Promise<void> {
+  await navigator.clipboard.writeText(second ? appsScriptSecondSource.value : appsScriptSource.value)
+  if (second) {
+    copiedSecond.value = true
+    setTimeout(() => { copiedSecond.value = false }, 2000)
+  } else {
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 2000)
+  }
+}
+
+onMounted(() => { void loadScriptFor(selectedProvider.value) })
 
 // ── Verify ────────────────────────────────────────────────────────────────────
 
 async function testConnection(): Promise<void> {
-  if (!webAppUrl.value.trim()) {
+  const isJsonbin = selectedProvider.value === 'jsonbin'
+  const urlOrId = isJsonbin ? binId.value : webAppUrl.value
+  if (!urlOrId.trim()) {
     verifyState.value = 'error'
-    verifyError.value = 'Web App URL is required.'
+    verifyError.value = isJsonbin ? 'Bin ID is required.' : 'Web App URL is required.'
     return
   }
   verifyState.value = 'loading'
@@ -99,9 +122,12 @@ async function testConnection(): Promise<void> {
   discoveredCalendars.value = []
 
   try {
+    const config = isJsonbin
+      ? { binId: binId.value.trim(), ...(accessKey.value.trim() ? { accessKey: accessKey.value.trim() } : {}) }
+      : { webAppUrl: webAppUrl.value.trim() }
     const result = await window.api.invoke('calendar-sources:verify', {
       provider_id: selectedProvider.value,
-      config: { webAppUrl: webAppUrl.value.trim() },
+      config,
     }) as { ok: boolean; error?: string; displayName?: string; calendars?: DiscoveredCalendar[] }
 
     if (result.ok) {
@@ -134,25 +160,26 @@ function toggleCalendar(calId: string): void {
   }
 }
 
-// ── Script copy ───────────────────────────────────────────────────────────────
-
-async function copyScript(): Promise<void> {
-  await navigator.clipboard.writeText(appsScriptSource.value)
-  copied.value = true
-  setTimeout(() => { copied.value = false }, 2000)
-}
+// ── Script copy — see loadScriptFor() above ───────────────────────────────────
 
 // ── Save ──────────────────────────────────────────────────────────────────────
 
 async function save(): Promise<void> {
+  const isJsonbin = selectedProvider.value === 'jsonbin'
   if (!sourceName.value.trim()) { saveError.value = 'Name is required.'; return }
-  if (!webAppUrl.value.trim()) { saveError.value = 'Web App URL is required.'; return }
+  if (isJsonbin && !binId.value.trim()) { saveError.value = 'Bin ID is required.'; return }
+  if (!isJsonbin && !webAppUrl.value.trim()) { saveError.value = 'Web App URL is required.'; return }
 
   saving.value = true
   saveError.value = ''
 
-  const config: Record<string, string> = { webAppUrl: webAppUrl.value.trim() }
-  if (selectedCalendarIds.value.length > 0) {
+  const config: Record<string, string> = isJsonbin
+    ? {
+        binId: binId.value.trim(),
+        ...(accessKey.value.trim() ? { accessKey: accessKey.value.trim() } : {}),
+      }
+    : { webAppUrl: webAppUrl.value.trim() }
+  if (!isJsonbin && selectedCalendarIds.value.length > 0) {
     config.calendarIds = selectedCalendarIds.value.join(',')
   }
 
@@ -210,7 +237,7 @@ async function save(): Promise<void> {
           <div class="provider-list">
             <button
               class="provider-item active-provider"
-              @click="selectedProvider = 'google_apps_script'; step = 2"
+              @click="selectedProvider = 'google_apps_script'; step = 2; void loadScriptFor('google_apps_script')"
             >
               <div class="provider-icon">
                 <Link2 :size="18" />
@@ -218,6 +245,34 @@ async function save(): Promise<void> {
               <div class="provider-info">
                 <span class="provider-name">Google Apps Script</span>
                 <span class="provider-desc">No API key needed — deploy a Web App in your Google account</span>
+              </div>
+              <ChevronRight :size="14" class="provider-arrow" />
+            </button>
+
+            <button
+              class="provider-item active-provider"
+              @click="selectedProvider = 'google_apps_script_relay'; step = 2; void loadScriptFor('google_apps_script_relay')"
+            >
+              <div class="provider-icon">
+                <Link2 :size="18" />
+              </div>
+              <div class="provider-info">
+                <span class="provider-name">Apps Script Relay</span>
+                <span class="provider-desc">For Workspace accounts — corp script POSTs to a personal Web App which serves it to Wizz</span>
+              </div>
+              <ChevronRight :size="14" class="provider-arrow" />
+            </button>
+
+            <button
+              class="provider-item active-provider"
+              @click="selectedProvider = 'jsonbin'; step = 2; void loadScriptFor('jsonbin')"
+            >
+              <div class="provider-icon">
+                <Link2 :size="18" />
+              </div>
+              <div class="provider-info">
+                <span class="provider-name">JSONBin.io</span>
+                <span class="provider-desc">For Workspace accounts — script pushes calendar JSON to a jsonbin.io bin, Wizz reads it</span>
               </div>
               <ChevronRight :size="14" class="provider-arrow" />
             </button>
@@ -280,11 +335,19 @@ async function save(): Promise<void> {
             </div>
           </div>
 
-          <!-- Web App URL -->
+          <!-- URL / Bin ID input (varies by provider) -->
           <div class="field-group">
-            <label class="field-label">Web App URL</label>
+            <label class="field-label">{{ selectedProvider === 'jsonbin' ? 'Bin ID' : 'Web App URL' }}</label>
             <div class="url-row">
               <input
+                v-if="selectedProvider === 'jsonbin'"
+                v-model="binId"
+                class="cs-input flex-1"
+                placeholder="64a1b2c3d4e5f6a7b8c9d0e1"
+                spellcheck="false"
+              />
+              <input
+                v-else
                 v-model="webAppUrl"
                 class="cs-input flex-1"
                 placeholder="https://script.google.com/macros/s/.../exec"
@@ -304,7 +367,7 @@ async function save(): Promise<void> {
             <!-- Verify result -->
             <div v-if="verifyState === 'ok'" class="verify-ok">
               <Check :size="13" />
-              <span>Connected as <strong>{{ verifyEmail }}</strong></span>
+              <span>{{ selectedProvider === 'jsonbin' ? verifyEmail : `Connected as ${verifyEmail}` }}</span>
             </div>
             <div v-else-if="verifyState === 'error'" class="verify-error">
               <AlertCircle :size="13" />
@@ -312,8 +375,19 @@ async function save(): Promise<void> {
             </div>
           </div>
 
-          <!-- Calendar selection (shown after successful verify) -->
-          <div v-if="discoveredCalendars.length > 0" class="field-group">
+          <!-- Access Key (jsonbin only, optional) -->
+          <div v-if="selectedProvider === 'jsonbin'" class="field-group">
+            <label class="field-label">Access Key <span class="field-optional">(optional — only needed for private bins)</span></label>
+            <input
+              v-model="accessKey"
+              class="cs-input"
+              placeholder="$2a$10$…"
+              spellcheck="false"
+            />
+          </div>
+
+          <!-- Calendar selection (Apps Script only) -->
+          <div v-if="discoveredCalendars.length > 0 && selectedProvider === 'google_apps_script'" class="field-group">
             <label class="field-label">Calendars to sync</label>
             <div class="calendar-list">
               <label
@@ -333,8 +407,8 @@ async function save(): Promise<void> {
             </div>
           </div>
 
-          <!-- Existing calendars hint (when editing without re-verifying) -->
-          <div v-else-if="selectedCalendarIds.length > 0" class="field-group">
+          <!-- Existing calendars hint (Apps Script only, when editing without re-verifying) -->
+          <div v-else-if="selectedCalendarIds.length > 0 && selectedProvider === 'google_apps_script'" class="field-group">
             <label class="field-label">Calendars to sync</label>
             <p class="field-hint">
               {{ selectedCalendarIds.length }} calendar{{ selectedCalendarIds.length !== 1 ? 's' : '' }} configured.
@@ -353,16 +427,35 @@ async function save(): Promise<void> {
               <ol class="instructions-list">
                 <li v-for="(step, i) in appsScriptInstructions" :key="i">{{ step }}</li>
               </ol>
+
+              <!-- First script block -->
               <div class="script-block">
                 <div class="script-header">
-                  <span class="script-label">Apps Script code</span>
-                  <button class="copy-btn" @click="copyScript">
+                  <span class="script-label">
+                    {{ selectedProvider === 'jsonbin' ? 'JSONBin script'
+                     : selectedProvider === 'google_apps_script_relay' ? 'Script 1 — Personal account (receiver)'
+                     : 'Apps Script code' }}
+                  </span>
+                  <button class="copy-btn" @click="copyScript(false)">
                     <CheckCheck v-if="copied" :size="12" />
                     <Copy v-else :size="12" />
                     <span>{{ copied ? 'Copied!' : 'Copy' }}</span>
                   </button>
                 </div>
                 <pre class="script-pre"><code>{{ appsScriptSource }}</code></pre>
+              </div>
+
+              <!-- Second script block (relay provider only) -->
+              <div v-if="appsScriptSecondSource" class="script-block">
+                <div class="script-header">
+                  <span class="script-label">Script 2 — Corp account (sender)</span>
+                  <button class="copy-btn" @click="copyScript(true)">
+                    <CheckCheck v-if="copiedSecond" :size="12" />
+                    <Copy v-else :size="12" />
+                    <span>{{ copiedSecond ? 'Copied!' : 'Copy' }}</span>
+                  </button>
+                </div>
+                <pre class="script-pre"><code>{{ appsScriptSecondSource }}</code></pre>
               </div>
             </template>
           </div>
@@ -584,6 +677,14 @@ async function save(): Promise<void> {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-text-muted);
+}
+
+.field-optional {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-text-muted);
+  font-size: 10px;
 }
 
 .field-hint {

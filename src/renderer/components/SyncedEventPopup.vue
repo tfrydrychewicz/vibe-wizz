@@ -12,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
+  'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
   'note-linked': [{ eventId: number; linkedNoteId: string; linkedNoteTitle: string }]
   'note-unlinked': [{ eventId: number }]
 }>()
@@ -19,6 +20,11 @@ const emit = defineEmits<{
 // ── Source name ───────────────────────────────────────────────────────────────
 
 const sourceName = ref<string | null>(null)
+
+// ── Attendee → entity resolution ─────────────────────────────────────────────
+// Maps attendee email → { id, name, type_id } when entity mapping is configured
+
+const attendeeEntityMap = ref<Map<string, { id: string; name: string; type_id: string }>>(new Map())
 
 // ── Note link state (mirrors event, but updates locally after linking) ────────
 
@@ -70,11 +76,39 @@ onMounted(async () => {
   // Delayed click-outside listener so the opening click doesn't immediately close
   setTimeout(() => document.addEventListener('mousedown', onClickOutside), 60)
 
-  // Load source display name
-  if (props.event.source_id) {
-    const sources = await window.api.invoke('calendar-sources:list') as { id: string; name: string }[]
-    const src = sources.find(s => s.id === props.event.source_id)
+  // Load source display name and entity mapping settings in parallel
+  const [sources, typeId, emailField] = await Promise.all([
+    props.event.source_id
+      ? (window.api.invoke('calendar-sources:list') as Promise<{ id: string; name: string }[]>)
+      : Promise.resolve([]),
+    window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
+  ])
+
+  if (props.event.source_id && Array.isArray(sources)) {
+    const src = (sources as { id: string; name: string }[]).find(s => s.id === props.event.source_id)
     if (src) sourceName.value = src.name
+  }
+
+  // Resolve attendees to entities if mapping is configured
+  if (typeId?.trim() && emailField?.trim()) {
+    const parsed = attendees.value
+    const results = await Promise.all(
+      parsed.map(a =>
+        (window.api.invoke('entities:find-by-email', {
+          email: a.email,
+          type_id: typeId.trim(),
+          email_field: emailField.trim(),
+        }) as Promise<{ id: string; name: string; type_id: string } | null>)
+          .then(entity => ({ email: a.email, entity }))
+          .catch(() => ({ email: a.email, entity: null }))
+      )
+    )
+    const map = new Map<string, { id: string; name: string; type_id: string }>()
+    for (const { email, entity } of results) {
+      if (entity) map.set(email, entity)
+    }
+    attendeeEntityMap.value = map
   }
 })
 
@@ -122,6 +156,12 @@ function openNote(e: MouseEvent): void {
   emit('open-note', { noteId: linkedNoteId.value, title: linkedNoteTitle.value, mode })
   emit('close')
 }
+
+function openEntity(e: MouseEvent, entity: { id: string; name: string; type_id: string }): void {
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-entity', { entityId: entity.id, typeId: entity.type_id, mode })
+  emit('close')
+}
 </script>
 
 <template>
@@ -147,12 +187,21 @@ function openNote(e: MouseEvent): void {
         Attendees
       </div>
       <div class="sp-attendees">
-        <span
-          v-for="a in attendees"
-          :key="a.email"
-          class="sp-attendee-chip"
-          :title="a.email"
-        >{{ a.name || a.email }}</span>
+        <template v-for="a in attendees" :key="a.email">
+          <!-- Entity chip — clickable when mapping resolved this email -->
+          <button
+            v-if="attendeeEntityMap.get(a.email)"
+            class="sp-attendee-chip sp-attendee-entity"
+            :title="a.email"
+            @click="openEntity($event, attendeeEntityMap.get(a.email)!)"
+          >{{ attendeeEntityMap.get(a.email)!.name }}</button>
+          <!-- Plain chip -->
+          <span
+            v-else
+            class="sp-attendee-chip"
+            :title="a.email"
+          >{{ a.name || a.email }}</span>
+        </template>
       </div>
     </div>
 
@@ -325,6 +374,18 @@ function openNote(e: MouseEvent): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sp-attendee-entity {
+  color: var(--color-accent);
+  background: rgba(91, 141, 239, 0.1);
+  border-color: rgba(91, 141, 239, 0.25);
+  cursor: pointer;
+}
+
+.sp-attendee-entity:hover {
+  background: rgba(91, 141, 239, 0.18);
+  border-color: rgba(91, 141, 239, 0.45);
 }
 
 /* ── Linked note ─────────────────────────────────────────────────────────── */

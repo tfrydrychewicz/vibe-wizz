@@ -8,6 +8,7 @@ import type { OpenMode } from '../stores/tabStore'
 
 const emit = defineEmits<{
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
+  'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
 }>()
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -802,6 +803,7 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
       :position="syncedPopupPos"
       @close="syncedPopupEvent = null"
       @open-note="emit('open-note', $event); syncedPopupEvent = null"
+      @open-entity="emit('open-entity', $event); syncedPopupEvent = null"
       @note-linked="onSyncedNoteLinked"
       @note-unlinked="onSyncedNoteUnlinked"
     />

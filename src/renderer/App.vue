@@ -565,6 +565,7 @@ onBeforeUnmount(() => {
                 <CalendarView
                   v-else-if="pane.type === 'calendar'"
                   @open-note="onOpenNote"
+                  @open-entity="onOpenEntity"
                 />
               </div>
             </div>
@@ -629,7 +630,7 @@ onBeforeUnmount(() => {
 
       <!-- Calendar view -->
       <template v-else-if="activeView === 'calendar'">
-        <CalendarView @open-note="onOpenNote" />
+        <CalendarView @open-note="onOpenNote" @open-entity="onOpenEntity" />
       </template>
 
       <!-- Search view -->
