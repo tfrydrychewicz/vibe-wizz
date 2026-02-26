@@ -15,6 +15,7 @@ const emit = defineEmits<{
   close: []
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
   'open-view': [view: string]
+  'note-created': []
 }>()
 
 const MODELS = [
@@ -279,6 +280,9 @@ async function send(): Promise<void> {
       references: result.references,
       actions: result.actions,
     })
+    if (result.actions?.some((a) => a.type === 'created_note')) {
+      emit('note-created')
+    }
   } catch {
     messages.value.push({
       role: 'assistant',

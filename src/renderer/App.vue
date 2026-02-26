@@ -607,6 +607,7 @@ onBeforeUnmount(() => {
       @close="showChat = false"
       @open-note="onOpenNote"
       @open-view="onChatOpenView"
+      @note-created="noteListRef?.refresh()"
     />
   </div>
 </template>
