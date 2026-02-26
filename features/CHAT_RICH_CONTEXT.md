@@ -129,7 +129,7 @@ collected into a separate "Notes linked via entities" section in the system prom
 | `entity_ref` | Fetch entity name + id | `fieldName: @Name [id:uuid]` |
 | `entity_ref_list` | Fetch each entity name | `fieldName: @A [id:uuid1], @B [id:uuid2]` |
 | `note_ref` | Fetch note title + collect content | `fieldName: [[Note Title]] [id:note-uuid]` |
-| `computed` | Skipped | *(omitted)* |
+| `computed` | Execute WQL via `parseQuery` + `evalQuery`; enqueue results if `depth < 2` | `fieldName: @A [id:uuid1], @B [id:uuid2]` (max 10) |
 
 ### 3.4 Note Token Budget (entity-linked notes)
 
@@ -261,9 +261,9 @@ export async function sendChatMessage(
 
 ### Phase D — cleanup & guard rails
 
-- [ ] **D1.** `ipc.ts` — guard `entity_ref` / `note_ref` resolution: skip if referenced entity is trashed or note is archived; show `(deleted)` / `(archived)` placeholder in field value.
-- [ ] **D2.** `ipc.ts` — handle `entity_ref_list` stored as either comma-separated string or JSON array (try `JSON.parse`, fall back to `.split(',')`).
-- [ ] **D3.** `chat.ts` — verify no duplicate note blocks between `pinnedNotes` and `entityLinkedNotes` sections in the final system prompt string.
+- [x] **D1.** `ipc.ts` — guard `entity_ref` / `note_ref` resolution: skip if referenced entity is trashed or note is archived; show `(deleted)` / `(archived)` placeholder in field value.
+- [x] **D2.** `ipc.ts` — handle `entity_ref_list` stored as either comma-separated string or JSON array (try `JSON.parse`, fall back to `.split(',')`).
+- [x] **D3.** `chat.ts` — verify no duplicate note blocks between `pinnedNotes` and `entityLinkedNotes` sections in the final system prompt string.
 
 ---
 
@@ -300,6 +300,5 @@ No DB schema changes. No new IPC channels. No new migration files.
 ## 7. Non-Goals (for this feature)
 
 - Recursive note content expansion (a pinned note that links to another note — not followed).
-- `computed` field evaluation (WQL queries) — out of scope; Claude can ask the user.
 - Persisting pinned notes across chat sessions (session-only, like `mentionedEntities`).
 - Showing note content previews in the chat attachment bar (title chip only).

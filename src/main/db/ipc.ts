@@ -203,7 +203,7 @@ function buildRichEntityContext(
       .get(item.id) as { id: string; name: string; fields: string; type_name: string; schema: string } | undefined
     if (!row) continue
 
-    let schemaDef: { fields?: { name: string; type: string }[] } = {}
+    let schemaDef: { fields?: { name: string; type: string; query?: string }[] } = {}
     let fieldValues: Record<string, string> = {}
     try { schemaDef = JSON.parse(row.schema || '{}') } catch { /* ignore */ }
     try { fieldValues = JSON.parse(row.fields || '{}') } catch { /* ignore */ }
@@ -211,7 +211,23 @@ function buildRichEntityContext(
     const resolvedFields: ResolvedField[] = []
 
     for (const fieldDef of schemaDef.fields ?? []) {
-      if (fieldDef.type === 'computed') continue  // WQL evaluation out of scope
+      if (fieldDef.type === 'computed') {
+        // Execute the WQL query scoped to this entity and format results like entity_ref_list
+        if (!fieldDef.query) continue
+        try {
+          const ast = parseQuery(fieldDef.query)
+          const results = evalQuery(db, ast, item.id) as { id: string; name: string; type_id: string }[]
+          if (!results.length) continue
+          const parts = results.slice(0, 10).map((r) => {
+            if (item.depth < 2 && !visited.has(r.id)) queue.push({ id: r.id, depth: item.depth + 1 })
+            return `@${r.name} [id:${r.id}]`
+          })
+          resolvedFields.push({ name: fieldDef.name, value: parts.join(', ') })
+        } catch {
+          // Skip fields with invalid or erroring WQL
+        }
+        continue
+      }
       const value = fieldValues[fieldDef.name]
       if (!value) continue
 
