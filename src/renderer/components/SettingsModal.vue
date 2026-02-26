@@ -14,6 +14,24 @@ const categories: { id: CategoryId; label: string; icon: typeof BrainCircuit }[]
   { id: 'debug', label: 'Debug', icon: Bug },
 ]
 
+// ── Sub-tab navigation ────────────────────────────────────────────────────────
+type AiTab = 'llm' | 'transcription' | 'followup'
+type CalendarTab = 'general' | 'attendees'
+
+const selectedAiTab = ref<AiTab>('llm')
+const selectedCalendarTab = ref<CalendarTab>('general')
+
+const aiTabs: { id: AiTab; label: string }[] = [
+  { id: 'llm', label: 'LLM Providers' },
+  { id: 'transcription', label: 'Transcription' },
+  { id: 'followup', label: 'Follow-up Intelligence' },
+]
+
+const calendarTabs: { id: CalendarTab; label: string }[] = [
+  { id: 'general', label: 'General' },
+  { id: 'attendees', label: 'Attendees' },
+]
+
 // ── AI settings ───────────────────────────────────────────────────────────────
 const apiKey = ref('')
 const showKey = ref(false)
@@ -193,229 +211,320 @@ function onBackdropKeydown(e: KeyboardEvent): void {
         <!-- Right: settings pane -->
         <div class="settings-pane">
 
-          <!-- AI -->
+          <!-- ── AI ── -->
           <template v-if="selectedCategory === 'ai'">
-            <h3 class="pane-title">AI &amp; Embeddings</h3>
-
-            <div class="field-group">
-              <label class="field-label" for="openai-key">OpenAI API Key</label>
-              <p class="field-hint">
-                Used for generating semantic search embeddings (text-embedding-3-small).
-                Stored locally on your device only.
-              </p>
-              <div class="key-row">
-                <input
-                  id="openai-key"
-                  v-model="apiKey"
-                  :type="showKey ? 'text' : 'password'"
-                  class="modal-input key-input"
-                  placeholder="sk-..."
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-                <button class="toggle-btn" :title="showKey ? 'Hide' : 'Show'" @click="showKey = !showKey">
-                  <EyeOff v-if="showKey" :size="14" />
-                  <Eye v-else :size="14" />
-                </button>
+            <div class="pane-header">
+              <h3 class="pane-title">AI</h3>
+              <div class="tab-bar">
+                <button
+                  v-for="tab in aiTabs"
+                  :key="tab.id"
+                  class="tab-btn"
+                  :class="{ active: selectedAiTab === tab.id }"
+                  @click="selectedAiTab = tab.id"
+                >{{ tab.label }}</button>
               </div>
             </div>
 
-            <div class="field-group">
-              <label class="field-label" for="anthropic-key">Anthropic API Key</label>
-              <p class="field-hint">
-                Used for note summaries, NER entity detection, action item extraction, and AI chat via Claude.
-                Stored locally on your device only.
-              </p>
-              <div class="key-row">
-                <input
-                  id="anthropic-key"
-                  v-model="anthropicKey"
-                  :type="showAnthropicKey ? 'text' : 'password'"
-                  class="modal-input key-input"
-                  placeholder="sk-ant-..."
-                  autocomplete="off"
-                  spellcheck="false"
-                />
-                <button class="toggle-btn" :title="showAnthropicKey ? 'Hide' : 'Show'" @click="showAnthropicKey = !showAnthropicKey">
-                  <EyeOff v-if="showAnthropicKey" :size="14" />
-                  <Eye v-else :size="14" />
-                </button>
-              </div>
-            </div>
-
-            <div class="section-divider" />
-            <h4 class="section-subtitle">Follow-up Intelligence</h4>
-
-            <div class="field-group">
-              <label class="field-label" for="followup-entity-type">Assignee Entity Type</label>
-              <p class="field-hint">
-                Action items assigned to entities of this type will be monitored for staleness in the Daily Brief.
-                Set to "(disabled)" to turn off follow-up tracking.
-              </p>
-              <select id="followup-entity-type" v-model="followupAssigneeEntityTypeId" class="modal-input modal-select">
-                <option value="">(disabled)</option>
-                <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
-              </select>
-            </div>
-
-            <div v-if="followupAssigneeEntityTypeId" class="field-group">
-              <label class="field-label" for="followup-days">Staleness Threshold</label>
-              <p class="field-hint">
-                Flag action items with no updates after this many days.
-              </p>
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <input
-                  id="followup-days"
-                  v-model.number="followupStalenessDays"
-                  type="number"
-                  min="1"
-                  max="90"
-                  class="modal-input"
-                  style="width: 72px;"
-                />
-                <span class="field-hint" style="margin: 0;">days</span>
-              </div>
-            </div>
-
-            <div class="section-divider" />
-            <h4 class="section-subtitle">Transcription</h4>
-
-            <div class="field-group">
-              <label class="field-label">Engine</label>
-              <div class="model-picker">
-                <button class="model-btn" :class="{ active: transcriptionModel === 'elevenlabs' }" @click="transcriptionModel = 'elevenlabs'">ElevenLabs</button>
-                <button class="model-btn" :class="{ active: transcriptionModel === 'deepgram' }" @click="transcriptionModel = 'deepgram'">Deepgram</button>
-                <button class="model-btn" :class="{ active: transcriptionModel === 'macos' }" @click="transcriptionModel = 'macos'">macOS</button>
-              </div>
-            </div>
-
-            <!-- ElevenLabs: key + optional diarization mode -->
-            <template v-if="transcriptionModel === 'elevenlabs'">
+            <!-- LLM Providers tab -->
+            <template v-if="selectedAiTab === 'llm'">
               <div class="field-group">
-                <label class="field-label" for="elevenlabs-key">ElevenLabs API Key</label>
+                <label class="field-label" for="openai-key">OpenAI API Key</label>
                 <p class="field-hint">
-                  Scribe v2 — 99 languages including Polish, auto-detected.
+                  Used for generating semantic search embeddings (text-embedding-3-small).
                   Stored locally on your device only.
                 </p>
                 <div class="key-row">
                   <input
-                    id="elevenlabs-key"
-                    v-model="elevenLabsKey"
-                    :type="showElevenLabsKey ? 'text' : 'password'"
+                    id="openai-key"
+                    v-model="apiKey"
+                    :type="showKey ? 'text' : 'password'"
                     class="modal-input key-input"
-                    placeholder="ElevenLabs API key"
+                    placeholder="sk-..."
                     autocomplete="off"
                     spellcheck="false"
                   />
-                  <button class="toggle-btn" :title="showElevenLabsKey ? 'Hide' : 'Show'" @click="showElevenLabsKey = !showElevenLabsKey">
-                    <EyeOff v-if="showElevenLabsKey" :size="14" />
+                  <button class="toggle-btn" :title="showKey ? 'Hide' : 'Show'" @click="showKey = !showKey">
+                    <EyeOff v-if="showKey" :size="14" />
                     <Eye v-else :size="14" />
                   </button>
                 </div>
               </div>
-              <div class="field-group">
-                <label class="field-label">Speaker Diarization</label>
-                <label class="toggle-row">
-                  <input
-                    v-model="elevenLabsDiarize"
-                    type="checkbox"
-                    class="toggle-checkbox"
-                  />
-                  <span class="toggle-label">Identify speakers (Batch mode)</span>
-                </label>
-                <p class="field-hint">
-                  <span v-if="elevenLabsDiarize">
-                    Batch mode: audio is recorded locally, then uploaded to Scribe v2 after you stop.
-                    Supports up to 48 speakers. No live transcript preview during recording.
-                  </span>
-                  <span v-else">
-                    Realtime mode: live transcript as you speak (&lt;150ms latency). No speaker labels.
-                  </span>
-                </p>
-              </div>
-              <div class="field-group">
-                <label class="field-label">System Audio Capture</label>
-                <label class="toggle-row">
-                  <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
-                  <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
-                </label>
-                <p class="field-hint">
-                  Records both your microphone and what meeting participants say via Core Audio Taps.
-                  Requires Screen &amp; System Audio Recording permission in System Settings.
-                </p>
-              </div>
-            </template>
 
-            <!-- Deepgram: key + language -->
-            <template v-else-if="transcriptionModel === 'deepgram'">
               <div class="field-group">
-                <label class="field-label" for="deepgram-key">Deepgram API Key</label>
+                <label class="field-label" for="anthropic-key">Anthropic API Key</label>
                 <p class="field-hint">
-                  Nova-3 streaming transcription. Stored locally on your device only.
+                  Used for note summaries, NER entity detection, action item extraction, and AI chat via Claude.
+                  Stored locally on your device only.
                 </p>
                 <div class="key-row">
                   <input
-                    id="deepgram-key"
-                    v-model="deepgramKey"
-                    :type="showDeepgramKey ? 'text' : 'password'"
+                    id="anthropic-key"
+                    v-model="anthropicKey"
+                    :type="showAnthropicKey ? 'text' : 'password'"
                     class="modal-input key-input"
-                    placeholder="Deepgram API key"
+                    placeholder="sk-ant-..."
                     autocomplete="off"
                     spellcheck="false"
                   />
-                  <button class="toggle-btn" :title="showDeepgramKey ? 'Hide' : 'Show'" @click="showDeepgramKey = !showDeepgramKey">
-                    <EyeOff v-if="showDeepgramKey" :size="14" />
+                  <button class="toggle-btn" :title="showAnthropicKey ? 'Hide' : 'Show'" @click="showAnthropicKey = !showAnthropicKey">
+                    <EyeOff v-if="showAnthropicKey" :size="14" />
                     <Eye v-else :size="14" />
                   </button>
                 </div>
               </div>
-              <div class="field-group">
-                <label class="field-label" for="transcription-lang">Language</label>
-                <p class="field-hint">
-                  Auto-detect covers English and major Western languages. Set Polish explicitly for Polish speech.
-                </p>
-                <select id="transcription-lang" v-model="transcriptionLanguage" class="modal-input modal-select">
-                  <option value="multi">Auto-detect (EN + ES/FR/DE/HI/RU/PT/JA/IT/NL)</option>
-                  <option value="en">English</option>
-                  <option value="pl">Polish</option>
-                  <option value="es">Spanish</option>
-                  <option value="fr">French</option>
-                  <option value="de">German</option>
-                  <option value="pt">Portuguese</option>
-                  <option value="ru">Russian</option>
-                  <option value="hi">Hindi</option>
-                  <option value="ja">Japanese</option>
-                  <option value="it">Italian</option>
-                  <option value="nl">Dutch</option>
-                </select>
-              </div>
-              <div class="field-group">
-                <label class="field-label">System Audio Capture</label>
-                <label class="toggle-row">
-                  <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
-                  <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
-                </label>
-                <p class="field-hint">
-                  Records both your microphone and what meeting participants say via Core Audio Taps.
-                  Requires Screen &amp; System Audio Recording permission in System Settings.
-                </p>
-              </div>
             </template>
 
-            <!-- macOS: no key, no language (uses system locale) -->
-            <template v-else>
+            <!-- Transcription tab -->
+            <template v-else-if="selectedAiTab === 'transcription'">
               <div class="field-group">
+                <label class="field-label">Engine</label>
+                <div class="model-picker">
+                  <button class="model-btn" :class="{ active: transcriptionModel === 'elevenlabs' }" @click="transcriptionModel = 'elevenlabs'">ElevenLabs</button>
+                  <button class="model-btn" :class="{ active: transcriptionModel === 'deepgram' }" @click="transcriptionModel = 'deepgram'">Deepgram</button>
+                  <button class="model-btn" :class="{ active: transcriptionModel === 'macos' }" @click="transcriptionModel = 'macos'">macOS</button>
+                </div>
+              </div>
+
+              <!-- ElevenLabs: key + optional diarization mode -->
+              <template v-if="transcriptionModel === 'elevenlabs'">
+                <div class="field-group">
+                  <label class="field-label" for="elevenlabs-key">ElevenLabs API Key</label>
+                  <p class="field-hint">
+                    Scribe v2 — 99 languages including Polish, auto-detected.
+                    Stored locally on your device only.
+                  </p>
+                  <div class="key-row">
+                    <input
+                      id="elevenlabs-key"
+                      v-model="elevenLabsKey"
+                      :type="showElevenLabsKey ? 'text' : 'password'"
+                      class="modal-input key-input"
+                      placeholder="ElevenLabs API key"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                    <button class="toggle-btn" :title="showElevenLabsKey ? 'Hide' : 'Show'" @click="showElevenLabsKey = !showElevenLabsKey">
+                      <EyeOff v-if="showElevenLabsKey" :size="14" />
+                      <Eye v-else :size="14" />
+                    </button>
+                  </div>
+                </div>
+                <div class="field-group">
+                  <label class="field-label">Speaker Diarization</label>
+                  <label class="toggle-row">
+                    <input
+                      v-model="elevenLabsDiarize"
+                      type="checkbox"
+                      class="toggle-checkbox"
+                    />
+                    <span class="toggle-label">Identify speakers (Batch mode)</span>
+                  </label>
+                  <p class="field-hint">
+                    <span v-if="elevenLabsDiarize">
+                      Batch mode: audio is recorded locally, then uploaded to Scribe v2 after you stop.
+                      Supports up to 48 speakers. No live transcript preview during recording.
+                    </span>
+                    <span v-else>
+                      Realtime mode: live transcript as you speak (&lt;150ms latency). No speaker labels.
+                    </span>
+                  </p>
+                </div>
+                <div class="field-group">
+                  <label class="field-label">System Audio Capture</label>
+                  <label class="toggle-row">
+                    <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
+                    <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
+                  </label>
+                  <p class="field-hint">
+                    Records both your microphone and what meeting participants say via Core Audio Taps.
+                    Requires Screen &amp; System Audio Recording permission in System Settings.
+                  </p>
+                </div>
+              </template>
+
+              <!-- Deepgram: key + language -->
+              <template v-else-if="transcriptionModel === 'deepgram'">
+                <div class="field-group">
+                  <label class="field-label" for="deepgram-key">Deepgram API Key</label>
+                  <p class="field-hint">
+                    Nova-3 streaming transcription. Stored locally on your device only.
+                  </p>
+                  <div class="key-row">
+                    <input
+                      id="deepgram-key"
+                      v-model="deepgramKey"
+                      :type="showDeepgramKey ? 'text' : 'password'"
+                      class="modal-input key-input"
+                      placeholder="Deepgram API key"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                    <button class="toggle-btn" :title="showDeepgramKey ? 'Hide' : 'Show'" @click="showDeepgramKey = !showDeepgramKey">
+                      <EyeOff v-if="showDeepgramKey" :size="14" />
+                      <Eye v-else :size="14" />
+                    </button>
+                  </div>
+                </div>
+                <div class="field-group">
+                  <label class="field-label" for="transcription-lang">Language</label>
+                  <p class="field-hint">
+                    Auto-detect covers English and major Western languages. Set Polish explicitly for Polish speech.
+                  </p>
+                  <select id="transcription-lang" v-model="transcriptionLanguage" class="modal-input modal-select">
+                    <option value="multi">Auto-detect (EN + ES/FR/DE/HI/RU/PT/JA/IT/NL)</option>
+                    <option value="en">English</option>
+                    <option value="pl">Polish</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="ru">Russian</option>
+                    <option value="hi">Hindi</option>
+                    <option value="ja">Japanese</option>
+                    <option value="it">Italian</option>
+                    <option value="nl">Dutch</option>
+                  </select>
+                </div>
+                <div class="field-group">
+                  <label class="field-label">System Audio Capture</label>
+                  <label class="toggle-row">
+                    <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
+                    <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
+                  </label>
+                  <p class="field-hint">
+                    Records both your microphone and what meeting participants say via Core Audio Taps.
+                    Requires Screen &amp; System Audio Recording permission in System Settings.
+                  </p>
+                </div>
+              </template>
+
+              <!-- macOS: no key, no language (uses system locale) -->
+              <template v-else>
+                <div class="field-group">
+                  <p class="field-hint">
+                    Uses macOS on-device speech recognition (SFSpeechRecognizer). Language follows your
+                    macOS system language. No API key required.
+                  </p>
+                </div>
+              </template>
+            </template>
+
+            <!-- Follow-up Intelligence tab -->
+            <template v-else-if="selectedAiTab === 'followup'">
+              <div class="field-group">
+                <label class="field-label" for="followup-entity-type">Assignee Entity Type</label>
                 <p class="field-hint">
-                  Uses macOS on-device speech recognition (SFSpeechRecognizer). Language follows your
-                  macOS system language. No API key required.
+                  Action items assigned to entities of this type will be monitored for staleness in the Daily Brief.
+                  Set to "(disabled)" to turn off follow-up tracking.
                 </p>
+                <select id="followup-entity-type" v-model="followupAssigneeEntityTypeId" class="modal-input modal-select">
+                  <option value="">(disabled)</option>
+                  <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
+                </select>
+              </div>
+
+              <div v-if="followupAssigneeEntityTypeId" class="field-group">
+                <label class="field-label" for="followup-days">Staleness Threshold</label>
+                <p class="field-hint">
+                  Flag action items with no updates after this many days.
+                </p>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <input
+                    id="followup-days"
+                    v-model.number="followupStalenessDays"
+                    type="number"
+                    min="1"
+                    max="90"
+                    class="modal-input"
+                    style="width: 72px;"
+                  />
+                  <span class="field-hint" style="margin: 0;">days</span>
+                </div>
               </div>
             </template>
           </template>
 
-          <!-- Debug -->
-          <template v-if="selectedCategory === 'debug'">
-            <h3 class="pane-title">Debug</h3>
+          <!-- ── Calendar ── -->
+          <template v-else-if="selectedCategory === 'calendar'">
+            <div class="pane-header">
+              <h3 class="pane-title">Calendar</h3>
+              <div class="tab-bar">
+                <button
+                  v-for="tab in calendarTabs"
+                  :key="tab.id"
+                  class="tab-btn"
+                  :class="{ active: selectedCalendarTab === tab.id }"
+                  @click="selectedCalendarTab = tab.id"
+                >{{ tab.label }}</button>
+              </div>
+            </div>
+
+            <!-- General tab -->
+            <template v-if="selectedCalendarTab === 'general'">
+              <div class="field-group">
+                <label class="field-label">Default Slot Duration</label>
+                <p class="field-hint">Duration of a new meeting when clicking or dragging a time slot.</p>
+                <div class="slot-picker">
+                  <button
+                    v-for="opt in [{ label: '15 min', value: '15' }, { label: '30 min', value: '30' }, { label: '1 hour', value: '60' }]"
+                    :key="opt.value"
+                    class="slot-btn"
+                    :class="{ active: calendarSlotDuration === opt.value }"
+                    @click="calendarSlotDuration = opt.value"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="field-group">
+                <label class="field-label">Meeting Note Title Template</label>
+                <p class="field-hint">
+                  Title used when creating a new meeting note. Available placeholders: <code>{date}</code>, <code>{title}</code>.
+                </p>
+                <input v-model="meetingNoteTitleTemplate" class="modal-input" placeholder="{date} - {title}" />
+              </div>
+            </template>
+
+            <!-- Attendees tab -->
+            <template v-else-if="selectedCalendarTab === 'attendees'">
+              <div class="field-group">
+                <label class="field-label">Attendee Entity</label>
+                <p class="field-hint">
+                  Link meeting attendees to entities. When configured, the meeting modal lets you search and pick existing entities instead of typing name and email manually.
+                </p>
+                <select v-model="attendeeEntityTypeId" class="modal-input modal-select">
+                  <option value="">None (free-form name + email)</option>
+                  <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
+                </select>
+                <template v-if="attendeeEntityTypeId">
+                  <div class="attendee-field-row">
+                    <div class="attendee-field-col">
+                      <label class="field-label">Name Field</label>
+                      <select v-model="attendeeNameField" class="modal-input modal-select">
+                        <option value="">— select field —</option>
+                        <option v-for="f in nameFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                      </select>
+                    </div>
+                    <div class="attendee-field-col">
+                      <label class="field-label">Email Field</label>
+                      <select v-model="attendeeEmailField" class="modal-input modal-select">
+                        <option value="">— select field —</option>
+                        <option v-for="f in emailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                      </select>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </template>
+
+          <!-- ── Debug ── -->
+          <template v-else-if="selectedCategory === 'debug'">
+            <div class="pane-header">
+              <h3 class="pane-title">Debug</h3>
+            </div>
 
             <div class="field-group">
               <label class="field-label">Transcription Audio</label>
@@ -432,64 +541,6 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                 <span class="debug-folder-path">{{ debugAudioFolder }}</span>
                 <button class="open-folder-btn" @click="openDebugAudioFolder">Open</button>
               </div>
-            </div>
-          </template>
-
-          <!-- Calendar -->
-          <template v-if="selectedCategory === 'calendar'">
-            <h3 class="pane-title">Calendar</h3>
-
-            <div class="field-group">
-              <label class="field-label">Default Slot Duration</label>
-              <p class="field-hint">Duration of a new meeting when clicking or dragging a time slot.</p>
-              <div class="slot-picker">
-                <button
-                  v-for="opt in [{ label: '15 min', value: '15' }, { label: '30 min', value: '30' }, { label: '1 hour', value: '60' }]"
-                  :key="opt.value"
-                  class="slot-btn"
-                  :class="{ active: calendarSlotDuration === opt.value }"
-                  @click="calendarSlotDuration = opt.value"
-                >
-                  {{ opt.label }}
-                </button>
-              </div>
-            </div>
-
-            <div class="field-group">
-              <label class="field-label">Meeting Note Title Template</label>
-              <p class="field-hint">
-                Title used when creating a new meeting note. Available placeholders: <code>{date}</code>, <code>{title}</code>.
-              </p>
-              <input v-model="meetingNoteTitleTemplate" class="modal-input" placeholder="{date} - {title}" />
-            </div>
-
-            <div class="field-group">
-              <label class="field-label">Attendee Entity</label>
-              <p class="field-hint">
-                Link meeting attendees to entities. When configured, the meeting modal lets you search and pick existing entities instead of typing name and email manually.
-              </p>
-              <select v-model="attendeeEntityTypeId" class="modal-input modal-select">
-                <option value="">None (free-form name + email)</option>
-                <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
-              </select>
-              <template v-if="attendeeEntityTypeId">
-                <div class="attendee-field-row">
-                  <div class="attendee-field-col">
-                    <label class="field-label">Name Field</label>
-                    <select v-model="attendeeNameField" class="modal-input modal-select">
-                      <option value="">— select field —</option>
-                      <option v-for="f in nameFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
-                    </select>
-                  </div>
-                  <div class="attendee-field-col">
-                    <label class="field-label">Email Field</label>
-                    <select v-model="attendeeEmailField" class="modal-input modal-select">
-                      <option value="">— select field —</option>
-                      <option v-for="f in emailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
-                    </select>
-                  </div>
-                </div>
-              </template>
             </div>
           </template>
 
@@ -524,7 +575,7 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 12px;
-  width: 680px;
+  width: 780px;
   height: 520px;
   max-width: 96vw;
   max-height: 90vh;
@@ -622,7 +673,7 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 .settings-pane {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 24px 28px;
+  padding: 20px 24px 28px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -647,11 +698,49 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   background: var(--color-text-muted);
 }
 
+/* ── Pane header with tabs ────────────────────────────────────────────────── */
+.pane-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
 .pane-title {
   font-size: 16px;
   font-weight: 600;
   color: var(--color-text);
-  margin: 0 0 4px;
+  margin: 0;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tab-btn {
+  padding: 6px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+.tab-btn:hover {
+  color: var(--color-text);
+}
+
+.tab-btn.active {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
 }
 
 /* ── Fields ───────────────────────────────────────────────────────────────── */
@@ -743,20 +832,6 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 .toggle-label {
   font-size: 13px;
   color: var(--color-text);
-}
-
-/* ── Section divider & subtitle ──────────────────────────────────────────── */
-.section-divider {
-  border: none;
-  border-top: 1px solid var(--color-border);
-  margin: 0;
-}
-
-.section-subtitle {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text);
-  margin: 0;
 }
 
 /* ── Model picker (same visual style as slot picker) ─────────────────────── */
