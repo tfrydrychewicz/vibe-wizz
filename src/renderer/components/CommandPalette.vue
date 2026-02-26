@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Search } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
+import type { OpenMode } from '../stores/tabStore'
 
 type EntityTypeRow = {
   id: string
@@ -27,7 +28,7 @@ interface PaletteCommand {
   iconColor?: string
   shortcut?: string
   category: 'navigate' | 'create' | 'app' | 'notes' | 'entities'
-  run: () => void
+  run: (mode: OpenMode) => void
 }
 
 const props = defineProps<{
@@ -40,8 +41,8 @@ const emit = defineEmits<{
   navigate: [view: string]
   'new-note': [templateId?: string]
   'new-entity': [typeId: string]
-  'open-note': [noteId: string]
-  'open-entity': [entityId: string, typeId: string]
+  'open-note': [noteId: string, mode: OpenMode]
+  'open-entity': [entityId: string, typeId: string, mode: OpenMode]
 }>()
 
 const query = ref('')
@@ -135,7 +136,7 @@ const noteCommands = computed((): PaletteCommand[] =>
     label: n.title,
     iconName: 'file-text',
     category: 'notes',
-    run: () => { emit('open-note', n.id) },
+    run: (mode) => { emit('open-note', n.id, mode) },
   }))
 )
 
@@ -146,7 +147,7 @@ const entityCommands = computed((): PaletteCommand[] =>
     subtitle: e.type_name,
     iconName: e.type_icon ?? 'tag',
     category: 'entities',
-    run: () => { emit('open-entity', e.id, e.type_id ?? '') },
+    run: (mode) => { emit('open-entity', e.id, e.type_id ?? '', mode) },
   }))
 )
 
@@ -223,7 +224,7 @@ function onKeydown(e: KeyboardEvent): void {
   } else if (e.key === 'Enter') {
     e.preventDefault()
     const cmd = flatCommands.value[selectedIndex.value]
-    if (cmd) runCommand(cmd)
+    if (cmd) runCommand(cmd, e)
   } else if (e.key === 'Escape') {
     e.preventDefault()
     emit('close')
@@ -237,9 +238,10 @@ function scrollSelectedIntoView(): void {
   })
 }
 
-function runCommand(cmd: PaletteCommand): void {
+function runCommand(cmd: PaletteCommand, e: MouseEvent | KeyboardEvent): void {
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
   emit('close')
-  cmd.run()
+  cmd.run(mode)
 }
 
 function itemIndex(groupIdx: number, itemIdx: number): number {
@@ -292,7 +294,7 @@ onBeforeUnmount(() => {
               class="cp-item"
               :class="{ 'cp-item-active': itemIndex(gi, ci) === selectedIndex }"
               @mouseenter="selectedIndex = itemIndex(gi, ci)"
-              @click="runCommand(cmd)"
+              @click="runCommand(cmd, $event)"
             >
               <span class="cp-item-icon">
                 <LucideIcon :name="cmd.iconName" :size="13" :color="cmd.iconColor" />
@@ -314,6 +316,8 @@ onBeforeUnmount(() => {
       <div class="cp-footer">
         <span class="cp-hint"><kbd>↑↓</kbd> navigate</span>
         <span class="cp-hint"><kbd>↵</kbd> open</span>
+        <span class="cp-hint"><kbd>⇧↵</kbd> new pane</span>
+        <span class="cp-hint"><kbd>⌘↵</kbd> new tab</span>
         <span class="cp-hint"><kbd>esc</kbd> close</span>
       </div>
     </div>

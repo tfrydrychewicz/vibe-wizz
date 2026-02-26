@@ -690,8 +690,8 @@ onBeforeUnmount(() => {
       @navigate="onPaletteNavigate"
       @new-note="onPaletteNewNote"
       @new-entity="onPaletteNewEntity"
-      @open-note="(id) => onOpenNote({ noteId: id, title: 'Untitled', mode: 'default' })"
-      @open-entity="(id, typeId) => onOpenEntity({ entityId: id, typeId, mode: 'default' })"
+      @open-note="(id, mode) => onOpenNote({ noteId: id, title: 'Untitled', mode })"
+      @open-entity="(id, typeId, mode) => onOpenEntity({ entityId: id, typeId, mode })"
     />
 
     <!-- AI Chat sidebar -->
