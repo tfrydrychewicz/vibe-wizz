@@ -21,6 +21,26 @@ const emit = defineEmits<{
 const containerRef = ref<HTMLDivElement | null>(null)
 let view: EditorView | null = null
 
+// ── Parse error display ───────────────────────────────────────────────────────
+
+const parseError = ref<string | null>(null)
+let parseTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleParseCheck(query: string): void {
+  if (parseTimer) clearTimeout(parseTimer)
+  if (!query.trim()) {
+    parseError.value = null
+    return
+  }
+  parseTimer = setTimeout(async () => {
+    parseTimer = null
+    const result = (await window.api.invoke('entities:parse-query', { query })) as
+      | { ok: true }
+      | { ok: false; error: string }
+    parseError.value = result.ok ? null : result.error
+  }, 400)
+}
+
 // ── Autocomplete schema ───────────────────────────────────────────────────────
 
 type EntityTypeSchema = { id: string; name: string; fields: string[] }
@@ -168,7 +188,9 @@ onMounted(async () => {
       autocompletion({ override: [getCompletions], activateOnTyping: true }),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
-          emit('update:modelValue', update.state.doc.toString())
+          const val = update.state.doc.toString()
+          emit('update:modelValue', val)
+          scheduleParseCheck(val)
         }
       }),
       cmPlaceholder(props.placeholder ?? 'SELECT p FROM Person WHERE p.team = {this}'),
@@ -179,6 +201,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  if (parseTimer) clearTimeout(parseTimer)
   view?.destroy()
   view = null
 })
@@ -198,10 +221,20 @@ watch(
 </script>
 
 <template>
-  <div ref="containerRef" class="wql-editor" />
+  <div class="wql-editor-wrap">
+    <div ref="containerRef" class="wql-editor" />
+    <div v-if="parseError" class="wql-parse-error">{{ parseError }}</div>
+  </div>
 </template>
 
 <style scoped>
+.wql-editor-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .wql-editor {
   width: 100%;
   box-sizing: border-box;
@@ -211,5 +244,12 @@ watch(
 .wql-editor :deep(.cm-placeholder) {
   color: var(--color-text-muted);
   font-style: italic;
+}
+
+.wql-parse-error {
+  font-size: 11px;
+  color: #f06070;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  line-height: 1.4;
 }
 </style>

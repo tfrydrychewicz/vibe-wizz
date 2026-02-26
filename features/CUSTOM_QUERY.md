@@ -241,7 +241,25 @@ Returns:
 | { ok: false; error: string }
 ```
 
-### 5.2 New handler: `entity-types:schema-for-autocomplete`
+### 5.2 New handler: `entities:parse-query`
+
+Used by `QueryFieldEditor` to validate WQL while the user types, without executing it.
+
+```typescript
+ipcMain.handle('entities:parse-query', (_event, { query }: { query: string }) => {
+  try {
+    parseQuery(query)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+})
+```
+
+Returns `{ ok: true }` or `{ ok: false, error: string }`.
+Called with a 400 ms debounce from `QueryFieldEditor`; error displayed inline below the editor.
+
+### 5.3 New handler: `entity-types:schema-for-autocomplete`
 
 Used by the renderer to power WQL autocomplete.
 
@@ -373,18 +391,19 @@ async function getCompletions(context: CompletionContext): Promise<CompletionRes
 ```
 Props:
   modelValue: string      — raw WQL source
-  readonly: boolean       — true when editing entity type, false not needed
-  entityTypes: {...}[]    — for autocomplete
+  placeholder?: string    — override default placeholder text
 
 Emits:
   update:modelValue
 
 Internals:
-  - Creates EditorView on mount (basicSetup, wqlLanguage(), autocompletion({source}))
+  - Creates EditorView on mount (wqlLanguage(), autocompletion({override}), wqlTheme)
   - Updates view when modelValue changes externally (via EditorView.dispatch)
-  - Destroys EditorView on unmount
-  - Applies Wizz dark/light theme via a CodeMirror theme extension
-  - Height: auto (min 2 lines, max 8 lines) via CSS
+  - Destroys EditorView on unmount (also cancels pending parse timer)
+  - Applies Wizz dark theme via EditorView.theme (CSS variables)
+  - On each doc change: emits update + schedules entities:parse-query (400 ms debounce)
+  - Displays parse error in .wql-parse-error div below the editor (monospace, #f06070)
+  - Error cleared immediately when query is emptied
 ```
 
 ---
@@ -582,9 +601,10 @@ Modified files:
 
 ### Phase 4 — Polish
 
-- [ ] `EntityMentionPopup.vue` — handle `computed` fields
-- [ ] Error display in EntityDetail (parse/eval errors shown inline)
-- [ ] Add `computed` field type to built-in `Team` schema (replace static `members` field)
+- [x] `EntityMentionPopup.vue` — handle `computed` fields
+- [x] Error display in EntityDetail (parse/eval errors shown inline)
+- [x] `QueryFieldEditor.vue` — inline parse error below editor (`entities:parse-query`, 400 ms debounce)
+- [x] Add `computed` field type to built-in `Team` schema (replace static `members` field)
 - [ ] Update `CLAUDE.md` — document new field type, IPC handlers, and file structure
 
 ---

@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import LucideIcon from './LucideIcon.vue'
 import type { OpenMode } from '../stores/tabStore'
 
-type FieldDef = { name: string; type: string; options?: string[] }
+type FieldDef = { name: string; type: string; options?: string[]; query?: string }
 type EntityData = {
   entity: { id: string; name: string; type_id: string; fields: string }
   entityType: { id: string; name: string; icon: string; schema: string; color: string | null }
@@ -71,10 +71,16 @@ const fields = computed<FieldDisplay[]>(() => {
     type === 'entity_ref' || type === 'entity_ref_list' || type === 'note_ref'
 
   return schemaDef.fields
-    .filter((f) => values[f.name] != null && values[f.name] !== '' && values[f.name] !== '[]')
+    .filter((f) => {
+      if (f.type === 'computed') {
+        // Show while fetching or once resolved with results
+        return !!loadingRefs.value[f.name] || resolvedRefs.value[f.name] != null
+      }
+      return values[f.name] != null && values[f.name] !== '' && values[f.name] !== '[]'
+    })
     .map((f): FieldDisplay => {
       const label = f.name.replace(/_/g, ' ')
-      if (isRef(f.type)) {
+      if (f.type === 'computed' || isRef(f.type)) {
         const resolved = resolvedRefs.value[f.name]
         return resolved
           ? { label, ref: resolved }
@@ -92,6 +98,24 @@ async function resolveRefFields(
   values: Record<string, unknown>,
 ): Promise<void> {
   for (const f of schemaDef.fields) {
+    // Computed fields derive their value from a WQL query — no stored value needed
+    if (f.type === 'computed') {
+      if (!f.query) continue
+      loadingRefs.value[f.name] = true
+      const result = (await window.api.invoke('entities:computed-query', {
+        query: f.query,
+        thisId: props.entityId,
+      })) as { ok: boolean; results?: { id: string; name: string; type_id: string }[] }
+      loadingRefs.value[f.name] = false
+      if (result.ok && result.results?.length) {
+        resolvedRefs.value[f.name] = {
+          kind: 'entity_list',
+          items: result.results.map((r) => ({ id: r.id, typeId: r.type_id, name: r.name })),
+        }
+      }
+      continue
+    }
+
     const raw = values[f.name]
     if (raw == null || raw === '' || raw === '[]') continue
 

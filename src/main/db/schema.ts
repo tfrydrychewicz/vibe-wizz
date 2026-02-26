@@ -35,13 +35,13 @@ CREATE TABLE IF NOT EXISTS entity_types (
 
 INSERT OR IGNORE INTO entity_types (id, name, icon, schema, kanban_enabled, color) VALUES
   ('person', 'Person', 'user',
-   '{"fields":[{"name":"role","type":"text"},{"name":"team","type":"text"},{"name":"email","type":"email"},{"name":"manager","type":"entity_ref","entity_type":"person"},{"name":"reports_to","type":"entity_ref","entity_type":"person"}]}',
+   '{"fields":[{"name":"role","type":"text"},{"name":"team","type":"entity_ref","entity_type":"team"},{"name":"email","type":"email"},{"name":"manager","type":"entity_ref","entity_type":"person"},{"name":"reports_to","type":"entity_ref","entity_type":"person"}]}',
    0, '#5b8def'),
   ('project', 'Project', 'folder',
    '{"fields":[{"name":"status","type":"select","options":["active","paused","done"]},{"name":"lead","type":"entity_ref","entity_type":"person"},{"name":"team","type":"entity_ref","entity_type":"team"},{"name":"priority","type":"select","options":["low","medium","high","critical"]}]}',
    1, '#f0a050'),
   ('team', 'Team', 'users',
-   '{"fields":[{"name":"lead","type":"entity_ref","entity_type":"person"},{"name":"members","type":"entity_ref_list","entity_type":"person"}]}',
+   '{"fields":[{"name":"lead","type":"entity_ref","entity_type":"person"},{"name":"members","type":"computed","query":"SELECT p FROM Person WHERE p.team = {this}"}]}',
    0, '#50c0a0'),
   ('decision', 'Decision', 'scale',
    '{"fields":[{"name":"date","type":"date"},{"name":"context_note","type":"note_ref"},{"name":"status","type":"select","options":["proposed","accepted","rejected","superseded"]},{"name":"owner","type":"entity_ref","entity_type":"person"}]}',
