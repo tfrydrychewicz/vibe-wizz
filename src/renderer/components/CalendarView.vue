@@ -442,16 +442,124 @@ function onGlobalMouseUp(): void {
   openCreateModal(startDate.toISOString(), endDate.toISOString())
 }
 
+// ── Overlap layout computation ────────────────────────────────────────────────
+
+interface OverlapInfo {
+  colIndex: number
+  numCols: number
+}
+
+/**
+ * Assign side-by-side column positions for overlapping events in a single day.
+ * Uses a greedy interval-scheduling algorithm identical to Google Calendar:
+ *  1. Sort events by start time (longer events first on ties).
+ *  2. Assign each event to the first column whose last event has already ended.
+ *  3. Each event's numCols = max column index of any overlapping event + 1
+ *     (so an isolated event stays full-width).
+ */
+function computeOverlapLayout(evs: CalendarEvent[]): Map<number, OverlapInfo> {
+  const result = new Map<number, OverlapInfo>()
+  if (!evs.length) return result
+
+  const sorted = [...evs].sort((a, b) => {
+    const diff = new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+    if (diff !== 0) return diff
+    // Tie-break: longer events first
+    return new Date(b.end_at).getTime() - new Date(a.end_at).getTime()
+  })
+
+  // Greedy column assignment
+  const colEndTimes: number[] = []      // end timestamp of the last event in each column
+  const eventCols = new Map<number, number>()  // event.id → colIndex
+
+  for (const ev of sorted) {
+    const startMs = new Date(ev.start_at).getTime()
+    const endMs   = new Date(ev.end_at).getTime()
+
+    let assigned = -1
+    for (let c = 0; c < colEndTimes.length; c++) {
+      if (colEndTimes[c] <= startMs) {
+        assigned = c
+        colEndTimes[c] = endMs
+        break
+      }
+    }
+    if (assigned === -1) {
+      assigned = colEndTimes.length
+      colEndTimes.push(endMs)
+    }
+    eventCols.set(ev.id, assigned)
+  }
+
+  // Determine numCols for each event: max column of any event it overlaps with + 1.
+  // This lets non-overlapping events stay full-width while overlapping ones share space.
+  for (const ev of sorted) {
+    const startMs = new Date(ev.start_at).getTime()
+    const endMs   = new Date(ev.end_at).getTime()
+    let maxCol = eventCols.get(ev.id)!
+
+    for (const other of sorted) {
+      if (other.id === ev.id) continue
+      const otherStart = new Date(other.start_at).getTime()
+      const otherEnd   = new Date(other.end_at).getTime()
+      if (startMs < otherEnd && endMs > otherStart) {
+        maxCol = Math.max(maxCol, eventCols.get(other.id)!)
+      }
+    }
+
+    result.set(ev.id, { colIndex: eventCols.get(ev.id)!, numCols: maxCol + 1 })
+  }
+
+  return result
+}
+
+/** Reactive map: "day date string" → (event.id → OverlapInfo). */
+const overlapLayouts = computed(() => {
+  const byDay = new Map<string, CalendarEvent[]>()
+  for (const ev of events.value) {
+    const key = new Date(ev.start_at).toDateString()
+    const arr = byDay.get(key)
+    if (arr) arr.push(ev)
+    else byDay.set(key, [ev])
+  }
+  const layouts = new Map<string, Map<number, OverlapInfo>>()
+  for (const [key, dayEvs] of byDay) {
+    layouts.set(key, computeOverlapLayout(dayEvs))
+  }
+  return layouts
+})
+
 // ── Event display helpers ─────────────────────────────────────────────────────
 
 function showEventTime(ev: CalendarEvent): boolean {
   return new Date(ev.end_at).getTime() - new Date(ev.start_at).getTime() >= 45 * 60 * 1000
 }
 
+function getEventHorizontalStyle(ev: CalendarEvent): { left: string; right: string } {
+  const dayKey = new Date(ev.start_at).toDateString()
+  const layout = overlapLayouts.value.get(dayKey)?.get(ev.id) ?? { colIndex: 0, numCols: 1 }
+  const { colIndex, numCols } = layout
+
+  if (numCols === 1) return { left: '2px', right: '2px' }
+
+  const pct = 100 / numCols
+  // 1px gap between adjacent event columns; outermost edges keep 2px gutter
+  const left  = colIndex === 0
+    ? '2px'
+    : `calc(${(colIndex * pct).toFixed(3)}% + 1px)`
+  const right = colIndex === numCols - 1
+    ? '2px'
+    : `calc(${((numCols - colIndex - 1) * pct).toFixed(3)}% + 1px)`
+
+  return { left, right }
+}
+
 function getEventDisplayStyle(ev: CalendarEvent): Record<string, string> {
+  const hStyle = getEventHorizontalStyle(ev)
+
   if (moveDrag.value?.event.id === ev.id) {
     // Fade original while ghost is shown at new position
-    return { top: `${eventTopPx(ev)}px`, height: `${eventHeightPx(ev)}px`, opacity: '0.35' }
+    return { ...hStyle, top: `${eventTopPx(ev)}px`, height: `${eventHeightPx(ev)}px`, opacity: '0.35' }
   }
   if (resizeDrag.value?.event.id === ev.id) {
     const startMinutes = new Date(ev.start_at).getHours() * 60 + new Date(ev.start_at).getMinutes()
@@ -459,9 +567,9 @@ function getEventDisplayStyle(ev: CalendarEvent): Record<string, string> {
       slotDuration.value / 60 * hourHeight.value,
       (resizeDrag.value.currentEndMinutes - startMinutes) / 60 * hourHeight.value,
     )
-    return { top: `${eventTopPx(ev)}px`, height: `${heightPx}px` }
+    return { ...hStyle, top: `${eventTopPx(ev)}px`, height: `${heightPx}px` }
   }
-  return { top: `${eventTopPx(ev)}px`, height: `${eventHeightPx(ev)}px` }
+  return { ...hStyle, top: `${eventTopPx(ev)}px`, height: `${eventHeightPx(ev)}px` }
 }
 
 // ── Move event (drag & drop) ───────────────────────────────────────────────────
