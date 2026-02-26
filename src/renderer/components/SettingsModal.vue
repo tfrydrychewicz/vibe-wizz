@@ -15,7 +15,7 @@ const categories: { id: CategoryId; label: string; icon: typeof BrainCircuit }[]
 ]
 
 // ── Sub-tab navigation ────────────────────────────────────────────────────────
-type AiTab = 'llm' | 'transcription' | 'followup'
+type AiTab = 'llm' | 'transcription' | 'followup' | 'models'
 type CalendarTab = 'general' | 'attendees'
 
 const selectedAiTab = ref<AiTab>('llm')
@@ -25,7 +25,14 @@ const aiTabs: { id: AiTab; label: string }[] = [
   { id: 'llm', label: 'LLM Providers' },
   { id: 'transcription', label: 'Transcription' },
   { id: 'followup', label: 'Follow-up Intelligence' },
+  { id: 'models', label: 'Models' },
 ]
+
+const availableModels = [
+  { id: 'claude-opus-4-6', label: 'Opus 4.6' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+] as const
 
 const calendarTabs: { id: CalendarTab; label: string }[] = [
   { id: 'general', label: 'General' },
@@ -45,6 +52,11 @@ const showDeepgramKey = ref(false)
 const transcriptionModel = ref<'elevenlabs' | 'deepgram' | 'macos'>('macos')
 const transcriptionLanguage = ref('multi')
 const systemAudioCapture = ref(false)
+
+// ── Model selection settings ──────────────────────────────────────────────────
+const modelChat = ref('claude-sonnet-4-6')
+const modelDailyBrief = ref('claude-sonnet-4-6')
+const modelBackground = ref('claude-haiku-4-5-20251001')
 
 // ── Follow-up intelligence settings ──────────────────────────────────────────
 const followupStalenessDays = ref(7)
@@ -110,7 +122,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder, followupDays, followupTypeId] = await Promise.all([
+  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder, followupDays, followupTypeId, mChat, mDailyBrief, mBackground] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
@@ -129,6 +141,9 @@ onMounted(async () => {
     window.api.invoke('debug:get-audio-folder') as Promise<string>,
     window.api.invoke('settings:get', { key: 'followup_staleness_days' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'followup_assignee_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'model_chat' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'model_daily_brief' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'model_background' }) as Promise<string | null>,
   ])
   apiKey.value = openai ?? ''
   anthropicKey.value = anthropic ?? ''
@@ -146,6 +161,9 @@ onMounted(async () => {
   debugAudioFolder.value = folder ?? ''
   followupStalenessDays.value = parseInt(followupDays ?? '7', 10)
   followupAssigneeEntityTypeId.value = followupTypeId ?? ''
+  modelChat.value = mChat ?? 'claude-sonnet-4-6'
+  modelDailyBrief.value = mDailyBrief ?? 'claude-sonnet-4-6'
+  modelBackground.value = mBackground ?? 'claude-haiku-4-5-20251001'
   await nextTick()
   attendeeNameField.value = attNameField ?? ''
   attendeeEmailField.value = attEmailField ?? ''
@@ -170,6 +188,9 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'save_debug_audio', value: saveDebugAudio.value ? 'true' : 'false' }),
     window.api.invoke('settings:set', { key: 'followup_staleness_days', value: String(followupStalenessDays.value) }),
     window.api.invoke('settings:set', { key: 'followup_assignee_entity_type_id', value: followupAssigneeEntityTypeId.value }),
+    window.api.invoke('settings:set', { key: 'model_chat', value: modelChat.value }),
+    window.api.invoke('settings:set', { key: 'model_daily_brief', value: modelDailyBrief.value }),
+    window.api.invoke('settings:set', { key: 'model_background', value: modelBackground.value }),
   ])
   saving.value = false
   savedFeedback.value = true
@@ -440,6 +461,62 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                     style="width: 72px;"
                   />
                   <span class="field-hint" style="margin: 0;">days</span>
+                </div>
+              </div>
+            </template>
+
+            <!-- Models tab -->
+            <template v-else-if="selectedAiTab === 'models'">
+              <div class="field-group">
+                <label class="field-label">Chat Model</label>
+                <p class="field-hint">Model used for the Ask Wizz chat sidebar.</p>
+                <div class="model-picker">
+                  <button
+                    v-for="m in availableModels"
+                    :key="m.id"
+                    class="model-btn"
+                    :class="{ active: modelChat === m.id }"
+                    @click="modelChat = m.id"
+                  >{{ m.label }}</button>
+                </div>
+              </div>
+
+              <div class="field-group">
+                <label class="field-label">Daily Brief Model</label>
+                <p class="field-hint">Model used to generate the Today view Daily Brief.</p>
+                <div class="model-picker">
+                  <button
+                    v-for="m in availableModels"
+                    :key="m.id"
+                    class="model-btn"
+                    :class="{ active: modelDailyBrief === m.id }"
+                    @click="modelDailyBrief = m.id"
+                  >{{ m.label }}</button>
+                </div>
+              </div>
+
+              <div class="field-group">
+                <label class="field-label">Background Tasks Model</label>
+                <p class="field-hint">
+                  Model used for NER entity detection, action item extraction, note summarization,
+                  cluster theme generation, transcription post-processing, and semantic search helpers.
+                </p>
+                <div class="model-picker">
+                  <button
+                    v-for="m in availableModels"
+                    :key="m.id"
+                    class="model-btn"
+                    :class="{ active: modelBackground === m.id }"
+                    @click="modelBackground = m.id"
+                  >{{ m.label }}</button>
+                </div>
+              </div>
+
+              <div class="field-group">
+                <label class="field-label">Embedding Model</label>
+                <p class="field-hint">Used for semantic search vector embeddings. Fixed — cannot be changed.</p>
+                <div class="model-picker" style="opacity: 0.5; pointer-events: none;">
+                  <button class="model-btn active">text-embedding-3-small</button>
                 </div>
               </div>
             </template>

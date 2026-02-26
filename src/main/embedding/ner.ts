@@ -6,8 +6,8 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 
-// Haiku: fast and cheap — appropriate for fire-and-forget background NER
-const MODEL = 'claude-haiku-4-5-20251001'
+// Default: Haiku — fast and cheap for fire-and-forget background NER
+const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 
 // Keep prompts manageable; 4000 chars ≈ 1000 tokens of note content
 const MAX_BODY_CHARS = 4000
@@ -32,7 +32,8 @@ export async function detectEntityMentions(
   noteTitle: string,
   bodyPlain: string,
   entities: { id: string; name: string }[],
-  apiKey: string
+  apiKey: string,
+  model = DEFAULT_MODEL
 ): Promise<NerDetection[]> {
   if (!entities.length || !bodyPlain.trim()) return []
 
@@ -45,7 +46,7 @@ export async function detectEntityMentions(
   const entityList = entitySubset.map((e) => JSON.stringify({ id: e.id, name: e.name })).join('\n')
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: model,
     max_tokens: 512,
     messages: [
       {

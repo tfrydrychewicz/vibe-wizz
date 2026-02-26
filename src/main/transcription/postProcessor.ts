@@ -16,7 +16,7 @@ import { getDatabase } from '../db/index'
 import { scheduleEmbedding } from '../embedding/pipeline'
 import { pushToRenderer } from '../push'
 
-const MODEL = 'claude-haiku-4-5-20251001'
+const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 const MAX_TRANSCRIPT_CHARS = 8000
 const MAX_NOTE_CHARS = 4000
 
@@ -319,6 +319,7 @@ async function matchSpeakersToAttendees(
   transcript: string,
   attendeeNames: string[],
   apiKey: string,
+  model: string,
 ): Promise<Record<string, string>> {
   if (!apiKey || attendeeNames.length < 2) return {}
 
@@ -343,7 +344,7 @@ No explanation, only JSON.`
   const client = new Anthropic({ apiKey })
   try {
     const response = await client.messages.create({
-      model: MODEL,
+      model: model,
       max_tokens: 200,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -371,6 +372,7 @@ async function generateMergedNote(
   rawTranscript: string,
   noteBodyPlain: string,
   apiKey: string,
+  model: string,
 ): Promise<string> {
   if (!rawTranscript.trim() || !apiKey) return ''
 
@@ -416,7 +418,7 @@ Write only the note content, no preamble.`
   const client = new Anthropic({ apiKey })
   try {
     const response = await client.messages.create({
-      model: MODEL,
+      model: model,
       max_tokens: 1024,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -477,6 +479,7 @@ export async function processTranscript(
   startedAt?: string,
   endedAt?: string,
   attendeeNames?: string[],
+  model = DEFAULT_MODEL,
 ): Promise<void> {
   if (!rawTranscript.trim()) {
     // Still push completion so the editor knows recording stopped
@@ -497,7 +500,7 @@ export async function processTranscript(
   // If the transcript has speaker labels and attendees are known, resolve Speaker N → name
   let labeledTranscript = rawTranscript
   if (attendeeNames && attendeeNames.length >= 2 && rawTranscript.includes('[Speaker ')) {
-    const speakerMap = await matchSpeakersToAttendees(rawTranscript, attendeeNames, anthropicKey)
+    const speakerMap = await matchSpeakersToAttendees(rawTranscript, attendeeNames, anthropicKey, model)
     if (Object.keys(speakerMap).length > 0) {
       labeledTranscript = applySpeakerNames(rawTranscript, speakerMap)
       console.log('[Transcription] Speaker map resolved:', speakerMap)
@@ -514,7 +517,7 @@ export async function processTranscript(
   }
 
   // Generate merged note (transcript + user's existing notes, graceful on failure)
-  const mergedContent = await generateMergedNote(labeledTranscript, noteBodyPlain, anthropicKey)
+  const mergedContent = await generateMergedNote(labeledTranscript, noteBodyPlain, anthropicKey, model)
 
   // Store merged content as the session summary for the history panel
   if (startedAt && mergedContent) {

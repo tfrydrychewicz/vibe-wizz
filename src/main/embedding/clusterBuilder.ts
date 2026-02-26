@@ -16,7 +16,7 @@ import { kmeansPP, cosineDist } from './kmeans'
 let _client: Anthropic | null = null
 let _currentKey = ''
 
-const MODEL = 'claude-haiku-4-5-20251001'
+const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 
 /** Update (or clear) the Anthropic client when the API key changes. */
 export function setAnthropicKey(apiKey: string): void {
@@ -38,7 +38,8 @@ export function setAnthropicKey(apiKey: string): void {
 export async function runL3Clustering(
   db: Database.Database,
   openaiKey: string,
-  anthropicKey: string
+  anthropicKey: string,
+  model = DEFAULT_MODEL
 ): Promise<void> {
   setOpenAIKey(openaiKey)
   setAnthropicKey(anthropicKey)
@@ -112,7 +113,7 @@ export async function runL3Clustering(
     // Generate cluster theme via Claude Haiku
     let clusterSummary: string
     try {
-      clusterSummary = await generateClusterSummary(repSummaries)
+      clusterSummary = await generateClusterSummary(repSummaries, model)
     } catch (err) {
       console.error(`[Cluster] Claude error for cluster ${c}:`, err)
       continue
@@ -182,7 +183,7 @@ export async function runL3Clustering(
 }
 
 /** Call Claude Haiku to generate a 2–4 sentence theme description for a cluster. */
-async function generateClusterSummary(repSummaries: string[]): Promise<string> {
+async function generateClusterSummary(repSummaries: string[], model: string): Promise<string> {
   if (!_client) throw new Error('Anthropic client not initialized')
 
   const notesBlock = repSummaries
@@ -190,7 +191,7 @@ async function generateClusterSummary(repSummaries: string[]): Promise<string> {
     .join('\n\n')
 
   const response = await _client.messages.create({
-    model: MODEL,
+    model: model,
     max_tokens: 200,
     messages: [
       {

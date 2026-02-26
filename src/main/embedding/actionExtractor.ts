@@ -6,8 +6,8 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 
-// Haiku: fast and cheap — appropriate for fire-and-forget background extraction
-const MODEL = 'claude-haiku-4-5-20251001'
+// Default: Haiku — fast and cheap for fire-and-forget background extraction
+const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 
 // Keep prompts manageable; 4000 chars ≈ 1000 tokens of note content
 const MAX_BODY_CHARS = 4000
@@ -33,7 +33,8 @@ export interface ExtractedActions {
 export async function extractActionItems(
   noteTitle: string,
   bodyPlain: string,
-  apiKey: string
+  apiKey: string,
+  model = DEFAULT_MODEL
 ): Promise<ExtractedActions> {
   if (!bodyPlain.trim()) return { heading: 'Action Items', items: [] }
 
@@ -43,7 +44,7 @@ export async function extractActionItems(
     bodyPlain.length > MAX_BODY_CHARS ? bodyPlain.slice(0, MAX_BODY_CHARS) + '…' : bodyPlain
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: model,
     max_tokens: 512,
     messages: [
       {

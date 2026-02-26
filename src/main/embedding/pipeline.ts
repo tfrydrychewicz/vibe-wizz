@@ -40,6 +40,11 @@ async function runPipeline(noteId: string): Promise<void> {
     .get('anthropic_api_key') as { value: string } | undefined
   const anthropicKey = anthropicSetting?.value ?? ''
 
+  const bgModelSetting = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('model_background') as { value: string } | undefined
+  const backgroundModel = bgModelSetting?.value || 'claude-haiku-4-5-20251001'
+
   if (!openaiKey && !anthropicKey) return
 
   // Load current note content
@@ -52,7 +57,7 @@ async function runPipeline(noteId: string): Promise<void> {
     // --- NER: entity detection (Anthropic only) ---
     (async () => {
       if (!anthropicKey || !note?.body_plain.trim()) return
-      await runNer(noteId, note.title, note.body_plain, anthropicKey, db)
+      await runNer(noteId, note.title, note.body_plain, anthropicKey, db, backgroundModel)
       pushToRenderer('note:ner-complete', { noteId })
     })(),
 
@@ -72,7 +77,7 @@ async function runPipeline(noteId: string): Promise<void> {
       await runL1Chunks(noteId, note.title, note.body_plain, db)
       if (anthropicKey) {
         setAnthropicKey(anthropicKey)
-        await runL2Summary(noteId, note.title, note.body_plain, db)
+        await runL2Summary(noteId, note.title, note.body_plain, db, backgroundModel)
       }
     })(),
   ])
@@ -129,14 +134,15 @@ async function runL2Summary(
   noteId: string,
   title: string,
   bodyPlain: string,
-  db: ReturnType<typeof getDatabase>
+  db: ReturnType<typeof getDatabase>,
+  model: string
 ): Promise<void> {
   // Delete any existing L2 summary for this note first
   deleteL2Summary(db, noteId)
 
   let summary: string
   try {
-    summary = await summarizeNote(title, bodyPlain)
+    summary = await summarizeNote(title, bodyPlain, model)
   } catch (err) {
     console.error('[Embedding] Claude API error (L2 summary):', err)
     return
@@ -175,7 +181,8 @@ async function runNer(
   title: string,
   bodyPlain: string,
   anthropicKey: string,
-  db: ReturnType<typeof getDatabase>
+  db: ReturnType<typeof getDatabase>,
+  model: string
 ): Promise<void> {
   // Get all non-trashed entities to scan for
   const entities = db
@@ -197,7 +204,7 @@ async function runNer(
 
   let detected: NerDetection[]
   try {
-    detected = await detectEntityMentions(title, bodyPlain, candidates, anthropicKey)
+    detected = await detectEntityMentions(title, bodyPlain, candidates, anthropicKey, model)
   } catch (err) {
     console.error('[NER] Claude API error:', err)
     return

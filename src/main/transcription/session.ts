@@ -263,8 +263,11 @@ function handleUnexpectedClose(code: number): void {
     (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as
       | { value: string }
       | undefined)?.value ?? ''
+  const backgroundModel =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
+      ?.value || 'claude-haiku-4-5-20251001'
   const attendeeNames = readAttendeeNames(eventId)
-  processTranscript(noteId, labeledText || finalText, anthKey, startedAt ?? undefined, endedAt, attendeeNames).catch(
+  processTranscript(noteId, labeledText || finalText, anthKey, startedAt ?? undefined, endedAt, attendeeNames, backgroundModel).catch(
     (err) => {
       console.error('[Transcription] Post-processing error after unexpected close:', err)
       pushToRenderer('transcription:error', { message: 'Post-processing failed' })
@@ -635,11 +638,14 @@ async function stopSession(): Promise<void> {
       (db.prepare('SELECT value FROM settings WHERE key = ?').get('transcription_language') as { value: string } | undefined)?.value || 'multi'
     const anthKey =
       (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)?.value ?? ''
+    const backgroundModel =
+      (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
+        ?.value || 'claude-haiku-4-5-20251001'
     const attendeeNames = readAttendeeNames(eventId)
 
     stopElevenLabsBatch(chunks, elKey, language)
       .then((labeled) =>
-        processTranscript(noteId, labeled, anthKey, startedAt ?? undefined, endedAt, attendeeNames),
+        processTranscript(noteId, labeled, anthKey, startedAt ?? undefined, endedAt, attendeeNames, backgroundModel),
       )
       .catch((err) => {
         console.error('[Transcription] ElevenLabs Batch error:', err)
@@ -673,6 +679,9 @@ async function stopSession(): Promise<void> {
   const db = getDatabase()
   const anthKey =
     (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)?.value ?? ''
+  const backgroundModel =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
+      ?.value || 'claude-haiku-4-5-20251001'
   const attendeeNames = readAttendeeNames(eventId)
 
   processTranscript(
@@ -682,6 +691,7 @@ async function stopSession(): Promise<void> {
     startedAt ?? undefined,
     endedAt,
     attendeeNames,
+    backgroundModel,
   ).catch((err) => {
     console.error('[Transcription] Post-processing error:', err)
     pushToRenderer('transcription:error', { message: 'Post-processing failed' })
@@ -902,7 +912,11 @@ export function registerTranscriptionIpcHandlers(): void {
       const anthRow = db
         .prepare('SELECT value FROM settings WHERE key = ?')
         .get('anthropic_api_key') as { value: string } | undefined
-      processTranscript(noteId, transcript, anthRow?.value ?? '').catch((err) => {
+      const bgModelRow = db
+        .prepare('SELECT value FROM settings WHERE key = ?')
+        .get('model_background') as { value: string } | undefined
+      const bgModel = bgModelRow?.value || 'claude-haiku-4-5-20251001'
+      processTranscript(noteId, transcript, anthRow?.value ?? '', undefined, undefined, undefined, bgModel).catch((err) => {
         console.error('[Transcription] Post-processing error:', err)
         pushToRenderer('transcription:error', { message: 'Post-processing failed' })
       })

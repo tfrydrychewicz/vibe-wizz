@@ -405,6 +405,7 @@ export function setChatAnthropicKey(apiKey: string): void {
 export async function extractSearchKeywords(
   question: string,
   recentHistory?: { role: 'user' | 'assistant'; content: string }[],
+  model = KEYWORD_MODEL,
 ): Promise<string[]> {
   if (!_client) return question.split(/\s+/).filter((w) => w.length >= 3)
 
@@ -421,7 +422,7 @@ export async function extractSearchKeywords(
 
   try {
     const response = await _client.messages.create({
-      model: KEYWORD_MODEL,
+      model: model,
       max_tokens: 60,
       messages: [
         {
@@ -459,12 +460,12 @@ export async function extractSearchKeywords(
  *
  * Falls back to splitting on whitespace if the API call fails or client is not set.
  */
-export async function expandQueryConcepts(query: string): Promise<string[]> {
+export async function expandQueryConcepts(query: string, model = KEYWORD_MODEL): Promise<string[]> {
   if (!_client) return query.split(/\s+/).filter((w) => w.length >= 3)
 
   try {
     const response = await _client.messages.create({
-      model: KEYWORD_MODEL,
+      model: model,
       max_tokens: 60,
       messages: [
         {
@@ -502,6 +503,7 @@ export async function expandQueryConcepts(query: string): Promise<string[]> {
 export async function reRankResults<T extends { title: string; excerpt: string | null }>(
   query: string,
   results: T[],
+  model = KEYWORD_MODEL,
 ): Promise<T[]> {
   if (!_client || results.length <= 1) return results
 
@@ -511,7 +513,7 @@ export async function reRankResults<T extends { title: string; excerpt: string |
 
   try {
     const response = await _client.messages.create({
-      model: KEYWORD_MODEL,
+      model: model,
       max_tokens: 80,
       messages: [
         {

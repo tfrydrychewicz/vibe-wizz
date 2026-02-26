@@ -887,8 +887,10 @@ export function registerDbIpcHandlers(): void {
       .get('anthropic_api_key') as { value: string } | undefined
     const apiKey = setting?.value ?? ''
     if (!apiKey) return { heading: 'Action Items', items: [] }
+    const bgModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined
+    const bgModel = bgModelRow?.value || 'claude-haiku-4-5-20251001'
     try {
-      const extracted = await extractActionItems('', body_plain, apiKey)
+      const extracted = await extractActionItems('', body_plain, apiKey, bgModel)
       return { heading: extracted.heading, items: extracted.items.map((e) => e.title) }
     } catch {
       return { heading: 'Action Items', items: [] }
@@ -1054,6 +1056,12 @@ export function registerDbIpcHandlers(): void {
         // no-op — expansion and re-ranking will be skipped
       }
 
+      let searchBgModel = 'claude-haiku-4-5-20251001'
+      try {
+        const bgModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined
+        searchBgModel = bgModelRow?.value || 'claude-haiku-4-5-20251001'
+      } catch { /* no-op */ }
+
       if (isVecLoaded()) {
         const setting = db
           .prepare('SELECT value FROM settings WHERE key = ?')
@@ -1067,7 +1075,7 @@ export function registerDbIpcHandlers(): void {
             // Step 1: query expansion + embedding in parallel
             const [expandedTerms, [embed]] = await Promise.all([
               anthropicKey
-                ? expandQueryConcepts(query)
+                ? expandQueryConcepts(query, searchBgModel)
                 : Promise.resolve(rawFtsQuery.split(/\s+/).filter((w) => w.length >= 2)),
               embedTexts([query]),
             ])
@@ -1196,7 +1204,7 @@ export function registerDbIpcHandlers(): void {
             // Step 4: Re-rank with Claude Haiku (if Anthropic key available)
             const reranked =
               anthropicKey && rrfSorted.length > 1
-                ? await reRankResults(query, rrfSorted)
+                ? await reRankResults(query, rrfSorted, searchBgModel)
                 : rrfSorted
 
             return reranked.map(({ id, title, excerpt }) => ({ id, title, excerpt }))
@@ -1262,6 +1270,12 @@ export function registerDbIpcHandlers(): void {
         }
       }
 
+      const chatModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_chat') as { value: string } | undefined
+      const chatModel = (model as ChatModelId | undefined) ?? (chatModelRow?.value as ChatModelId | undefined) ?? 'claude-sonnet-4-6'
+
+      const chatBgModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined
+      const chatBgModel = chatBgModelRow?.value || 'claude-haiku-4-5-20251001'
+
       setChatAnthropicKey(apiKey)
 
       // Use the last user message as the search query if not explicitly provided
@@ -1281,7 +1295,7 @@ export function registerDbIpcHandlers(): void {
       const seen = new Set<string>()
       if (query.trim()) {
         // Pass prior messages so Haiku can resolve follow-ups ("a kiedy to bylo?" → "Bifrost")
-        const keywords = await extractSearchKeywords(query, messages.slice(0, -1))
+        const keywords = await extractSearchKeywords(query, messages.slice(0, -1), chatBgModel)
 
         if (keywords.length > 0) {
           function addNote(row: { id: string; title: string; body_plain: string }): void {
@@ -1504,7 +1518,7 @@ export function registerDbIpcHandlers(): void {
       let content: string
       let executedActions: ExecutedAction[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, model as ChatModelId | undefined, files, entityContext)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext)
         content = result.content
         executedActions = result.actions
       } catch (err) {
@@ -1728,8 +1742,11 @@ export function registerDbIpcHandlers(): void {
       )
       .all()
 
+    const dailyBriefModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_daily_brief') as { value: string } | undefined
+    const dailyBriefModel = dailyBriefModelRow?.value || 'claude-sonnet-4-6'
+
     const { generateDailyBrief } = await import('../embedding/dailyBrief')
-    const content = await generateDailyBrief(date, apiKey)
+    const content = await generateDailyBrief(date, apiKey, dailyBriefModel)
     const now = new Date().toISOString()
 
     db.prepare(

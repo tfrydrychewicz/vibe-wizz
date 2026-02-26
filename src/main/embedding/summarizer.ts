@@ -9,8 +9,8 @@ import Anthropic from '@anthropic-ai/sdk'
 let _client: Anthropic | null = null
 let _currentKey = ''
 
-// Haiku: fast and cheap — appropriate for fire-and-forget background summarization
-const MODEL = 'claude-haiku-4-5-20251001'
+// Default: Haiku — fast and cheap for fire-and-forget background summarization
+const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 
 // Truncate body_plain to keep API calls fast and within token limits
 const MAX_BODY_CHARS = 6000
@@ -27,13 +27,13 @@ export function setAnthropicKey(apiKey: string): void {
  * The summary is stored as a layer=2 chunk and embedded for semantic search.
  * Throws on API error — callers should handle and treat as a non-fatal pipeline failure.
  */
-export async function summarizeNote(title: string, bodyPlain: string): Promise<string> {
+export async function summarizeNote(title: string, bodyPlain: string, model = DEFAULT_MODEL): Promise<string> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
   const truncated = bodyPlain.length > MAX_BODY_CHARS ? bodyPlain.slice(0, MAX_BODY_CHARS) + '…' : bodyPlain
 
   const response = await _client.messages.create({
-    model: MODEL,
+    model: model,
     max_tokens: 300,
     messages: [
       {

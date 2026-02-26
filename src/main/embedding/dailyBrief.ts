@@ -9,7 +9,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { getDatabase } from '../db/index'
 
-const MODEL = 'claude-sonnet-4-6'
+const DEFAULT_MODEL = 'claude-sonnet-4-6'
 const MAX_NOTES_CHARS = 5000
 
 type CalendarRow = {
@@ -54,7 +54,7 @@ function formatTime(iso: string): string {
  * Generate a Daily Brief markdown string for the given ISO date (YYYY-MM-DD).
  * Returns an empty string if the API key is missing or Claude fails.
  */
-export async function generateDailyBrief(date: string, apiKey: string): Promise<string> {
+export async function generateDailyBrief(date: string, apiKey: string, model = DEFAULT_MODEL): Promise<string> {
   if (!apiKey) return ''
 
   const db = getDatabase()
@@ -286,7 +286,7 @@ export async function generateDailyBrief(date: string, apiKey: string): Promise<
 
   try {
     const response = await client.messages.create({
-      model: MODEL,
+      model: model,
       max_tokens: 1500,
       messages: [{ role: 'user', content: prompt }],
     })

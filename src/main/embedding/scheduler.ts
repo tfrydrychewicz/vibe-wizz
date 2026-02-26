@@ -43,6 +43,10 @@ async function runBatchIfDue(): Promise<void> {
     (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)
       ?.value ?? ''
 
+  const backgroundModel =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
+      ?.value || 'claude-haiku-4-5-20251001'
+
   if (!openaiKey || !anthropicKey) {
     console.log('[Cluster] Batch skipped — API keys not configured')
     return
@@ -75,7 +79,7 @@ async function runBatchIfDue(): Promise<void> {
   console.log('[Cluster] Starting nightly batch...')
 
   try {
-    await runL3Clustering(db, openaiKey, anthropicKey)
+    await runL3Clustering(db, openaiKey, anthropicKey, backgroundModel)
 
     // Persist last-run timestamp
     db.prepare(
