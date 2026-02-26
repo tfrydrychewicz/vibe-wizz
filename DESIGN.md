@@ -197,6 +197,10 @@ CREATE VIRTUAL TABLE cluster_embeddings USING vec0(
 - Inline code blocks with syntax highlighting
 - Drag-and-drop image embedding (stored locally in app data)
 - **Tables**: Insert 3×3 table via toolbar (Table2 button); right-click any table cell for a context menu (add/delete row or column, delete table, merge/split cells); column resize handles; GFM tables from AI chat rendered correctly
+- **AI inline generation** (two entry points):
+  - *Space on empty line*: pressing `Space` at the start of a completely empty paragraph opens `AIPromptModal` in insert mode; a "Type Space for AI" hint appears on the focused empty line when the note has content (`AILinePlaceholder` extension via ProseMirror decoration); on submit the empty paragraph is replaced with AI-generated content
+  - *Selection bubble menu*: selecting text or a table shows a floating `BubbleMenu` (TipTap v3 / Floating UI) with a sparkles AI button; clicking it opens `AIPromptModal` in replace mode with the selected text pre-loaded as context; on submit the selection is replaced with AI-generated content
+  - Both modes call the `notes:ai-inline` IPC handler: FTS5 keyword search on the prompt (top 5 notes for context) + `generateInlineContent()` (Claude Haiku, `max_tokens 1500`) + `parseMarkdownToTipTap()` → TipTap JSON nodes inserted/replacing via `deleteRange` + `insertContentAt` (single undo step); returns `{ error }` if no Anthropic API key
 
 **Auto-save**: Debounced 500ms after last keystroke. No save button.
 
@@ -1041,6 +1045,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 
 ### Phase 5 — Polish & Portability
 - [x] Table support in editor — `@tiptap/extension-table*`; toolbar insert button; right-click context menu (`TableContextMenu.vue`) for add/delete row/col, delete table, merge/split cells; CellSelection preserved on right-click via `mousedown` guard; GFM table parsing in `postProcessor.ts` so AI-generated notes render tables correctly; system prompts updated with GFM table syntax
+- [x] AI inline generation — Space on empty line + selection bubble menu (see §1 Editor above); `AIPromptModal.vue`, `AILinePlaceholder.ts` extension, `notes:ai-inline` IPC, `generateInlineContent()` in `chat.ts`
 - [ ] Import (Markdown, Notion, CSV)
 - [ ] Export (Markdown, JSON, SQLite)
 - [ ] Automatic backups
