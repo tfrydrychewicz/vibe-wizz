@@ -52,6 +52,12 @@ import ToolbarDropdown from './ToolbarDropdown.vue'
 import AutoMentionPopup from './AutoMentionPopup.vue'
 import { AutoMentionDecoration } from '../extensions/AutoMentionDecoration'
 import type { AutoDetection } from '../extensions/AutoMentionDecoration'
+import { Table } from '@tiptap/extension-table'
+import TableRow from '@tiptap/extension-table-row'
+import TableCell from '@tiptap/extension-table-cell'
+import TableHeader from '@tiptap/extension-table-header'
+import { isInTable, CellSelection } from '@tiptap/pm/tables'
+import TableContextMenu from './TableContextMenu.vue'
 import {
   hoveredAutoDetection,
   scheduleHideAutoDetection,
@@ -72,7 +78,7 @@ import {
   Check, ExternalLink, Trash2,
   Palette,
   Mic, MicOff, ChevronDown as ChevronDownIcon,
-  ScrollText, X, Sparkles,
+  ScrollText, X, Sparkles, Table2,
 } from 'lucide-vue-next'
 import {
   pendingAutoStartNoteId,
@@ -395,6 +401,7 @@ const isExtractingActions = ref(false)
 
 const showLinkPopup = ref(false)
 const linkInputValue = ref('')
+const tableContextMenu = ref<{ x: number; y: number } | null>(null)
 const linkInputRef = ref<HTMLInputElement | null>(null)
 const linkPopupRef = ref<HTMLElement | null>(null)
 
@@ -714,6 +721,10 @@ const editor = useEditor({
     }),
     AutoMentionDecoration,
     SlashCommandExtension,
+    Table.configure({ resizable: true }),
+    TableRow,
+    TableHeader,
+    TableCell,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -957,6 +968,32 @@ function insertImage(): void {
   if (url) {
     editor.value?.chain().focus().setImage({ src: url }).run()
   }
+}
+
+function insertTable(): void {
+  editor.value?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+}
+
+function onNoteBodyMouseDown(e: MouseEvent): void {
+  // Prevent the browser from collapsing a CellSelection when right-clicking.
+  // Without this, the browser moves the DOM cursor to the click position on
+  // mousedown, ProseMirror syncs its state, and CellSelection is lost before
+  // the contextmenu event fires — making merge/split options invisible.
+  if (e.button !== 2 || !editor.value) return
+  if (editor.value.state.selection instanceof CellSelection) {
+    e.preventDefault()
+  }
+}
+
+function onEditorContextMenu(e: MouseEvent): void {
+  if (!editor.value || !isInTable(editor.value.state)) return
+  e.preventDefault()
+  e.stopPropagation()
+  tableContextMenu.value = { x: e.clientX, y: e.clientY }
+}
+
+function closeTableContextMenu(): void {
+  tableContextMenu.value = null
 }
 
 function onInsertAutoMention(payload: {
@@ -1354,6 +1391,20 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
+      <div class="tb-sep" />
+
+      <!-- Table insert -->
+      <div class="tb-group">
+        <button
+          class="tb-btn"
+          :class="{ active: editor?.isActive('table') }"
+          title="Insert table (3×3)"
+          @click="insertTable()"
+        >
+          <Table2 :size="14" />
+        </button>
+      </div>
+
     </div>
 
     <!-- Meeting context header (shown when this note is linked to a calendar event) -->
@@ -1395,7 +1446,7 @@ onBeforeUnmount(() => {
 
     <!-- Editor + optional transcript side panel -->
     <div class="note-content-row">
-      <div class="note-body">
+      <div class="note-body" @mousedown="onNoteBodyMouseDown" @contextmenu="onEditorContextMenu">
         <EditorContent :editor="editor" />
       </div>
 
@@ -1552,6 +1603,15 @@ onBeforeUnmount(() => {
       <span class="actions-extracting-spinner" />
       Extracting action items…
     </div>
+
+    <!-- Table context menu (right-click inside table) -->
+    <TableContextMenu
+      v-if="tableContextMenu && editor"
+      :editor="editor"
+      :x="tableContextMenu.x"
+      :y="tableContextMenu.y"
+      @close="closeTableContextMenu"
+    />
   </div>
 </template>
 
@@ -1746,5 +1806,58 @@ onBeforeUnmount(() => {
 .backlinks-item:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
+}
+
+/* ── Table styles ──────────────────────────────────────────── */
+.note-body :deep(.tiptap table) {
+  border-collapse: collapse;
+  margin: 12px 0;
+  width: 100%;
+  table-layout: fixed;
+  overflow: auto;
+}
+
+.note-body :deep(.tiptap table td),
+.note-body :deep(.tiptap table th) {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  position: relative;
+  vertical-align: top;
+  min-width: 80px;
+  box-sizing: border-box;
+}
+
+.note-body :deep(.tiptap table td p),
+.note-body :deep(.tiptap table th p) {
+  margin: 0;
+}
+
+.note-body :deep(.tiptap table th) {
+  background: rgba(255, 255, 255, 0.04);
+  font-weight: 600;
+  text-align: left;
+}
+
+.note-body :deep(.tiptap table .selectedCell::after) {
+  background: rgba(91, 141, 239, 0.15);
+  content: '';
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.note-body :deep(.tiptap table .column-resize-handle) {
+  background-color: #5b8def;
+  bottom: -2px;
+  pointer-events: none;
+  position: absolute;
+  right: -2px;
+  top: 0;
+  width: 3px;
+}
+
+.note-body :deep(.tiptap.resize-cursor) {
+  cursor: col-resize;
 }
 </style>

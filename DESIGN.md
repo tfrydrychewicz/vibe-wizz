@@ -1036,7 +1036,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Follow-up intelligence — `updated_at` column added to `action_items` (migration in `db/index.ts`); `action-items:update` stamps `updated_at` on every change; `dailyBrief.ts` reads `followup_staleness_days` (default 7) and `followup_assignee_entity_type_id` settings, filters stale open items assigned to entities of that type, injects a `STALE FOLLOW-UPS` section into the Daily Brief prompt; Settings → AI → "Follow-up Intelligence" subsection: pick assignee entity type + staleness threshold
 - [x] Entity `@` mentions in AI chat — `@` trigger in chat textarea opens entity picker (floating dropdown, debounced `entities:search`, keyboard navigation); on select inserts `@Name` text and adds entity chip to context bar; chips persist for the session, can be removed manually; `chat:send` accepts `mentionedEntityIds?: string[]` → main fetches `EntityContext[]` and passes to `sendChatMessage()` as new 8th param; Claude receives entity context block (`[id:uuid] @Name (type: TypeName)`) enabling it to assign tasks to correct entity IDs and validate entity types
 - [x] Proactive related notes sidebar
-- [ ] Query expansion + re-ranking
+- [x] Query expansion + re-ranking
 
 ### Phase 5 — Polish & Portability
 - [ ] Import (Markdown, Notion, CSV)

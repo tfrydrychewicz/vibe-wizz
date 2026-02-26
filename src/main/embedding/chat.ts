@@ -190,7 +190,8 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
     name: 'create_note',
     description:
       'Create a new note in the knowledge base. Use this when the user asks to create, write, draft, or generate a note, document, summary, or any piece of structured content. ' +
-      'Format the content as Markdown: ## for headings, - for bullets, - [ ] for task checkboxes, **bold**, *italic*, `code`. ' +
+      'Format the content as Markdown: ## for headings, - for bullets, - [ ] for task checkboxes, **bold**, *italic*, `code`, ' +
+      'and GFM tables (| Col | Col |\\n| --- | --- |\\n| cell | cell |) for structured data. ' +
       'The note will be rendered with full rich-text formatting in the editor.',
     input_schema: {
       type: 'object',
@@ -199,7 +200,8 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
         content: {
           type: 'string',
           description:
-            'Note body in Markdown. Use ## for section headings, - for bullet lists, - [ ] for actionable tasks, **bold** for emphasis.',
+            'Note body in Markdown. Use ## for section headings, - for bullet lists, - [ ] for actionable tasks, **bold** for emphasis. ' +
+            'For structured/tabular data use GFM tables: | Header | Header |\\n| --- | --- |\\n| cell | cell |',
         },
       },
       required: ['title', 'content'],
@@ -449,6 +451,99 @@ export async function extractSearchKeywords(
 }
 
 /**
+ * Expand a search query into related terms and concepts using Claude Haiku.
+ * Used for query expansion in semantic search — generates synonyms and related
+ * concepts that help find relevant notes even when exact keywords aren't present.
+ *
+ * Example: "who has blockers?" → ["blocker", "blocked", "impediment", "stuck"]
+ *
+ * Falls back to splitting on whitespace if the API call fails or client is not set.
+ */
+export async function expandQueryConcepts(query: string): Promise<string[]> {
+  if (!_client) return query.split(/\s+/).filter((w) => w.length >= 3)
+
+  try {
+    const response = await _client.messages.create({
+      model: KEYWORD_MODEL,
+      max_tokens: 60,
+      messages: [
+        {
+          role: 'user',
+          content:
+            'For the search query below, generate 4-8 closely related terms: synonyms, ' +
+            'related concepts, and common alternative phrasings that would help find relevant notes. ' +
+            'Include the key terms from the original query. ' +
+            'Return ONLY the terms, space-separated, no explanation. ' +
+            'Always respond in the same language as the query.\n\n' +
+            `Query: ${query}\n\nTerms:`,
+        },
+      ],
+    })
+
+    const block = response.content[0]
+    if (block.type !== 'text') return query.split(/\s+/).filter((w) => w.length >= 3)
+
+    return block.text
+      .trim()
+      .split(/\s+/)
+      .map((w) => w.replace(/[,;.]/g, ''))
+      .filter((w) => w.length >= 2)
+  } catch {
+    return query.split(/\s+/).filter((w) => w.length >= 3)
+  }
+}
+
+/**
+ * Re-rank search results using Claude Haiku as a relevance judge.
+ * Sends all candidates in a single batch call; receives one integer score per result.
+ * Returns the input array sorted by descending relevance score.
+ * Falls back to the original order on API failure or if the client is not set.
+ */
+export async function reRankResults<T extends { title: string; excerpt: string | null }>(
+  query: string,
+  results: T[],
+): Promise<T[]> {
+  if (!_client || results.length <= 1) return results
+
+  const docList = results
+    .map((r, i) => `[${i}] "${r.title}"\n${(r.excerpt ?? '').slice(0, 250)}`)
+    .join('\n\n')
+
+  try {
+    const response = await _client.messages.create({
+      model: KEYWORD_MODEL,
+      max_tokens: 80,
+      messages: [
+        {
+          role: 'user',
+          content:
+            `Query: "${query}"\n\n` +
+            "Rate each document's relevance to the query (0=not relevant, 10=highly relevant).\n\n" +
+            `${docList}\n\n` +
+            'Output ONLY a JSON array of integers, one per document, in order. Example: [8,3,6,1]',
+        },
+      ],
+    })
+
+    const block = response.content[0]
+    if (block.type !== 'text') return results
+
+    const match = block.text.match(/\[[\d,\s]+\]/)
+    if (!match) return results
+
+    const scores = JSON.parse(match[0]) as number[]
+    if (!Array.isArray(scores) || scores.length !== results.length) return results
+
+    return results
+      .map((r, i) => ({ result: r, score: scores[i] ?? 0 }))
+      .sort((a, b) => b.score - a.score)
+      .map(({ result }) => result)
+  } catch {
+    return results
+  }
+}
+
+/**
  * Send a chat message with optional knowledge base context.
  *
  * Supports Claude tool use: if Claude decides to call a calendar or action item
@@ -490,7 +585,7 @@ export async function sendChatMessage(
     'Use them when the user asks you to make a change (schedule, add, create, write, draft, generate, mark, update, move, cancel, delete, etc.). ' +
     'For creates and updates: execute immediately without asking. ' +
     'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool. ' +
-    'When creating a note, generate rich, well-structured Markdown content — use headings, bullet lists, and task checkboxes as appropriate.'
+    'When creating a note, generate rich, well-structured Markdown content — use headings, bullet lists, task checkboxes, and GFM tables (| Col | Col |\\n| --- | --- |\\n| val | val |) as appropriate.'
 
   if (contextNotes.length > 0) {
     let contextStr = contextNotes

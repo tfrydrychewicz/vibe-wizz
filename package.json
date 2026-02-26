@@ -24,6 +24,10 @@
     "@tiptap/extension-placeholder": "^3.20.0",
     "@tiptap/extension-subscript": "^3.20.0",
     "@tiptap/extension-superscript": "^3.20.0",
+    "@tiptap/extension-table": "^3.20.0",
+    "@tiptap/extension-table-cell": "^3.20.0",
+    "@tiptap/extension-table-header": "^3.20.0",
+    "@tiptap/extension-table-row": "^3.20.0",
     "@tiptap/extension-task-item": "^3.20.0",
     "@tiptap/extension-task-list": "^3.20.0",
     "@tiptap/extension-text-align": "^3.20.0",
@@ -33,18 +37,18 @@
     "@tiptap/starter-kit": "^3.20.0",
     "@tiptap/vue-3": "^3.20.0",
     "better-sqlite3": "^12.6.2",
-    "ws": "^8.18.0",
     "lucide-vue-next": "^0.575.0",
     "marked": "^17.0.3",
     "openai": "^6.24.0",
     "sqlite-vec": "^0.1.7-alpha.2",
-    "vue": "^3.4.21"
+    "vue": "^3.4.21",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.2",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/ws": "^8.5.14",
     "@types/marked": "^5.0.2",
+    "@types/ws": "^8.5.14",
     "@vitejs/plugin-vue": "^5.0.4",
     "electron": "^29.1.0",
     "electron-builder": "^24.13.3",
@@ -69,9 +73,18 @@
       }
     },
     "extraResources": [
-      { "from": "resources/MicMonitor", "to": "MicMonitor" },
-      { "from": "resources/Transcriber.app", "to": "Transcriber.app" },
-      { "from": "resources/AudioCapture.app", "to": "AudioCapture.app" }
+      {
+        "from": "resources/MicMonitor",
+        "to": "MicMonitor"
+      },
+      {
+        "from": "resources/Transcriber.app",
+        "to": "Transcriber.app"
+      },
+      {
+        "from": "resources/AudioCapture.app",
+        "to": "AudioCapture.app"
+      }
     ],
     "files": [
       "out/**/*",

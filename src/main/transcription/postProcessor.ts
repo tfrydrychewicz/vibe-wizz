@@ -76,6 +76,8 @@ function parseInlineMarkdown(text: string): TipTapTextNode[] {
     nodes.push({ type: 'text', text: text.slice(lastIndex) })
   }
 
+  // ProseMirror forbids empty text nodes — return [] for empty input
+  if (!text) return []
   return nodes.length > 0 ? nodes : [{ type: 'text', text }]
 }
 
@@ -218,6 +220,72 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
       continue
     }
 
+    // GFM table: pipe-delimited rows with a separator line
+    if (line.startsWith('|')) {
+      let peekIdx = i + 1
+      while (peekIdx < lines.length && !lines[peekIdx].trim()) peekIdx++
+      const sepLine = peekIdx < lines.length ? lines[peekIdx].trim() : ''
+      const isSeparator = /^\|[\s\-:|]+\|[\s\-:|]*$/.test(sepLine)
+
+      if (isSeparator) {
+        const tableRows: string[] = []
+        while (i < lines.length) {
+          const tl = lines[i].trim()
+          if (tl.startsWith('|')) {
+            tableRows.push(tl)
+            i++
+          } else if (!tl) {
+            i++
+            break
+          } else {
+            break
+          }
+        }
+
+        if (tableRows.length >= 2) {
+          const parseRowCells = (rowLine: string): string[] =>
+            rowLine.split('|').slice(1, -1).map((c) => c.trim())
+
+          const headerCells = parseRowCells(tableRows[0])
+          // Only filter rows where every cell (after trim) is a real GFM
+          // separator cell (non-empty, only dashes/colons). The old regex
+          // matched all-pipe/space rows (empty cells) and would incorrectly
+          // drop valid body rows that happen to have only empty cells.
+          const isSeparatorRow = (row: string): boolean => {
+            const cells = row.trim().split('|').slice(1, -1).map((c) => c.trim())
+            return cells.length > 0 && cells.every((c) => c.length > 0 && /^[:\-]+$/.test(c))
+          }
+          const bodyRows = tableRows.slice(2).filter((r) => !isSeparatorRow(r))
+
+          // ProseMirror forbids empty text nodes — use empty paragraph content
+          // for cells that have no text, instead of { type: 'text', text: '' }.
+          const makeCell = (text: string, isHeader: boolean): TipTapNode => ({
+            type: isHeader ? 'tableHeader' : 'tableCell',
+            attrs: { colspan: 1, rowspan: 1, colwidth: null },
+            content: [{ type: 'paragraph', content: text ? parseInlineMarkdown(text) : [] }],
+          })
+
+          nodes.push({
+            type: 'table',
+            content: [
+              { type: 'tableRow', content: headerCells.map((c) => makeCell(c, true)) },
+              ...bodyRows.map((row) => ({
+                type: 'tableRow',
+                content: parseRowCells(row).map((c) => makeCell(c, false)),
+              })),
+            ],
+          })
+        }
+        continue
+      }
+      // No separator follows — treat as plain paragraph text and advance.
+      // Without this, the paragraph handler below breaks immediately on the
+      // '|' guard without advancing i, causing an infinite loop.
+      nodes.push(paragraph(line))
+      i++
+      continue
+    }
+
     // Paragraph — collect consecutive non-special lines
     const paraLines: string[] = []
     while (i < lines.length) {
@@ -227,6 +295,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
         pl.match(/^#{1,6}\s/) ||
         pl.startsWith('- ') || pl.startsWith('* ') ||
         pl.startsWith('> ') || pl.startsWith('```') ||
+        pl.startsWith('|') ||
         /^(-{3,}|\*{3,}|_{3,})$/.test(pl)
       ) break
       paraLines.push(pl)

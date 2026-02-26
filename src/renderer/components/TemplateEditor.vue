@@ -12,6 +12,10 @@ import { Subscript } from '@tiptap/extension-subscript'
 import { TextAlign } from '@tiptap/extension-text-align'
 import { TaskList } from '@tiptap/extension-task-list'
 import { TaskItem } from '@tiptap/extension-task-item'
+import { Table } from '@tiptap/extension-table'
+import TableRow from '@tiptap/extension-table-row'
+import TableCell from '@tiptap/extension-table-cell'
+import TableHeader from '@tiptap/extension-table-header'
 import IconPicker from './IconPicker.vue'
 import LucideIcon from './LucideIcon.vue'
 import ToolbarDropdown from './ToolbarDropdown.vue'
@@ -27,6 +31,7 @@ import {
   Subscript as SubscriptIcon,
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
   RemoveFormatting,
+  Table2,
 } from 'lucide-vue-next'
 import { computed } from 'vue'
 
@@ -99,6 +104,10 @@ const editor = useEditor({
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
     TaskList,
     TaskItem.configure({ nested: true }),
+    Table.configure({ resizable: false }),
+    TableRow,
+    TableHeader,
+    TableCell,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -111,6 +120,10 @@ function scheduleSave(): void {
   saveStatus.value = 'unsaved'
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(flushSave, 500)
+}
+
+function insertTable(): void {
+  editor.value?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
 }
 
 async function flushSave(overrideId?: string): Promise<void> {
@@ -362,6 +375,20 @@ onBeforeUnmount(() => {
         />
         <button class="tb-color-reset" title="Reset color" @click="editor?.chain().focus().unsetColor().run()">
           <RemoveFormatting :size="10" />
+        </button>
+      </div>
+
+      <div class="tb-sep" />
+
+      <!-- Table insert -->
+      <div class="tb-group">
+        <button
+          class="tb-btn"
+          :class="{ active: editor?.isActive('table') }"
+          title="Insert table (3×3)"
+          @click="insertTable()"
+        >
+          <Table2 :size="14" />
         </button>
       </div>
 
@@ -641,4 +668,43 @@ onBeforeUnmount(() => {
 .template-body :deep(.tiptap ul[data-type="taskList"] li > label) { flex-shrink: 0; padding-top: 4px; cursor: pointer; }
 .template-body :deep(.tiptap ul[data-type="taskList"] li > label input[type="checkbox"]) { width: 14px; height: 14px; cursor: pointer; accent-color: var(--color-accent); }
 .template-body :deep(.tiptap ul[data-type="taskList"] li[data-checked="true"] > div) { text-decoration: line-through; color: var(--color-text-muted); }
+
+/* ── Table styles ──────────────────────────────────────────── */
+.template-body :deep(.tiptap table) {
+  border-collapse: collapse;
+  margin: 12px 0;
+  width: 100%;
+  table-layout: fixed;
+  overflow: auto;
+}
+
+.template-body :deep(.tiptap table td),
+.template-body :deep(.tiptap table th) {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  position: relative;
+  vertical-align: top;
+  min-width: 80px;
+  box-sizing: border-box;
+}
+
+.template-body :deep(.tiptap table td p),
+.template-body :deep(.tiptap table th p) {
+  margin: 0;
+}
+
+.template-body :deep(.tiptap table th) {
+  background: rgba(255, 255, 255, 0.04);
+  font-weight: 600;
+  text-align: left;
+}
+
+.template-body :deep(.tiptap table .selectedCell::after) {
+  background: rgba(91, 141, 239, 0.15);
+  content: '';
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
 </style>
