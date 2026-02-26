@@ -5,7 +5,7 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, type ChatModelId } from '../embedding/chat'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, type ChatModelId } from '../embedding/chat'
 
 type NoteRow = {
   id: string
@@ -996,14 +996,19 @@ export function registerDbIpcHandlers(): void {
   // ─── Semantic search ──────────────────────────────────────────────────────────
 
   /**
-   * notes:semantic-search — hybrid FTS5 + vector search with Reciprocal Rank Fusion.
+   * notes:semantic-search — hybrid FTS5 + vector search with Reciprocal Rank Fusion,
+   * query expansion, and Claude Haiku re-ranking.
    *
-   * Flow (when sqlite-vec loaded + OpenAI key configured):
-   *   1. Run FTS5 keyword search (top 20) and KNN vector search (top 20) in parallel
-   *   2. Merge via RRF: score = Σ 1/(60 + rank) across both lists
-   *   3. Sort by combined score, return top 15 with best-matching chunk as excerpt
+   * Flow (when sqlite-vec + OpenAI key + Anthropic key are all configured):
+   *   1. Query expansion (Claude Haiku) + embedding in parallel
+   *      — generates synonyms/related concepts for broader FTS recall
+   *   2. FTS5 keyword search (top 20, using expanded terms) + KNN vector (top 20)
+   *   3. Merge via RRF: score = Σ 1/(60 + rank) across both lists + L3 cluster boost
+   *   4. Re-rank top 15 with Claude Haiku relevance scoring
    *
-   * Fallback (no vec / no API key / error): FTS5-only, up to 15 results, no excerpt.
+   * Graceful degradation:
+   *   - No Anthropic key: skip expansion (raw FTS) and skip re-ranking
+   *   - No vec / no OpenAI key: FTS-only, up to 15 results, no excerpt
    *
    * Input:  { query: string }
    * Output: { id, title, excerpt: string | null }[]  (up to 15 notes)
@@ -1013,15 +1018,15 @@ export function registerDbIpcHandlers(): void {
     async (_event, { query }: { query: string }): Promise<{ id: string; title: string; excerpt: string | null }[]> => {
       const db = getDatabase()
 
-      // Sanitize query for FTS5 — strip operators/special chars that cause parse errors
-      const ftsQuery = query
+      // Sanitize raw query for FTS5 fallback — strip operators/special chars that cause parse errors
+      const rawFtsQuery = query
         .replace(/["\(\)\^\*\+\-]/g, ' ')
         .replace(/\b(AND|OR|NOT)\b/g, ' ')
         .trim()
         .replace(/\s+/g, ' ')
 
-      const runFts = (limit: number): { id: string; title: string }[] => {
-        if (!ftsQuery) return []
+      const runFts = (q: string, limit: number): { id: string; title: string }[] => {
+        if (!q) return []
         try {
           return db
             .prepare(
@@ -1031,10 +1036,22 @@ export function registerDbIpcHandlers(): void {
                WHERE notes_fts MATCH ? AND n.archived_at IS NULL
                ORDER BY rank LIMIT ${limit}`
             )
-            .all(ftsQuery) as { id: string; title: string }[]
+            .all(q) as { id: string; title: string }[]
         } catch {
           return []
         }
+      }
+
+      // Read Anthropic key for query expansion + re-ranking (non-critical if absent)
+      let anthropicKey = ''
+      try {
+        const anthSetting = db
+          .prepare('SELECT value FROM settings WHERE key = ?')
+          .get('anthropic_api_key') as { value: string } | undefined
+        anthropicKey = anthSetting?.value ?? ''
+        if (anthropicKey) setChatAnthropicKey(anthropicKey)
+      } catch {
+        // no-op — expansion and re-ranking will be skipped
       }
 
       if (isVecLoaded()) {
@@ -1046,8 +1063,21 @@ export function registerDbIpcHandlers(): void {
         if (apiKey) {
           try {
             setOpenAIKey(apiKey)
-            const [embed] = await embedTexts([query])
+
+            // Step 1: query expansion + embedding in parallel
+            const [expandedTerms, [embed]] = await Promise.all([
+              anthropicKey
+                ? expandQueryConcepts(query)
+                : Promise.resolve(rawFtsQuery.split(/\s+/).filter((w) => w.length >= 2)),
+              embedTexts([query]),
+            ])
             const queryBuf = Buffer.from(embed.embedding.buffer)
+
+            // Build FTS query from expanded terms; fall back to raw query if expansion yields nothing
+            const expandedFtsQuery = expandedTerms
+              .map((w) => w.replace(/["\(\)\^\*\+\-]/g, ''))
+              .filter(Boolean)
+              .join(' OR ')
 
             // L3 cluster boost — find top 3 matching clusters, collect all their member note IDs.
             // Wrapped in try/catch: cluster_embeddings is empty until the first nightly batch runs.
@@ -1096,7 +1126,9 @@ export function registerDbIpcHandlers(): void {
               vectorHits.push({ id: row.note_id, title: row.title, excerpt: row.chunk_text })
             }
 
-            const ftsHits = runFts(20)
+            // FTS with expanded terms; fall back to raw sanitized query if expansion yields no hits
+            let ftsHits = runFts(expandedFtsQuery, 20)
+            if (ftsHits.length === 0) ftsHits = runFts(rawFtsQuery, 20)
 
             // Reciprocal Rank Fusion (k = 60 is the standard constant)
             const K = 60
@@ -1125,10 +1157,49 @@ export function registerDbIpcHandlers(): void {
               }
             }
 
-            return [...candidates.values()]
+            // LIKE substring fallback — catches notes missed by FTS (tokenisation mismatch,
+            // e.g. Polish inflections where expanded term "morze" doesn't substring-match "Morza")
+            // or notes without embeddings that the vector search can't reach.
+            // Triggered when we have fewer than 10 candidates; adds new notes with a minimum
+            // score so the Claude Haiku re-ranker can still surface truly relevant ones.
+            if (candidates.size < 10) {
+              for (const term of expandedTerms.slice(0, 5)) {
+                if (candidates.size >= 15) break
+                try {
+                  const likeRows = db
+                    .prepare(
+                      `SELECT id, title, body_plain FROM notes
+                       WHERE (LOWER(body_plain) LIKE ? OR LOWER(title) LIKE ?) AND archived_at IS NULL
+                       LIMIT 5`
+                    )
+                    .all(`%${term.toLowerCase()}%`, `%${term.toLowerCase()}%`) as { id: string; title: string; body_plain: string }[]
+                  for (const row of likeRows) {
+                    if (candidates.has(row.id)) continue
+                    const excerpt = row.body_plain.length > 300 ? row.body_plain.slice(0, 300) + '…' : row.body_plain
+                    candidates.set(row.id, {
+                      id: row.id,
+                      title: row.title,
+                      excerpt,
+                      score: 1 / (K + 21), // min RRF-equivalent — re-ranker can still elevate
+                    })
+                  }
+                } catch {
+                  // ignore per-term errors
+                }
+              }
+            }
+
+            const rrfSorted = [...candidates.values()]
               .sort((a, b) => b.score - a.score)
               .slice(0, 15)
-              .map(({ id, title, excerpt }) => ({ id, title, excerpt }))
+
+            // Step 4: Re-rank with Claude Haiku (if Anthropic key available)
+            const reranked =
+              anthropicKey && rrfSorted.length > 1
+                ? await reRankResults(query, rrfSorted)
+                : rrfSorted
+
+            return reranked.map(({ id, title, excerpt }) => ({ id, title, excerpt }))
           } catch (err) {
             console.error('[Search] Hybrid search error — falling back to FTS:', err)
           }
@@ -1136,7 +1207,7 @@ export function registerDbIpcHandlers(): void {
       }
 
       // FTS-only fallback (no vec / no API key / error above)
-      return runFts(15).map((r) => ({ ...r, excerpt: null }))
+      return runFts(rawFtsQuery, 15).map((r) => ({ ...r, excerpt: null }))
     }
   )
 
