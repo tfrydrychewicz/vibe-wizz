@@ -1,3 +1,10 @@
+<script lang="ts">
+// Module-level: persists showRelatedPanel state per noteId across component
+// unmounts/remounts (e.g. tab switches) and noteId changes within the same instance.
+const relatedPanelState = new Map<string, boolean>()
+export {}
+</script>
+
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { useEditor, EditorContent, VueRenderer, VueNodeViewRenderer } from '@tiptap/vue-3'
@@ -65,7 +72,7 @@ import {
   Check, ExternalLink, Trash2,
   Palette,
   Mic, MicOff, ChevronDown as ChevronDownIcon,
-  ScrollText, X,
+  ScrollText, X, Sparkles,
 } from 'lucide-vue-next'
 import {
   pendingAutoStartNoteId,
@@ -164,6 +171,37 @@ const showTranscriptPanel = ref(false)
 const backlinks = ref<{ id: string; title: string }[]>([])
 const showBacklinks = ref(false)
 const pendingDeleteTranscriptId = ref<string | null>(null)
+
+// ── Related notes panel ────────────────────────────────────────────────────────
+
+const showRelatedPanel = ref(relatedPanelState.get(props.noteId) ?? false)
+const relatedNotes = ref<{ id: string; title: string; excerpt: string | null }[]>([])
+const isLoadingRelated = ref(false)
+
+async function loadRelatedNotes(): Promise<void> {
+  const query = [title.value, editor.value?.getText()?.slice(0, 500)]
+    .filter(Boolean).join(' ').trim()
+  if (!query) return
+  isLoadingRelated.value = true
+  try {
+    const results = (await window.api.invoke('notes:semantic-search', { query })) as {
+      id: string; title: string; excerpt: string | null
+    }[]
+    relatedNotes.value = results.filter((r) => r.id !== props.noteId).slice(0, 7)
+  } finally {
+    isLoadingRelated.value = false
+  }
+}
+
+function onOpenRelatedNote(e: MouseEvent, id: string, noteTitle: string): void {
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-note', { noteId: id, title: noteTitle, mode })
+}
+
+watch(showRelatedPanel, (val) => {
+  relatedPanelState.set(props.noteId, val)
+  if (val && relatedNotes.value.length === 0) void loadRelatedNotes()
+})
 
 /** Last ~120 chars of the live stream — shown in the status bar while recording. */
 const lastTranscriptLine = computed(() => {
@@ -728,6 +766,7 @@ async function flushSave(overrideId?: string): Promise<void> {
     })
     saveStatus.value = 'saved'
     emit('saved', title.value || 'Untitled')
+    if (showRelatedPanel.value) void loadRelatedNotes()
   } catch {
     saveStatus.value = 'unsaved'
   }
@@ -807,6 +846,9 @@ async function loadNote(noteId: string): Promise<void> {
   // Load backlinks (other notes that [[link]] to this one)
   showBacklinks.value = false
   void loadBacklinks(noteId)
+  // Reset related notes — will reload if panel is open
+  relatedNotes.value = []
+  if (showRelatedPanel.value) void loadRelatedNotes()
 }
 
 function extractMentionIdsFromBody(bodyJson: string): string[] {
@@ -1054,6 +1096,7 @@ watch(
         })
       }
     }
+    showRelatedPanel.value = relatedPanelState.get(newId) ?? false
     await loadNote(newId)
     // Reconnect to an ongoing transcription session when returning to this note
     if (activeTranscriptionNoteId.value === newId) {
@@ -1113,6 +1156,14 @@ onBeforeUnmount(() => {
       <span class="save-status" :data-status="saveStatus">
         {{ saveStatus === 'saving' ? 'Saving…' : saveStatus === 'unsaved' ? 'Unsaved' : '' }}
       </span>
+      <button
+        class="related-notes-toggle-btn"
+        :class="{ active: showRelatedPanel }"
+        title="Related notes"
+        @click="showRelatedPanel = !showRelatedPanel"
+      >
+        <Sparkles :size="13" />
+      </button>
     </div>
 
     <!-- Formatting toolbar -->
@@ -1380,6 +1431,33 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+
+      <!-- Related notes side panel (toggle via ✨ button in note header) -->
+      <div v-if="showRelatedPanel" class="related-notes-panel">
+        <div class="related-notes-header">
+          <span class="related-notes-label">Related</span>
+          <button class="related-notes-close" title="Close" @click="showRelatedPanel = false">
+            <X :size="12" />
+          </button>
+        </div>
+        <div v-if="isLoadingRelated" class="related-notes-loading">
+          <span class="related-notes-spinner" />
+        </div>
+        <template v-else>
+          <div v-if="relatedNotes.length === 0" class="related-notes-empty">
+            No related notes found
+          </div>
+          <button
+            v-for="note in relatedNotes"
+            :key="note.id"
+            class="related-note-item"
+            @click="onOpenRelatedNote($event, note.id, note.title)"
+          >
+            <span class="related-note-title">{{ note.title }}</span>
+            <span v-if="note.excerpt" class="related-note-excerpt">{{ note.excerpt }}</span>
+          </button>
+        </template>
+      </div>
     </div>
 
     <!-- Live transcription status bar (only while recording is active) -->
@@ -1590,6 +1668,32 @@ onBeforeUnmount(() => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.related-notes-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.related-notes-toggle-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.related-notes-toggle-btn.active {
+  background: rgba(91, 141, 239, 0.12);
+  border-color: rgba(91, 141, 239, 0.4);
+  color: var(--color-accent);
 }
 
 .backlinks-bar {
