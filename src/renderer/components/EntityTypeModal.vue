@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { Plus, Trash2, X } from 'lucide-vue-next'
 import IconPicker from './IconPicker.vue'
+import QueryFieldEditor from './QueryFieldEditor.vue'
 
 type FieldType =
   | 'text'
@@ -277,14 +278,9 @@ onMounted(async () => {
               </div>
 
               <!-- WQL query editor for 'computed' type -->
-              <textarea
+              <QueryFieldEditor
                 v-if="field.type === 'computed'"
                 v-model="field.query"
-                class="modal-input field-query-input"
-                placeholder="SELECT p FROM Person WHERE p.team = {this}"
-                spellcheck="false"
-                autocomplete="off"
-                autocorrect="off"
               />
             </div>
           </div>
@@ -501,16 +497,6 @@ onMounted(async () => {
   flex: 0 0 180px;
 }
 
-.field-query-input {
-  width: 100%;
-  min-height: 52px;
-  max-height: 120px;
-  resize: vertical;
-  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  box-sizing: border-box;
-}
 
 .field-remove-btn {
   background: transparent;

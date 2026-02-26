@@ -566,11 +566,11 @@ Modified files:
 
 ### Phase 2 — Syntax Highlighting
 
-- [ ] `npm install @codemirror/view @codemirror/state @codemirror/language @codemirror/autocomplete @codemirror/commands`
-- [ ] `src/renderer/lib/wql-language.ts` — `StreamLanguage` + `wqlLanguage()` export
-- [ ] `src/renderer/components/QueryFieldEditor.vue` — CodeMirror editor wrapper
-- [ ] `EntityTypeModal.vue` — swap `<textarea>` for `<QueryFieldEditor />`
-- [ ] Apply Wizz-consistent dark theme overrides via CodeMirror theme extension
+- [x] `npm install @codemirror/view @codemirror/state @codemirror/language @codemirror/autocomplete @codemirror/commands`
+- [x] `src/renderer/lib/wql-language.ts` — `StreamLanguage` + `wqlLanguage()` export
+- [x] `src/renderer/components/QueryFieldEditor.vue` — CodeMirror editor wrapper
+- [x] `EntityTypeModal.vue` — swap `<textarea>` for `<QueryFieldEditor />`
+- [x] Apply Wizz-consistent dark theme overrides via CodeMirror theme extension
 
 ### Phase 3 — Autocomplete (Stretch)
 
