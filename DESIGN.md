@@ -1046,7 +1046,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [ ] Automatic backups
 - [ ] Improved offline mode (macOS SFSpeechRecognizer already implemented as tier 3 fallback; this item covers improving quality and on-device model selection)
 - [ ] Kanban views
-- [ ] Keyboard shortcuts + command palette
+- [x] Keyboard shortcuts + command palette
 - [ ] Performance optimization
 
 ---

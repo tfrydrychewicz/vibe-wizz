@@ -17,6 +17,7 @@ import TabBar from './components/TabBar.vue'
 import ChatSidebar from './components/ChatSidebar.vue'
 import CalendarView from './components/CalendarView.vue'
 import TodayView from './components/TodayView.vue'
+import CommandPalette from './components/CommandPalette.vue'
 import {
   tabs,
   activeTabId,
@@ -80,6 +81,9 @@ const showSettings = ref(false)
 
 // AI Chat sidebar
 const showChat = ref(false)
+
+// Command palette
+const showCommandPalette = ref(false)
 
 // Templates (for "New note from template" dropdown in NoteList)
 type TemplateRef = { id: string; name: string; icon: string }
@@ -284,10 +288,84 @@ function toggleMaximize(): void {
   window.api.invoke('window:toggle-maximize')
 }
 
-function onChatKeydown(e: KeyboardEvent): void {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+function onPaletteNavigate(view: string): void {
+  if (view === '__chat__') {
+    showChat.value = !showChat.value
+  } else if (view === '__settings__') {
+    showSettings.value = true
+  } else {
+    void onNavClick(view)
+  }
+}
+
+function onPaletteNewNote(templateId?: string): void {
+  activeView.value = 'notes'
+  void newNote(templateId)
+}
+
+async function onPaletteNewEntity(typeId: string): Promise<void> {
+  await onNavClick(typeId)
+  const et = entityTypes.value.find((t) => t.id === typeId)
+  const entity = (await window.api.invoke('entities:create', {
+    type_id: typeId,
+    name: 'Untitled',
+  })) as { id: string }
+  openContent('entity', entity.id, 'Untitled', 'default', typeId, et?.icon ?? 'tag', et?.color ?? undefined)
+  await entityListRef.value?.refresh()
+}
+
+function onGlobalKeydown(e: KeyboardEvent): void {
+  const mod = e.metaKey || e.ctrlKey
+
+  if (mod && e.key === 'k') {
+    e.preventDefault()
+    showCommandPalette.value = true
+    return
+  }
+
+  if (mod && e.key === 'j') {
     e.preventDefault()
     showChat.value = !showChat.value
+    return
+  }
+
+  if (mod && e.key === 'n') {
+    // Only trigger if focus is not inside a text input / editor
+    const tag = (e.target as HTMLElement)?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
+    e.preventDefault()
+    activeView.value = 'notes'
+    void newNote()
+    return
+  }
+
+  if (mod && e.key === ',') {
+    e.preventDefault()
+    showSettings.value = true
+    return
+  }
+
+  if (mod && e.shiftKey && e.key === 'T') {
+    e.preventDefault()
+    void onNavClick('today')
+    return
+  }
+
+  if (mod && e.key === 'f') {
+    const tag = (e.target as HTMLElement)?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
+    e.preventDefault()
+    void onNavClick('search')
+    return
+  }
+
+  if (mod && e.key === 'w') {
+    const tag = (e.target as HTMLElement)?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
+    e.preventDefault()
+    const pane = activePane.value
+    if (pane) closePane(activeTabId.value, pane.id)
+    return
   }
 }
 
@@ -296,7 +374,7 @@ let unsubTranscriptionOpenNote: (() => void) | null = null
 onMounted(() => {
   loadEntityTypes()
   loadNoteTemplates()
-  window.addEventListener('keydown', onChatKeydown)
+  window.addEventListener('keydown', onGlobalKeydown)
 
   unsubTranscriptionOpenNote = window.api.on('transcription:open-note', (...args: unknown[]) => {
     const { noteId, autoStart } = args[0] as { noteId: string; autoStart?: boolean }
@@ -307,7 +385,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onChatKeydown)
+  window.removeEventListener('keydown', onGlobalKeydown)
   unsubTranscriptionOpenNote?.()
 })
 </script>
@@ -386,7 +464,7 @@ onBeforeUnmount(() => {
           <span class="nav-icon"><LucideIcon name="message-square" :size="14" /></span>
           <span class="nav-label">Ask Wizz</span>
         </button>
-        <button class="nav-item" @click="showSettings = true">
+        <button class="nav-item" title="Settings (⌘,)" @click="showSettings = true">
           <span class="nav-icon"><LucideIcon name="settings" :size="14" /></span>
           <span class="nav-label">Settings</span>
         </button>
@@ -602,6 +680,19 @@ onBeforeUnmount(() => {
 
     <!-- Settings modal -->
     <SettingsModal v-if="showSettings" @close="showSettings = false" />
+
+    <!-- Command palette -->
+    <CommandPalette
+      v-if="showCommandPalette"
+      :entity-types="entityTypes"
+      :note-templates="noteTemplates"
+      @close="showCommandPalette = false"
+      @navigate="onPaletteNavigate"
+      @new-note="onPaletteNewNote"
+      @new-entity="onPaletteNewEntity"
+      @open-note="(id) => onOpenNote({ noteId: id, title: 'Untitled', mode: 'default' })"
+      @open-entity="(id, typeId) => onOpenEntity({ entityId: id, typeId, mode: 'default' })"
+    />
 
     <!-- AI Chat sidebar -->
     <ChatSidebar

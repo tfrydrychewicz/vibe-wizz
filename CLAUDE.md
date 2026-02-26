@@ -87,6 +87,8 @@ This is an **Electron + Vue 3 + SQLite** desktop app with a 3-process structure:
 
 - `App.vue` shell: sidebar with fixed nav items (Today, Notes, **Templates**) + **dynamic entity type list** (loaded from DB) + fixed items (Actions, Calendar, Search, Trash) + bottom buttons (Ask Wizz, Settings)
   - **Ask Wizz** button in sidebar bottom toggles `showChat`; `Cmd+J` keydown listener does the same; `ChatSidebar` renders as a fixed right panel (360px) over the main area
+  - **Command palette** (`Cmd+K`) — `CommandPalette.vue` fixed overlay (z-index 1100); auto-focuses input; fuzzy-filters static commands (Navigate, Create, App sections) computed from `entityTypes` + `noteTemplates` props; live IPC search (`notes:search` + `entities:search`, debounced 200ms) when query ≥ 2 chars; ArrowUp/Down + Enter keyboard nav; emits `navigate`, `new-note`, `new-entity`, `open-note`, `open-entity`; special sentinel views `'__chat__'`/`'__settings__'` handled in `onPaletteNavigate()`
+  - **Global keyboard shortcuts** handled in `onGlobalKeydown` (App.vue): `Cmd+K` command palette, `Cmd+J` AI chat, `Cmd+N` new note (guarded: skips if focus in input/contenteditable), `Cmd+,` settings, `Cmd+Shift+T` Today, `Cmd+F` Search (guarded), `Cmd+W` close active pane (guarded)
   - Entity type nav is populated from `entity-types:list` on mount; routes `activeView` to entity type IDs
   - "New entity type" button in sidebar opens `EntityTypeModal`
   - Main area uses `tabStore` for multi-tab/multi-pane content; `activeNoteId`/`activeEntityId` are **computed** from `activePane` (not stored as refs)
