@@ -11,6 +11,11 @@ interface EntityResult {
   type_name: string
 }
 
+interface NoteResult {
+  id: string
+  title: string
+}
+
 const emit = defineEmits<{
   close: []
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
@@ -42,6 +47,15 @@ const mentionStart = ref(-1)  // index of @ in textarea value
 const mentionResults = ref<EntityResult[]>([])
 const mentionIndex = ref(0)
 let mentionTimer: ReturnType<typeof setTimeout> | null = null
+
+// ── [[note link picker ────────────────────────────────────────────────────────
+const mentionedNotes = ref<NoteResult[]>([])  // notes pinned for this session
+const noteLinkActive = ref(false)
+const noteLinkQuery = ref('')
+const noteLinkStart = ref(-1)  // index of [[ in textarea value
+const noteLinkResults = ref<NoteResult[]>([])
+const noteLinkIndex = ref(0)
+let noteLinkTimer: ReturnType<typeof setTimeout> | null = null
 
 const SUPPORTED_FILE_TYPES = '.pdf,.txt,.csv,.md'
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -184,19 +198,35 @@ function updateMentionState(): void {
   const val = ta.value
   const pos = ta.selectionStart ?? val.length
   const before = val.slice(0, pos)
-  // Find last @ with no space between it and cursor (active mention in progress)
-  const match = before.match(/@([^\s@]*)$/)
-  if (match) {
-    const newStart = before.length - match[0].length
-    const newQuery = match[1]
+
+  // @entity mention check (takes priority)
+  const atMatch = before.match(/@([^\s@]*)$/)
+  if (atMatch) {
+    const newStart = before.length - atMatch[0].length
+    const newQuery = atMatch[1]
     const stateChanged = newStart !== mentionStart.value || newQuery !== mentionQuery.value
     mentionStart.value = newStart
     mentionQuery.value = newQuery
     mentionActive.value = true
+    closeNoteLinkPicker()
     if (stateChanged) debouncedMentionSearch(newQuery)
-  } else {
-    closeMention()
+    return
   }
+  closeMention()
+
+  // [[note link check (only when no @ trigger is active)
+  const noteLinkMatch = before.match(/\[\[([^\]]*)$/)
+  if (noteLinkMatch) {
+    const newStart = before.length - noteLinkMatch[0].length
+    const newQuery = noteLinkMatch[1]
+    const stateChanged = newStart !== noteLinkStart.value || newQuery !== noteLinkQuery.value
+    noteLinkStart.value = newStart
+    noteLinkQuery.value = newQuery
+    noteLinkActive.value = true
+    if (stateChanged) debouncedNoteLinkSearch(newQuery)
+    return
+  }
+  closeNoteLinkPicker()
 }
 
 function onInputWithMention(): void {
@@ -228,9 +258,60 @@ function removeMentionEntity(id: string): void {
   if (idx !== -1) mentionedEntities.value.splice(idx, 1)
 }
 
+// ── [[note link picker ────────────────────────────────────────────────────────
+
+function closeNoteLinkPicker(): void {
+  noteLinkActive.value = false
+  noteLinkResults.value = []
+  noteLinkStart.value = -1
+  noteLinkQuery.value = ''
+  noteLinkIndex.value = 0
+  if (noteLinkTimer) { clearTimeout(noteLinkTimer); noteLinkTimer = null }
+}
+
+function debouncedNoteLinkSearch(query: string): void {
+  if (noteLinkTimer) { clearTimeout(noteLinkTimer); noteLinkTimer = null }
+  noteLinkResults.value = []
+  noteLinkIndex.value = 0
+  noteLinkTimer = setTimeout(async () => {
+    try {
+      const results = await window.api.invoke('notes:search', { query }) as NoteResult[]
+      noteLinkResults.value = results.slice(0, 8)
+    } catch {
+      noteLinkResults.value = []
+    }
+  }, 150)
+}
+
+function pickNote(note: NoteResult): void {
+  const ta = textareaRef.value
+  if (!ta || noteLinkStart.value < 0) return
+  const val = ta.value
+  const cursorPos = ta.selectionStart ?? val.length
+  const inserted = `[[${note.title}]]`
+  inputText.value = val.slice(0, noteLinkStart.value) + inserted + val.slice(cursorPos)
+  // Add to pinned notes (deduplicated, max 5)
+  if (mentionedNotes.value.length < 5 && !mentionedNotes.value.find((n) => n.id === note.id)) {
+    mentionedNotes.value.push(note)
+  }
+  const insertEnd = noteLinkStart.value + inserted.length
+  closeNoteLinkPicker()
+  nextTick(() => {
+    ta.setSelectionRange(insertEnd, insertEnd)
+    ta.focus()
+    adjustTextareaHeight()
+  })
+}
+
+function removeNoteLinkNote(id: string): void {
+  const idx = mentionedNotes.value.findIndex((n) => n.id === id)
+  if (idx !== -1) mentionedNotes.value.splice(idx, 1)
+}
+
 function onClear(): void {
   clearMessages()
   mentionedEntities.value = []
+  mentionedNotes.value = []
 }
 
 async function send(): Promise<void> {
@@ -272,6 +353,9 @@ async function send(): Promise<void> {
       mentionedEntityIds: mentionedEntities.value.length > 0
         ? mentionedEntities.value.map((e) => e.id)
         : undefined,
+      mentionedNoteIds: mentionedNotes.value.length > 0
+        ? mentionedNotes.value.map((n) => n.id)
+        : undefined,
     })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }
 
     messages.value.push({
@@ -296,7 +380,7 @@ async function send(): Promise<void> {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  // Mention picker keyboard navigation takes priority
+  // @mention picker keyboard navigation takes priority
   if (mentionActive.value && mentionResults.value.length > 0) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -317,6 +401,30 @@ function onKeydown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       e.preventDefault()
       closeMention()
+      return
+    }
+  }
+  // [[note link picker keyboard navigation
+  if (noteLinkActive.value && noteLinkResults.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      noteLinkIndex.value = (noteLinkIndex.value + 1) % noteLinkResults.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      noteLinkIndex.value = (noteLinkIndex.value - 1 + noteLinkResults.value.length) % noteLinkResults.value.length
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const note = noteLinkResults.value[noteLinkIndex.value]
+      if (note) pickNote(note)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeNoteLinkPicker()
       return
     }
   }
@@ -536,8 +644,8 @@ function renderMessage(content: string, references: { id: string; title: string 
       <div ref="messagesEndRef" />
     </div>
 
-    <!-- Attachments bar (images + files + mentioned entities) -->
-    <div v-if="attachedImages.length > 0 || attachedFiles.length > 0 || mentionedEntities.length > 0" class="chat-attachments-bar">
+    <!-- Attachments bar (images + files + mentioned entities + pinned notes) -->
+    <div v-if="attachedImages.length > 0 || attachedFiles.length > 0 || mentionedEntities.length > 0 || mentionedNotes.length > 0" class="chat-attachments-bar">
       <div
         v-for="img in attachedImages"
         :key="img.id"
@@ -574,6 +682,18 @@ function renderMessage(content: string, references: { id: string; title: string 
           <X :size="10" />
         </button>
       </div>
+      <!-- Pinned note chips -->
+      <div
+        v-for="note in mentionedNotes"
+        :key="note.id"
+        class="chat-note-chip"
+      >
+        <FileText :size="11" class="chat-note-chip-icon" />
+        <span class="chat-note-chip-title">{{ note.title }}</span>
+        <button class="chat-attachment-remove chat-attachment-remove--file" title="Remove" @click="removeNoteLinkNote(note.id)">
+          <X :size="10" />
+        </button>
+      </div>
     </div>
 
     <!-- Hidden file input -->
@@ -601,6 +721,20 @@ function renderMessage(content: string, references: { id: string; title: string 
           <span class="mention-option-type">{{ entity.type_name }}</span>
         </button>
       </div>
+      <!-- [[note link picker (floats above input) -->
+      <div v-if="noteLinkActive && noteLinkResults.length > 0" class="mention-picker">
+        <button
+          v-for="(note, i) in noteLinkResults"
+          :key="note.id"
+          class="mention-option"
+          :class="{ 'mention-option--active': i === noteLinkIndex }"
+          @mousedown.prevent="pickNote(note)"
+        >
+          <span class="mention-option-name">
+            <FileText :size="12" style="margin-right: 5px; opacity: 0.6; flex-shrink: 0;" />{{ note.title }}
+          </span>
+        </button>
+      </div>
       <button
         class="chat-attach-btn"
         :disabled="isLoading"
@@ -613,13 +747,13 @@ function renderMessage(content: string, references: { id: string; title: string 
         ref="textareaRef"
         v-model="inputText"
         class="chat-input"
-        placeholder="Ask about your notes… (type @ to mention an entity)"
+        placeholder="Ask about your notes… (@ entity, [[ note)"
         rows="1"
         :disabled="isLoading"
         @keydown="onKeydown"
         @input="onInputWithMention"
         @paste="onPaste"
-        @blur="closeMention"
+        @blur="closeMention(); closeNoteLinkPicker()"
       />
       <button
         class="chat-send-btn"
@@ -1289,6 +1423,34 @@ function renderMessage(content: string, references: { id: string; title: string 
   border-radius: 4px;
   border: 1px solid var(--color-border);
   flex-shrink: 0;
+}
+
+/* ── Note chips in attachments bar ── */
+
+.chat-note-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: rgba(52, 168, 83, 0.1);
+  border: 1px solid rgba(52, 168, 83, 0.25);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chat-note-chip-icon {
+  color: #34a853;
+  flex-shrink: 0;
+}
+
+.chat-note-chip-title {
+  color: #34a853;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Entity mention chips in attachments bar ── */
