@@ -183,6 +183,19 @@ CREATE VIRTUAL TABLE cluster_embeddings USING vec0(
 );
 ```
 
+### Schema Migration Policy
+
+**All database schema changes must be delivered as migration files.** The app checks its schema version on every startup and applies pending migrations before the UI is shown.
+
+- Migrations live in `src/main/db/migrations/`
+- Each migration is a TypeScript file named `NNNN_description.ts` exporting a `Migration` object with `version` (integer), `name`, and `up(db)` function
+- All migrations must be registered in `ALL_MIGRATIONS` in `src/main/db/migrations/index.ts`
+- Applied migrations are tracked in the `schema_migrations` table (`version`, `name`, `applied_at`)
+- **Adding a new table**: add `CREATE TABLE IF NOT EXISTS` to `SCHEMA_SQL` in `schema.ts` (for fresh installs) AND create a migration (for existing installs)
+- **Adding a column to an existing table**: create a migration file only — do NOT touch `schema.ts`
+- No `down()` / rollback — local-first single-user desktop app
+- Current migrations: `0001` (`entities.trashed_at`), `0002` (`action_items.updated_at`)
+
 ---
 
 ## Feature Specifications

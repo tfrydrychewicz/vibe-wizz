@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import { app } from 'electron'
 import { join } from 'path'
 import { SCHEMA_SQL } from './schema'
+import { runMigrations } from './migrations/index'
 import * as sqliteVec from 'sqlite-vec'
 
 let _db: Database.Database | null = null
@@ -31,10 +32,7 @@ export function initDatabase(): Database.Database {
 
   _db.exec(SCHEMA_SQL)
 
-  // Migration: add trashed_at to entities (idempotent — ALTER TABLE fails silently if column exists)
-  try { _db.exec('ALTER TABLE entities ADD COLUMN trashed_at TEXT') } catch { /* already exists */ }
-  // Migration: add updated_at to action_items (idempotent)
-  try { _db.exec('ALTER TABLE action_items ADD COLUMN updated_at TEXT') } catch { /* already exists */ }
+  runMigrations(_db)
 
   // Load sqlite-vec extension (graceful — app works without it, semantic search is just disabled)
   _vecLoaded = loadSqliteVec(_db)
