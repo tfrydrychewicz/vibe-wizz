@@ -31,8 +31,9 @@ const attendeeEntityMap = ref<Map<string, { id: string; name: string; type_id: s
 const linkedNoteId = ref(props.event.linked_note_id)
 const linkedNoteTitle = ref(props.event.linked_note_title)
 
-// ── Note search ───────────────────────────────────────────────────────────────
+// ── Note create / search ──────────────────────────────────────────────────────
 
+const creatingNote = ref(false)
 const showSearch = ref(false)
 const noteQuery = ref('')
 const noteResults = ref<{ id: string; title: string }[]>([])
@@ -162,6 +163,29 @@ function openEntity(e: MouseEvent, entity: { id: string; name: string; type_id: 
   emit('open-entity', { entityId: entity.id, typeId: entity.type_id, mode })
   emit('close')
 }
+
+async function createMeetingNote(e: MouseEvent): Promise<void> {
+  if (creatingNote.value) return
+  creatingNote.value = true
+  try {
+    const template = (await window.api.invoke('settings:get', { key: 'meeting_note_title_template' }) as string | null) ?? '{date} - {title}'
+    const start = new Date(props.event.start_at)
+    const datePart = start.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    const noteTitle = template
+      .replace('{date}', datePart)
+      .replace('{title}', props.event.title)
+    const note = (await window.api.invoke('notes:create', { title: noteTitle })) as { id: string; title: string }
+    await window.api.invoke('calendar-events:update', { id: props.event.id, linked_note_id: note.id })
+    linkedNoteId.value = note.id
+    linkedNoteTitle.value = noteTitle
+    emit('note-linked', { eventId: props.event.id, linkedNoteId: note.id, linkedNoteTitle: noteTitle })
+    const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+    emit('open-note', { noteId: note.id, title: noteTitle, mode })
+    emit('close')
+  } finally {
+    creatingNote.value = false
+  }
+}
 </script>
 
 <template>
@@ -223,10 +247,14 @@ function openEntity(e: MouseEvent, entity: { id: string; name: string; type_id: 
         </button>
       </div>
 
-      <!-- Note search -->
+      <!-- No note linked: create or attach -->
       <template v-else>
-        <button v-if="!showSearch" class="sp-link-btn" @click="showSearch = true">
-          Link a note…
+        <button class="sp-link-btn sp-create-note-btn" :disabled="creatingNote" @click="createMeetingNote($event)">
+          <FileText :size="11" />
+          {{ creatingNote ? 'Creating…' : 'Create Meeting Notes' }}
+        </button>
+        <button v-if="!showSearch" class="sp-attach-btn" @click="showSearch = true">
+          or attach existing…
         </button>
         <template v-else>
           <div class="sp-search-row">
@@ -440,6 +468,9 @@ function openEntity(e: MouseEvent, entity: { id: string; name: string; type_id: 
 }
 
 .sp-link-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   color: var(--color-text-muted);
   background: transparent;
@@ -449,12 +480,34 @@ function openEntity(e: MouseEvent, entity: { id: string; name: string; type_id: 
   cursor: pointer;
   text-align: left;
   width: 100%;
+  font-family: inherit;
 }
 
-.sp-link-btn:hover {
+.sp-link-btn:hover:not(:disabled) {
   border-color: var(--color-accent);
   color: var(--color-accent);
   background: rgba(91, 141, 239, 0.05);
+}
+
+.sp-link-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sp-attach-btn {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.sp-attach-btn:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
 }
 
 /* ── Note search ─────────────────────────────────────────────────────────── */
