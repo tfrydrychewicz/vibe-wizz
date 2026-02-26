@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
-import { X, Plus, Trash2, ExternalLink, FileText } from 'lucide-vue-next'
+import { ref, watch, computed, onMounted } from 'vue'
+import { X, Plus, Trash2, ExternalLink, FileText, RefreshCw } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
 import type { OpenMode } from '../stores/tabStore'
 
@@ -14,6 +14,8 @@ export interface CalendarEvent {
   linked_note_id: string | null
   transcript_note_id: string | null
   recurrence_rule: string | null
+  recurrence_series_id: number | null
+  recurrence_instance_date: string | null
   synced_at: string
   linked_note_title: string | null
 }
@@ -61,6 +63,127 @@ const saving = ref(false)
 const saveError = ref<string | null>(null)
 const creatingNote = ref(false)
 
+// ── Recurrence state ──────────────────────────────────────────────────────────
+
+type DayAbbr = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+type SaveScope = 'this' | 'future' | 'all'
+
+const DAY_OPTIONS: { abbr: DayAbbr; label: string }[] = [
+  { abbr: 'mon', label: 'Mo' },
+  { abbr: 'tue', label: 'Tu' },
+  { abbr: 'wed', label: 'We' },
+  { abbr: 'thu', label: 'Th' },
+  { abbr: 'fri', label: 'Fr' },
+  { abbr: 'sat', label: 'Sa' },
+  { abbr: 'sun', label: 'Su' },
+]
+
+const SCOPE_OPTIONS: { value: SaveScope; label: string }[] = [
+  { value: 'this', label: 'This event' },
+  { value: 'future', label: 'This & future' },
+  { value: 'all', label: 'All events' },
+]
+
+const DOW_TO_ABBR: DayAbbr[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+
+const recurEnabled = ref(false)
+const recurFreq = ref<'daily' | 'weekly' | 'biweekly' | 'monthly'>('weekly')
+const recurDays = ref<DayAbbr[]>([])
+const recurEndMode = ref<'never' | 'until' | 'count'>('never')
+const recurUntil = ref('')
+const recurCount = ref(1)
+const saveScope = ref<SaveScope>('this')
+
+// Scope overlay (shown on Save/Delete for recurring events)
+type ScopeAction = 'save' | 'delete'
+const showScopeOverlay = ref(false)
+const scopeAction = ref<ScopeAction>('save')
+
+const isRecurringEvent = computed(
+  () => props.event !== null &&
+    (props.event.recurrence_rule !== null || props.event.recurrence_series_id !== null),
+)
+
+function getDefaultDay(): DayAbbr {
+  if (!dateStr.value) return 'mon'
+  const [y, m, d] = dateStr.value.split('-').map(Number)
+  return DOW_TO_ABBR[new Date(y, m - 1, d).getDay()]
+}
+
+function toggleDay(day: DayAbbr): void {
+  const idx = recurDays.value.indexOf(day)
+  if (idx === -1) recurDays.value.push(day)
+  else recurDays.value.splice(idx, 1)
+}
+
+// When enabling recurrence default the day-of-week to the event's date
+watch(recurEnabled, (on) => {
+  if (on && recurDays.value.length === 0 &&
+      (recurFreq.value === 'weekly' || recurFreq.value === 'biweekly')) {
+    recurDays.value = [getDefaultDay()]
+  }
+})
+
+// When switching to daily/monthly, clear days (they're only used for weekly/biweekly)
+watch(recurFreq, (f) => {
+  if (f === 'daily' || f === 'monthly') recurDays.value = []
+  else if (recurDays.value.length === 0) recurDays.value = [getDefaultDay()]
+})
+
+function buildRecurrenceRule(): string | null {
+  if (!recurEnabled.value) return null
+  const rule: {
+    freq: string
+    days?: DayAbbr[]
+    until?: string
+    count?: number
+  } = { freq: recurFreq.value }
+  if ((recurFreq.value === 'weekly' || recurFreq.value === 'biweekly') && recurDays.value.length > 0) {
+    rule.days = [...recurDays.value]
+  }
+  if (recurEndMode.value === 'until' && recurUntil.value) rule.until = recurUntil.value
+  else if (recurEndMode.value === 'count' && recurCount.value > 0) rule.count = recurCount.value
+  return JSON.stringify(rule)
+}
+
+function resetRecurState(): void {
+  recurEnabled.value = false
+  recurFreq.value = 'weekly'
+  recurDays.value = []
+  recurEndMode.value = 'never'
+  recurUntil.value = ''
+  recurCount.value = 1
+  saveScope.value = 'this'
+}
+
+function onSaveClick(): void {
+  if (isRecurringEvent.value) {
+    scopeAction.value = 'save'
+    showScopeOverlay.value = true
+  } else {
+    void save()
+  }
+}
+
+function onDeleteClick(): void {
+  if (isRecurringEvent.value) {
+    scopeAction.value = 'delete'
+    showScopeOverlay.value = true
+  } else {
+    confirmDelete.value = true
+  }
+}
+
+async function onScopeChosen(scope: SaveScope): Promise<void> {
+  showScopeOverlay.value = false
+  if (scopeAction.value === 'save') {
+    saveScope.value = scope
+    await save()
+  } else {
+    await deleteEvent(scope)
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function isoToDateStr(iso: string): string {
@@ -100,6 +223,22 @@ function populate(): void {
     }
     linkedNoteId.value = props.event.linked_note_id
     linkedNoteTitle.value = props.event.linked_note_title
+    // Restore recurrence form state from the stored rule
+    if (props.event.recurrence_rule) {
+      try {
+        const rule = JSON.parse(props.event.recurrence_rule) as {
+          freq?: string; days?: DayAbbr[]; until?: string; count?: number
+        }
+        recurEnabled.value = true
+        recurFreq.value = (rule.freq as typeof recurFreq.value) ?? 'weekly'
+        recurDays.value = rule.days ?? []
+        if (rule.until) { recurEndMode.value = 'until'; recurUntil.value = rule.until }
+        else if (rule.count) { recurEndMode.value = 'count'; recurCount.value = rule.count }
+        else recurEndMode.value = 'never'
+      } catch { resetRecurState() }
+    } else {
+      resetRecurState()
+    }
   } else {
     // Create mode — pre-fill from defaultStart
     const start = new Date(props.defaultStart)
@@ -123,6 +262,7 @@ function populate(): void {
     attendees.value = []
     linkedNoteId.value = null
     linkedNoteTitle.value = null
+    resetRecurState()
   }
   confirmDelete.value = false
   noteSearchQuery.value = ''
@@ -263,6 +403,8 @@ async function save(): Promise<void> {
       ...(a.entity_id ? { entity_id: a.entity_id } : {}),
     }))
 
+    const recurrenceRule = buildRecurrenceRule()
+
     if (props.event) {
       await window.api.invoke('calendar-events:update', {
         id: props.event.id,
@@ -271,6 +413,8 @@ async function save(): Promise<void> {
         end_at,
         attendees: attendeesPayload,
         linked_note_id: linkedNoteId.value,
+        recurrence_rule: recurrenceRule,
+        ...(isRecurringEvent.value ? { update_scope: saveScope.value } : {}),
       })
       emit('saved', {
         ...props.event,
@@ -280,6 +424,7 @@ async function save(): Promise<void> {
         attendees: JSON.stringify(attendees.value),
         linked_note_id: linkedNoteId.value,
         linked_note_title: linkedNoteTitle.value,
+        recurrence_rule: recurrenceRule,
       })
     } else {
       const created = await window.api.invoke('calendar-events:create', {
@@ -288,6 +433,7 @@ async function save(): Promise<void> {
         end_at,
         attendees: attendeesPayload,
         linked_note_id: linkedNoteId.value,
+        recurrence_rule: recurrenceRule,
       }) as CalendarEvent
       emit('saved', created)
     }
@@ -301,9 +447,12 @@ async function save(): Promise<void> {
 
 // ── Delete ────────────────────────────────────────────────────────────────────
 
-async function deleteEvent(): Promise<void> {
+async function deleteEvent(scope: 'this' | 'future' | 'all' = 'this'): Promise<void> {
   if (!props.event) return
-  await window.api.invoke('calendar-events:delete', { id: props.event.id })
+  await window.api.invoke('calendar-events:delete', {
+    id: props.event.id,
+    delete_scope: scope,
+  })
   emit('deleted')
 }
 
@@ -408,7 +557,13 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
     <div class="modal-card" role="dialog" aria-modal="true">
       <!-- Header -->
       <div class="modal-header">
-        <h2 class="modal-title">{{ event ? 'Edit Meeting' : 'New Meeting' }}</h2>
+        <div class="modal-title-wrap">
+          <h2 class="modal-title">{{ event ? 'Edit Meeting' : 'New Meeting' }}</h2>
+          <span v-if="event?.recurrence_series_id" class="recur-series-badge">
+            <RefreshCw :size="10" />
+            Recurring series
+          </span>
+        </div>
         <button class="btn-icon" @click="emit('cancel')"><X :size="15" /></button>
       </div>
 
@@ -439,6 +594,84 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
           <div class="field field-shrink">
             <label class="field-label">End</label>
             <input v-model="endTime" type="time" class="field-input" />
+          </div>
+        </div>
+
+        <!-- Repeat -->
+        <div class="field">
+          <div class="recur-toggle-row">
+            <label class="field-label">Repeat</label>
+            <button
+              class="recur-toggle-btn"
+              :class="{ active: recurEnabled }"
+              type="button"
+              @click="recurEnabled = !recurEnabled"
+            >
+              <RefreshCw :size="11" />
+              {{ recurEnabled ? 'On' : 'Off' }}
+            </button>
+          </div>
+
+          <div v-if="recurEnabled" class="recur-options">
+            <!-- Frequency -->
+            <div class="recur-row">
+              <span class="recur-label">Every</span>
+              <select v-model="recurFreq" class="recur-select">
+                <option value="daily">Day</option>
+                <option value="weekly">Week</option>
+                <option value="biweekly">2 weeks</option>
+                <option value="monthly">Month</option>
+              </select>
+            </div>
+
+            <!-- Day-of-week chips (weekly / biweekly only) -->
+            <div v-if="recurFreq === 'weekly' || recurFreq === 'biweekly'" class="recur-row">
+              <span class="recur-label">On</span>
+              <div class="day-chips">
+                <button
+                  v-for="day in DAY_OPTIONS"
+                  :key="day.abbr"
+                  type="button"
+                  class="day-chip"
+                  :class="{ active: recurDays.includes(day.abbr) }"
+                  @click="toggleDay(day.abbr)"
+                >{{ day.label }}</button>
+              </div>
+            </div>
+
+            <!-- End condition -->
+            <div class="recur-row recur-end-row">
+              <span class="recur-label">Ends</span>
+              <div class="recur-end-options">
+                <label class="recur-radio-label">
+                  <input v-model="recurEndMode" type="radio" value="never" />
+                  Never
+                </label>
+                <label class="recur-radio-label">
+                  <input v-model="recurEndMode" type="radio" value="until" />
+                  On
+                  <input
+                    v-if="recurEndMode === 'until'"
+                    v-model="recurUntil"
+                    type="date"
+                    class="recur-date-input"
+                  />
+                </label>
+                <label class="recur-radio-label">
+                  <input v-model="recurEndMode" type="radio" value="count" />
+                  After
+                  <input
+                    v-if="recurEndMode === 'count'"
+                    v-model.number="recurCount"
+                    type="number"
+                    min="1"
+                    max="999"
+                    class="recur-count-input"
+                  />
+                  <span v-if="recurEndMode === 'count'" class="recur-label">times</span>
+                </label>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -563,32 +796,72 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 
       <!-- Footer -->
       <div class="modal-footer">
-        <div class="footer-left">
-          <template v-if="event">
-            <button
-              v-if="!confirmDelete"
-              class="btn-danger-outline"
-              @click="confirmDelete = true"
-            >
-              <Trash2 :size="13" />
-              Delete
-            </button>
-            <template v-else>
-              <span class="confirm-text">Delete this meeting?</span>
-              <button class="btn-danger" @click="deleteEvent">Yes, delete</button>
-              <button class="btn-ghost" @click="confirmDelete = false">Cancel</button>
+        <div class="footer-actions">
+          <div class="footer-left">
+            <template v-if="event">
+              <button
+                v-if="!confirmDelete"
+                class="btn-danger-outline"
+                @click="onDeleteClick"
+              >
+                <Trash2 :size="13" />
+                Delete
+              </button>
+              <template v-else>
+                <span class="confirm-text">Delete this meeting?</span>
+                <button class="btn-danger" @click="deleteEvent()">Yes, delete</button>
+                <button class="btn-ghost" @click="confirmDelete = false">Cancel</button>
+              </template>
             </template>
-          </template>
-        </div>
-        <div class="footer-right">
-          <button class="btn-ghost" @click="emit('cancel')">Cancel</button>
-          <button class="btn-primary" :disabled="!title.trim() || saving" @click="save">
-            {{ saving ? 'Saving…' : (event ? 'Save' : 'Create') }}
-          </button>
+          </div>
+          <div class="footer-right">
+            <button class="btn-ghost" @click="emit('cancel')">Cancel</button>
+            <button class="btn-primary" :disabled="!title.trim() || saving" @click="onSaveClick">
+              {{ saving ? 'Saving…' : (event ? 'Save' : 'Create') }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   </div>
+
+  <!-- Scope overlay — sits on top of the event modal -->
+  <Teleport to="body">
+    <div v-if="showScopeOverlay" class="scope-overlay" @mousedown.self="showScopeOverlay = false">
+      <div class="scope-dialog">
+        <p class="scope-dialog-title">
+          {{ scopeAction === 'save' ? 'Save changes for…' : 'Delete for…' }}
+        </p>
+        <div class="scope-dialog-options">
+          <button
+            class="scope-dialog-opt"
+            :class="{ danger: scopeAction === 'delete' }"
+            @click="onScopeChosen('this')"
+          >
+            <span class="scope-opt-name">This event</span>
+            <span class="scope-opt-desc">Only this occurrence</span>
+          </button>
+          <button
+            class="scope-dialog-opt"
+            :class="{ danger: scopeAction === 'delete' }"
+            @click="onScopeChosen('future')"
+          >
+            <span class="scope-opt-name">This &amp; future</span>
+            <span class="scope-opt-desc">This and all following occurrences</span>
+          </button>
+          <button
+            class="scope-dialog-opt"
+            :class="{ danger: scopeAction === 'delete' }"
+            @click="onScopeChosen('all')"
+          >
+            <span class="scope-opt-name">All events</span>
+            <span class="scope-opt-desc">Every occurrence in the series</span>
+          </button>
+        </div>
+        <button class="scope-dialog-cancel" @click="showScopeOverlay = false">Cancel</button>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -616,11 +889,30 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 
 .modal-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   padding: 16px 20px 12px;
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
+}
+
+.modal-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recur-series-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-accent);
+  background: rgba(91, 141, 239, 0.1);
+  border: 1px solid rgba(91, 141, 239, 0.25);
+  border-radius: 10px;
+  padding: 2px 7px;
 }
 
 .modal-title {
@@ -884,28 +1176,349 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
   flex-shrink: 0;
 }
 
-/* Footer */
+/* Recurrence section */
 
-.modal-footer {
+.recur-toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+}
+
+.recur-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.recur-toggle-btn.active {
+  background: rgba(91, 141, 239, 0.12);
+  border-color: rgba(91, 141, 239, 0.4);
+  color: var(--color-accent);
+}
+
+.recur-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.recur-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.recur-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  min-width: 32px;
+}
+
+.recur-select {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--color-text);
+  cursor: pointer;
+  outline: none;
+}
+
+.recur-select:focus {
+  border-color: var(--color-accent);
+}
+
+.day-chips {
+  display: flex;
+  gap: 4px;
+}
+
+.day-chip {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.day-chip.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.recur-end-row {
+  align-items: flex-start;
+}
+
+.recur-end-options {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.recur-radio-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.recur-radio-label input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  background: var(--color-bg);
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.recur-radio-label input[type="radio"]:hover:not(:checked) {
+  border-color: var(--color-text-muted);
+}
+
+.recur-radio-label input[type="radio"]:checked {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+.recur-radio-label input[type="radio"]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.recur-radio-label input[type="radio"]:checked::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.recur-date-input {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--color-text);
+  outline: none;
+}
+
+.recur-date-input:focus {
+  border-color: var(--color-accent);
+}
+
+.recur-count-input {
+  width: 56px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--color-text);
+  outline: none;
+  text-align: center;
+}
+
+.recur-count-input:focus {
+  border-color: var(--color-accent);
+}
+
+/* Footer */
+
+.modal-footer {
+  padding: 10px 20px 12px;
   border-top: 1px solid var(--color-border);
   flex-shrink: 0;
+}
+
+/* Scope overlay */
+
+:global(.scope-overlay) {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+:global(.scope-dialog) {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  width: 300px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+:global(.scope-dialog-title) {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin: 0 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+:global(.scope-dialog-options) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+:global(.scope-dialog-opt) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s, border-color 0.1s;
+  width: 100%;
+}
+
+:global(.scope-dialog-opt:hover) {
+  background: rgba(91, 141, 239, 0.1);
+  border-color: rgba(91, 141, 239, 0.35);
+}
+
+:global(.scope-dialog-opt.danger:hover) {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+:global(.scope-opt-name) {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+:global(.scope-dialog-opt.danger:hover .scope-opt-name) {
+  color: #ef4444;
+}
+
+:global(.scope-opt-desc) {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+:global(.scope-dialog-cancel) {
+  margin-top: 4px;
+  padding: 7px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+}
+
+:global(.scope-dialog-cancel:hover) {
+  color: var(--color-text);
+  background: var(--color-hover);
+}
+
+.footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
 .footer-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .footer-right {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.btn-danger-sm {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 5px;
+  color: #ef4444;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.btn-danger-sm:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.btn-ghost-sm {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.btn-ghost-sm:hover {
+  color: var(--color-text);
 }
 
 .confirm-text {

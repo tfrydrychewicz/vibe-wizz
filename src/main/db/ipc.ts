@@ -9,6 +9,14 @@ import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQuer
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
 import { parseQuery } from '../entity-query/parser'
 import { evalQuery } from '../entity-query/evaluator'
+import {
+  generateOccurrences,
+  applyRecurrenceUpdate,
+  applyRecurrenceDelete,
+  getSeriesNotes,
+  type UpdateScope,
+  type DeleteScope,
+} from '../calendar/recurrenceEngine'
 
 type NoteRow = {
   id: string
@@ -1854,6 +1862,8 @@ export function registerDbIpcHandlers(): void {
     linked_note_id: string | null
     transcript_note_id: string | null
     recurrence_rule: string | null
+    recurrence_series_id: number | null
+    recurrence_instance_date: string | null
     synced_at: string
   }
 
@@ -1885,13 +1895,14 @@ export function registerDbIpcHandlers(): void {
         end_at: string
         attendees?: Array<{ email: string; name: string }>
         linked_note_id?: string | null
+        recurrence_rule?: string | null
       },
     ) => {
       const db = getDatabase()
       const result = db
         .prepare(
-          `INSERT INTO calendar_events (title, start_at, end_at, attendees, linked_note_id)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO calendar_events (title, start_at, end_at, attendees, linked_note_id, recurrence_rule)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
         .run(
           opts.title,
@@ -1899,7 +1910,16 @@ export function registerDbIpcHandlers(): void {
           opts.end_at,
           JSON.stringify(opts.attendees ?? []),
           opts.linked_note_id ?? null,
+          opts.recurrence_rule ?? null,
         )
+
+      const newId = result.lastInsertRowid as number
+
+      // Generate occurrence rows for the rolling window when the event recurs
+      if (opts.recurrence_rule) {
+        generateOccurrences(db, newId)
+      }
+
       return db
         .prepare(
           `SELECT ce.*, n.title AS linked_note_title
@@ -1907,7 +1927,7 @@ export function registerDbIpcHandlers(): void {
            LEFT JOIN notes n ON ce.linked_note_id = n.id
            WHERE ce.id = ?`,
         )
-        .get(result.lastInsertRowid) as CalendarEventRow & { linked_note_title: string | null }
+        .get(newId) as CalendarEventRow & { linked_note_title: string | null }
     },
   )
 
@@ -1924,33 +1944,77 @@ export function registerDbIpcHandlers(): void {
         attendees?: Array<{ email: string; name: string }>
         linked_note_id?: string | null
         transcript_note_id?: string | null
+        recurrence_rule?: string | null
+        /** How broadly to apply changes on recurring events. Defaults to 'this'. */
+        update_scope?: UpdateScope
       },
     ) => {
       const db = getDatabase()
-      const sets: string[] = []
-      const params: unknown[] = []
+      const scope: UpdateScope = opts.update_scope ?? 'this'
 
-      if (opts.title !== undefined) { sets.push('title = ?'); params.push(opts.title) }
-      if (opts.start_at !== undefined) { sets.push('start_at = ?'); params.push(opts.start_at) }
-      if (opts.end_at !== undefined) { sets.push('end_at = ?'); params.push(opts.end_at) }
-      if (opts.attendees !== undefined) { sets.push('attendees = ?'); params.push(JSON.stringify(opts.attendees)) }
-      if ('linked_note_id' in opts) { sets.push('linked_note_id = ?'); params.push(opts.linked_note_id ?? null) }
-      if ('transcript_note_id' in opts) { sets.push('transcript_note_id = ?'); params.push(opts.transcript_note_id ?? null) }
+      // Build the plain column→value map (same fields as before plus recurrence_rule)
+      const changes: Record<string, unknown> = {}
+      if (opts.title !== undefined) changes.title = opts.title
+      if (opts.start_at !== undefined) changes.start_at = opts.start_at
+      if (opts.end_at !== undefined) changes.end_at = opts.end_at
+      if (opts.attendees !== undefined) changes.attendees = JSON.stringify(opts.attendees)
+      if ('linked_note_id' in opts) changes.linked_note_id = opts.linked_note_id ?? null
+      if ('transcript_note_id' in opts) changes.transcript_note_id = opts.transcript_note_id ?? null
+      if ('recurrence_rule' in opts) changes.recurrence_rule = opts.recurrence_rule ?? null
 
-      if (!sets.length) return { ok: true }
-      params.push(opts.id)
-      db.prepare(`UPDATE calendar_events SET ${sets.join(', ')} WHERE id = ?`)
-        .run(...(params as (string | number | null)[]))
+      if (Object.keys(changes).length === 0) return { ok: true }
+
+      // Check if this event belongs to a recurring series (or is a series root itself)
+      const row = db
+        .prepare('SELECT recurrence_series_id, recurrence_rule FROM calendar_events WHERE id = ?')
+        .get(opts.id) as { recurrence_series_id: number | null; recurrence_rule: string | null } | undefined
+
+      const isRecurring = row && (row.recurrence_series_id !== null || row.recurrence_rule !== null)
+
+      if (isRecurring && (scope === 'future' || scope === 'all')) {
+        // Delegate to the engine for multi-occurrence updates
+        applyRecurrenceUpdate(db, opts.id, changes, scope)
+      } else {
+        // Plain single-row update (scope='this', or non-recurring event)
+        const sets = Object.keys(changes).map((k) => `${k} = ?`)
+        const params = [...Object.values(changes), opts.id]
+        db.prepare(`UPDATE calendar_events SET ${sets.join(', ')} WHERE id = ?`)
+          .run(...(params as (string | number | null)[]))
+
+        // If recurrence_rule was just set on a non-occurrence row, generate occurrences
+        if ('recurrence_rule' in opts && opts.recurrence_rule && !row?.recurrence_series_id) {
+          generateOccurrences(db, opts.id)
+        }
+      }
+
       return { ok: true }
     },
   )
 
   /** calendar-events:delete — hard-deletes a calendar event. */
-  ipcMain.handle('calendar-events:delete', (_event, { id }: { id: number }) => {
-    const db = getDatabase()
-    db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id)
-    return { ok: true }
-  })
+  ipcMain.handle(
+    'calendar-events:delete',
+    (_event, { id, delete_scope }: { id: number; delete_scope?: DeleteScope }) => {
+      const db = getDatabase()
+
+      if (delete_scope && delete_scope !== 'this') {
+        applyRecurrenceDelete(db, id, delete_scope)
+      } else {
+        db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id)
+      }
+
+      return { ok: true }
+    },
+  )
+
+  /** calendar-events:get-series-notes — past occurrences of a recurring series with their linked notes. */
+  ipcMain.handle(
+    'calendar-events:get-series-notes',
+    (_event, { series_id }: { series_id: number }) => {
+      const db = getDatabase()
+      return getSeriesNotes(db, series_id)
+    },
+  )
 
   /** calendar-events:get-by-note — returns the calendar event that has linked_note_id = note_id, or null. */
   ipcMain.handle('calendar-events:get-by-note', (_event, { note_id }: { note_id: string }) => {

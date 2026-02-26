@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { ChevronLeft, ChevronRight, Calendar, Plus } from 'lucide-vue-next'
+import { ChevronLeft, ChevronRight, Calendar, Plus, RefreshCw } from 'lucide-vue-next'
 import MeetingModal from './MeetingModal.vue'
 import type { CalendarEvent } from './MeetingModal.vue'
 import type { OpenMode } from '../stores/tabStore'
@@ -304,6 +304,34 @@ function formatEventTime(iso: string): string {
   return m === 0 ? `${hour}${ampm}` : `${hour}:${String(m).padStart(2, '0')}${ampm}`
 }
 
+// ── Recurrence helpers ────────────────────────────────────────────────────
+
+function isRecurring(ev: CalendarEvent): boolean {
+  return ev.recurrence_rule !== null || ev.recurrence_series_id !== null
+}
+
+function describeRule(ruleJson: string): string {
+  try {
+    const r = JSON.parse(ruleJson) as { freq?: string; days?: string[] }
+    const days = r.days?.map(d => d.charAt(0).toUpperCase() + d.slice(1)).join(', ')
+    switch (r.freq) {
+      case 'daily': return 'Daily'
+      case 'weekly': return days ? `Weekly on ${days}` : 'Weekly'
+      case 'biweekly': return days ? `Every 2 weeks on ${days}` : 'Every 2 weeks'
+      case 'monthly': return 'Monthly'
+      default: return 'Recurring'
+    }
+  } catch { return 'Recurring' }
+}
+
+function eventTooltip(ev: CalendarEvent): string {
+  const time = `${formatEventTime(ev.start_at)}–${formatEventTime(ev.end_at)}`
+  const recur = ev.recurrence_rule
+    ? `↻ ${describeRule(ev.recurrence_rule)}`
+    : ev.recurrence_series_id ? '↻ Recurring' : ''
+  return recur ? `${ev.title}\n${time}\n${recur}` : `${ev.title}\n${time}`
+}
+
 // ── Modal helpers ─────────────────────────────────────────────────────────────
 
 function openCreateModal(defaultStart: string, defaultEnd?: string): void {
@@ -501,19 +529,26 @@ function onResizeMouseUp(): void {
 
 function onModalSaved(ev: CalendarEvent): void {
   showModal.value = false
-  // Update or insert event in local list
-  const idx = events.value.findIndex((e) => e.id === ev.id)
-  if (idx !== -1) {
-    events.value[idx] = ev
+  if (isRecurring(ev)) {
+    // Scope changes may have added/removed occurrences in the current range
+    void loadEvents()
   } else {
-    events.value.push(ev)
-    events.value.sort((a, b) => a.start_at.localeCompare(b.start_at))
+    const idx = events.value.findIndex((e) => e.id === ev.id)
+    if (idx !== -1) {
+      events.value[idx] = ev
+    } else {
+      events.value.push(ev)
+      events.value.sort((a, b) => a.start_at.localeCompare(b.start_at))
+    }
   }
 }
 
 function onModalDeleted(): void {
   showModal.value = false
-  if (modalEvent.value) {
+  if (modalEvent.value && isRecurring(modalEvent.value)) {
+    // Series delete may remove multiple occurrences
+    void loadEvents()
+  } else if (modalEvent.value) {
     const id = modalEvent.value.id
     events.value = events.value.filter((e) => e.id !== id)
   }
@@ -631,10 +666,13 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
               :key="ev.id"
               class="event-block"
               :style="getEventDisplayStyle(ev)"
-              :title="`${ev.title}\n${formatEventTime(ev.start_at)}–${formatEventTime(ev.end_at)}`"
+              :title="eventTooltip(ev)"
               @mousedown.prevent.stop="onEventMouseDown(ev, $event)"
             >
-              <span class="event-title">{{ ev.title }}</span>
+              <div class="event-header-row">
+                <span class="event-title">{{ ev.title }}</span>
+                <RefreshCw v-if="isRecurring(ev)" :size="9" class="event-recur-icon" />
+              </div>
               <span v-if="showEventTime(ev)" class="event-time">{{ formatEventTime(ev.start_at) }}</span>
               <div class="event-resize-handle" @mousedown.prevent.stop="onResizeStart(ev, $event)" />
             </div>
@@ -667,11 +705,12 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
                 v-for="ev in eventsForDay(day)"
                 :key="ev.id"
                 class="month-event-chip"
-                :title="ev.title"
+                :title="eventTooltip(ev)"
                 @click.stop="openEditModal(ev)"
               >
                 <span class="month-event-time">{{ formatEventTime(ev.start_at) }}</span>
                 {{ ev.title }}
+                <RefreshCw v-if="isRecurring(ev)" :size="8" class="month-event-recur-icon" />
               </div>
             </div>
           </div>
@@ -995,6 +1034,19 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
   border-radius: 1px;
 }
 
+.event-header-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.event-recur-icon {
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.5);
+  margin-top: 2px;
+}
+
 .event-title {
   font-size: 12px;
   font-weight: 500;
@@ -1003,6 +1055,8 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.3;
+  flex: 1;
+  min-width: 0;
 }
 
 .event-time {
@@ -1114,5 +1168,12 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
   font-size: 10px;
   flex-shrink: 0;
   font-weight: 500;
+}
+
+.month-event-recur-icon {
+  flex-shrink: 0;
+  color: var(--color-accent);
+  opacity: 0.65;
+  margin-left: auto;
 }
 </style>
