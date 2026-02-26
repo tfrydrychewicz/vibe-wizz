@@ -196,6 +196,7 @@ CREATE VIRTUAL TABLE cluster_embeddings USING vec0(
 - `/` slash commands (insert template, create entity, add action item, insert date)
 - Inline code blocks with syntax highlighting
 - Drag-and-drop image embedding (stored locally in app data)
+- **Tables**: Insert 3×3 table via toolbar (Table2 button); right-click any table cell for a context menu (add/delete row or column, delete table, merge/split cells); column resize handles; GFM tables from AI chat rendered correctly
 
 **Auto-save**: Debounced 500ms after last keystroke. No save button.
 
@@ -1039,6 +1040,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Query expansion + re-ranking
 
 ### Phase 5 — Polish & Portability
+- [x] Table support in editor — `@tiptap/extension-table*`; toolbar insert button; right-click context menu (`TableContextMenu.vue`) for add/delete row/col, delete table, merge/split cells; CellSelection preserved on right-click via `mousedown` guard; GFM table parsing in `postProcessor.ts` so AI-generated notes render tables correctly; system prompts updated with GFM table syntax
 - [ ] Import (Markdown, Notion, CSV)
 - [ ] Export (Markdown, JSON, SQLite)
 - [ ] Automatic backups
