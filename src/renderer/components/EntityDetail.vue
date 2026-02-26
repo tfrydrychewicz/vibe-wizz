@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { Trash2, X, ExternalLink } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
 import { entityTrashStatus } from '../stores/mentionStore'
+import { activePane } from '../stores/tabStore'
 import type { OpenMode } from '../stores/tabStore'
 
 type FieldDef = {
@@ -368,10 +369,25 @@ function fieldLabel(name: string): string {
   return name.replace(/_/g, ' ')
 }
 
+function onKeydown(e: KeyboardEvent): void {
+  if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+    if (activePane.value?.type === 'entity' && activePane.value?.contentId === props.entityId) {
+      e.preventDefault()
+      void save()
+    }
+  }
+}
+
 onMounted(async () => {
   await loadEntityTypes()
   await loadEntity(props.entityId)
+  window.addEventListener('keydown', onKeydown)
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+})
+
 watch(() => props.entityId, async (id) => {
   await loadEntity(id)
 })
