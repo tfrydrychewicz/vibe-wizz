@@ -5,7 +5,7 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, type ChatModelId } from '../embedding/chat'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField, type ChatModelId } from '../embedding/chat'
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
 import { parseQuery } from '../entity-query/parser'
 import { evalQuery } from '../entity-query/evaluator'
@@ -171,6 +171,93 @@ function extractMentionIds(bodyJson: string): string[] {
   }
   walk(doc)
   return ids
+}
+
+/**
+ * BFS traversal of the entity graph starting from directly-mentioned entity IDs.
+ * Resolves field values (entity_ref, entity_ref_list, note_ref) up to depth 2
+ * with a visited-set to prevent cycles. Returns rich entity context rows and
+ * the set of note IDs encountered via note_ref fields.
+ */
+function buildRichEntityContext(
+  db: ReturnType<typeof getDatabase>,
+  mentionedEntityIds: string[],
+): { richEntities: RichEntityContext[]; entityLinkedNoteIds: Set<string> } {
+  const visited = new Set<string>()
+  const queue: { id: string; depth: number }[] = mentionedEntityIds.map((id) => ({ id, depth: 0 }))
+  const richEntities: RichEntityContext[] = []
+  const entityLinkedNoteIds = new Set<string>()
+
+  while (queue.length > 0) {
+    const item = queue.shift()!
+    if (visited.has(item.id)) continue
+    visited.add(item.id)
+
+    const row = db
+      .prepare(
+        `SELECT e.id, e.name, e.fields, et.name AS type_name, et.schema
+         FROM entities e
+         JOIN entity_types et ON et.id = e.type_id
+         WHERE e.id = ? AND e.trashed_at IS NULL`,
+      )
+      .get(item.id) as { id: string; name: string; fields: string; type_name: string; schema: string } | undefined
+    if (!row) continue
+
+    let schemaDef: { fields?: { name: string; type: string }[] } = {}
+    let fieldValues: Record<string, string> = {}
+    try { schemaDef = JSON.parse(row.schema || '{}') } catch { /* ignore */ }
+    try { fieldValues = JSON.parse(row.fields || '{}') } catch { /* ignore */ }
+
+    const resolvedFields: ResolvedField[] = []
+
+    for (const fieldDef of schemaDef.fields ?? []) {
+      if (fieldDef.type === 'computed') continue  // WQL evaluation out of scope
+      const value = fieldValues[fieldDef.name]
+      if (!value) continue
+
+      if (fieldDef.type === 'entity_ref') {
+        const ref = db.prepare('SELECT id, name FROM entities WHERE id = ? AND trashed_at IS NULL').get(value) as { id: string; name: string } | undefined
+        if (ref) {
+          resolvedFields.push({ name: fieldDef.name, value: `@${ref.name} [id:${ref.id}]` })
+          if (item.depth < 2 && !visited.has(ref.id)) queue.push({ id: ref.id, depth: item.depth + 1 })
+        } else {
+          resolvedFields.push({ name: fieldDef.name, value: '(deleted)' })
+        }
+      } else if (fieldDef.type === 'entity_ref_list') {
+        let ids: string[] = []
+        try { const p = JSON.parse(value); ids = Array.isArray(p) ? p : [value] } catch { ids = value.split(',').map((s) => s.trim()).filter(Boolean) }
+        const parts: string[] = []
+        for (const refId of ids) {
+          const ref = db.prepare('SELECT id, name FROM entities WHERE id = ? AND trashed_at IS NULL').get(refId) as { id: string; name: string } | undefined
+          if (ref) {
+            parts.push(`@${ref.name} [id:${ref.id}]`)
+            if (item.depth < 2 && !visited.has(ref.id)) queue.push({ id: ref.id, depth: item.depth + 1 })
+          } else {
+            parts.push('(deleted)')
+          }
+        }
+        if (parts.length) resolvedFields.push({ name: fieldDef.name, value: parts.join(', ') })
+      } else if (fieldDef.type === 'note_ref') {
+        const note = db.prepare('SELECT id, title FROM notes WHERE id = ? AND archived_at IS NULL').get(value) as { id: string; title: string } | undefined
+        if (note) {
+          resolvedFields.push({ name: fieldDef.name, value: `[[${note.title}]] [id:${note.id}]` })
+          entityLinkedNoteIds.add(note.id)
+        } else {
+          resolvedFields.push({ name: fieldDef.name, value: '(archived)' })
+        }
+      } else if (fieldDef.type === 'text_list') {
+        let items: string[] = []
+        try { const p = JSON.parse(value); items = Array.isArray(p) ? p : [value] } catch { items = [value] }
+        resolvedFields.push({ name: fieldDef.name, value: items.join(', ') })
+      } else {
+        resolvedFields.push({ name: fieldDef.name, value })
+      }
+    }
+
+    richEntities.push({ id: row.id, name: row.name, type_name: row.type_name, depth: item.depth, fields: resolvedFields })
+  }
+
+  return { richEntities, entityLinkedNoteIds }
 }
 
 export function registerDbIpcHandlers(): void {
@@ -1627,24 +1714,6 @@ export function registerDbIpcHandlers(): void {
         }
       })()
 
-      // Fetch entity context for entities mentioned by the user in this conversation
-      const entityContext: EntityContext[] = (() => {
-        if (!mentionedEntityIds?.length) return []
-        try {
-          const sp = mentionedEntityIds.map(() => '?').join(',')
-          return db
-            .prepare(
-              `SELECT e.id, e.name, et.name AS type_name
-               FROM entities e
-               JOIN entity_types et ON et.id = e.type_id
-               WHERE e.id IN (${sp}) AND e.trashed_at IS NULL`,
-            )
-            .all(...mentionedEntityIds) as EntityContext[]
-        } catch {
-          return []
-        }
-      })()
-
       // Fetch full content of notes explicitly pinned via [[ in the chat input
       const pinnedNotes: EntityLinkedNote[] = (() => {
         if (!mentionedNoteIds?.length) return []
@@ -1665,6 +1734,35 @@ export function registerDbIpcHandlers(): void {
           return []
         }
       })()
+
+      // Fetch rich entity context with BFS field expansion for entities mentioned in conversation
+      let richEntities: RichEntityContext[] = []
+      let entityLinkedNotes: EntityLinkedNote[] = []
+      if (mentionedEntityIds?.length) {
+        try {
+          const { richEntities: re, entityLinkedNoteIds } = buildRichEntityContext(db, mentionedEntityIds)
+          richEntities = re
+
+          // Fetch body_plain for entity-linked notes; skip any already pinned by the user
+          const pinnedNoteIdSet = new Set(pinnedNotes.map((n) => n.id))
+          const linkNoteIds = [...entityLinkedNoteIds].filter((id) => !pinnedNoteIdSet.has(id)).slice(0, 3)
+          if (linkNoteIds.length) {
+            const sp2 = linkNoteIds.map(() => '?').join(',')
+            const rows = db
+              .prepare(`SELECT id, title, body_plain FROM notes WHERE id IN (${sp2}) AND archived_at IS NULL`)
+              .all(...linkNoteIds) as { id: string; title: string; body_plain: string }[]
+            entityLinkedNotes = rows.map((r) => ({
+              id: r.id,
+              title: r.title,
+              excerpt: r.body_plain.length > 2000 ? r.body_plain.slice(0, 2000) + '…' : r.body_plain,
+            }))
+          }
+        } catch {
+          // non-critical
+        }
+      }
+      // Flat EntityContext[] for Claude tool assignment — keep [id:...] working for action items / events
+      const entityContext: EntityContext[] = richEntities.map((e) => ({ id: e.id, name: e.name, type_name: e.type_name }))
 
       // Fetch full content of notes linked to events / action items and append to context
       try {
@@ -1700,7 +1798,7 @@ export function registerDbIpcHandlers(): void {
       let content: string
       let executedActions: ExecutedAction[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext, pinnedNotes)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes)
         content = result.content
         executedActions = result.actions
       } catch (err) {

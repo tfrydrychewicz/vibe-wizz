@@ -248,16 +248,16 @@ export async function sendChatMessage(
 
 ### Phase C — rich entity context (ipc.ts + chat.ts)
 
-- [ ] **C1.** `chat.ts` — export new types: `ResolvedField`, `RichEntityContext`, `EntityLinkedNote` (replacing the current minimal `EntityContext`).
-- [ ] **C2.** `ipc.ts` — implement `buildRichEntityContext(db, mentionedEntityIds)` helper:
+- [x] **C1.** `chat.ts` — export new types: `ResolvedField`, `RichEntityContext`, `EntityLinkedNote` (replacing the current minimal `EntityContext`).
+- [x] **C2.** `ipc.ts` — implement `buildRichEntityContext(db, mentionedEntityIds)` helper:
   - BFS with `visited: Set<string>` and `queue: { id, depth }[]`.
   - For each entity: fetch row + type schema; parse `schema.fields` and `entity.fields`.
   - Resolve fields by type: `entity_ref` → fetch name, enqueue if `depth < 2`; `entity_ref_list` → parse comma-sep or JSON array, same; `note_ref` → collect note id; `computed` → skip; others → raw value.
   - Collect `entityLinkedNoteIds: Set<string>` across all traversed entities.
   - Return `{ richEntities: RichEntityContext[], entityLinkedNotes: EntityLinkedNote[] }`.
-- [ ] **C3.** `ipc.ts` — replace the current minimal entity context query in `chat:send` with a call to `buildRichEntityContext()`; de-duplicate `entityLinkedNotes` against `pinnedNotes` by note id.
-- [ ] **C4.** `ipc.ts` — pass `entityLinkedNotes` as new argument to `sendChatMessage()`.
-- [ ] **C5.** `chat.ts` — add `entityLinkedNotes: EntityLinkedNote[] = []` parameter to `sendChatMessage()`; update system prompt to render the rich entity format (field rows, depth labels) and add `## Notes linked via entity fields` section.
+- [x] **C3.** `ipc.ts` — replace the current minimal entity context query in `chat:send` with a call to `buildRichEntityContext()`; de-duplicate `entityLinkedNotes` against `pinnedNotes` by note id.
+- [x] **C4.** `ipc.ts` — pass `entityLinkedNotes` as new argument to `sendChatMessage()`.
+- [x] **C5.** `chat.ts` — add `entityLinkedNotes: EntityLinkedNote[] = []` parameter to `sendChatMessage()`; update system prompt to render the rich entity format (field rows, depth labels) and add `## Notes linked via entity fields` section.
 
 ### Phase D — cleanup & guard rails
 

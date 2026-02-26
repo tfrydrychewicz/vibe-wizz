@@ -62,6 +62,19 @@ export type EntityLinkedNote = {
   excerpt: string
 }
 
+export type ResolvedField = {
+  name: string
+  value: string  // human-readable; refs formatted as "@Name [id:uuid]" or "[[Title]] [id:uuid]"
+}
+
+export type RichEntityContext = {
+  id: string
+  name: string
+  type_name: string
+  depth: number  // 0 = directly mentioned, 1 = 1-hop ref, 2 = 2-hop ref
+  fields: ResolvedField[]
+}
+
 export type ExecutedAction = {
   type:
     | 'created_event'
@@ -644,6 +657,8 @@ export async function sendChatMessage(
   files?: AttachedFilePayload[],
   entityContext: EntityContext[] = [],
   pinnedNotes: EntityLinkedNote[] = [],
+  richEntities: RichEntityContext[] = [],
+  entityLinkedNotes: EntityLinkedNote[] = [],
 ): Promise<{ content: string; actions: ExecutedAction[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
@@ -702,7 +717,22 @@ export async function sendChatMessage(
       itemLines
   }
 
-  if (entityContext.length > 0) {
+  if (richEntities.length > 0) {
+    const depthLabel = (d: number) =>
+      d === 0 ? '← directly mentioned' : d === 1 ? '← via entity field' : '← via entity field (no further expansion)'
+    const entityBlocks = richEntities
+      .map((e) => {
+        const header = `### @${e.name} (${e.type_name}) [id:${e.id}]  ${depthLabel(e.depth)}`
+        const fieldLines = e.fields.map((f) => `  ${f.name}: ${f.value}`).join('\n')
+        return fieldLines ? `${header}\n${fieldLines}` : header
+      })
+      .join('\n\n')
+    systemPrompt +=
+      '\n\n## Entity context\n' +
+      'Entities mentioned or referenced in this conversation.\n' +
+      'Use [id:...] when assigning tasks or referencing entities (e.g. only assign to Person-type entities):\n\n' +
+      entityBlocks
+  } else if (entityContext.length > 0) {
     const entityLines = entityContext
       .map((e) => `- [id:${e.id}] @${e.name} (type: ${e.type_name})`)
       .join('\n')
@@ -711,6 +741,16 @@ export async function sendChatMessage(
       'use the entity ID from [id:...]. Always confirm the entity type is appropriate for the operation ' +
       '(e.g. only assign tasks to Person-type entities):\n' +
       entityLines
+  }
+
+  if (entityLinkedNotes.length > 0) {
+    const noteBlocks = entityLinkedNotes
+      .map((n) => `### [[${n.title}]] [id:${n.id}]\n${n.excerpt}`)
+      .join('\n\n---\n\n')
+    systemPrompt +=
+      '\n\n## Notes linked via entity fields\n' +
+      'These notes were found through entity field references:\n\n' +
+      noteBlocks
   }
 
   // Build a mutable message list for the tool loop.
