@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { Trash2, X, ExternalLink } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
 import { entityTrashStatus } from '../stores/mentionStore'
@@ -17,9 +17,13 @@ type FieldDef = {
     | 'entity_ref'
     | 'entity_ref_list'
     | 'note_ref'
+    | 'computed'
   options?: string[]
   entity_type?: string
+  query?: string
 }
+
+type ComputedEntityRef = { id: string; name: string; type_id: string }
 
 type EntitySchema = {
   fields: FieldDef[]
@@ -69,6 +73,11 @@ const refNoteMap = ref<Record<string, RefNoteData | null>>({})
 const refSearch = ref<Record<string, string>>({})
 const refResults = ref<Record<string, (RefEntityData | RefNoteData)[]>>({})
 const refSearchOpen = ref<Record<string, boolean>>({})
+
+// Computed field results, keyed by field name
+const computedResults = reactive<Record<string, ComputedEntityRef[]>>({})
+const computedErrors = reactive<Record<string, string>>({})
+const computedLoading = reactive<Record<string, boolean>>({})
 
 // Entity type lookup: id→{id,name} and lowercase-name→{id,name}
 const entityTypeLookup = ref<Record<string, { id: string; name: string }>>({})
@@ -144,6 +153,25 @@ async function resolveRefFields(): Promise<void> {
   }
 }
 
+async function loadComputedFields(): Promise<void> {
+  for (const field of schema.value.fields) {
+    if (field.type !== 'computed') continue
+    computedLoading[field.name] = true
+    delete computedErrors[field.name]
+    const res = (await window.api.invoke('entities:computed-query', {
+      query: field.query ?? '',
+      thisId: props.entityId,
+    })) as { ok: true; results: ComputedEntityRef[] } | { ok: false; error: string }
+    computedLoading[field.name] = false
+    if (res.ok) {
+      computedResults[field.name] = res.results
+    } else {
+      computedErrors[field.name] = res.error
+      computedResults[field.name] = []
+    }
+  }
+}
+
 async function loadEntity(id: string): Promise<void> {
   isLoading.value = true
   // Reset ref state
@@ -153,6 +181,10 @@ async function loadEntity(id: string): Promise<void> {
   refSearch.value = {}
   refResults.value = {}
   refSearchOpen.value = {}
+  // Reset computed field state
+  for (const key of Object.keys(computedResults)) delete computedResults[key]
+  for (const key of Object.keys(computedErrors)) delete computedErrors[key]
+  for (const key of Object.keys(computedLoading)) delete computedLoading[key]
 
   const result = (await window.api.invoke('entities:get', { id })) as {
     entity: EntityRow
@@ -205,6 +237,8 @@ async function loadEntity(id: string): Promise<void> {
 
   // Resolve display data for ref fields
   await resolveRefFields()
+  // Load computed (derived) fields
+  await loadComputedFields()
 }
 
 async function save(): Promise<void> {
@@ -212,6 +246,7 @@ async function save(): Promise<void> {
   saveStatus.value = 'saving'
   const fields: Record<string, unknown> = {}
   for (const field of schema.value.fields) {
+    if (field.type === 'computed') continue
     if (field.type === 'entity_ref_list') {
       try {
         fields[field.name] = JSON.parse(fieldValues.value[field.name] || '[]')
@@ -331,6 +366,11 @@ function openEntityRef(e: MouseEvent, fieldName: string): void {
 }
 
 function openEntityFromList(e: MouseEvent, entity: RefEntityData): void {
+  const mode: OpenMode = e.metaKey || e.ctrlKey ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-entity', { entityId: entity.id, typeId: entity.type_id, mode })
+}
+
+function openComputedEntity(e: MouseEvent, entity: ComputedEntityRef): void {
   const mode: OpenMode = e.metaKey || e.ctrlKey ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
   emit('open-entity', { entityId: entity.id, typeId: entity.type_id, mode })
 }
@@ -609,6 +649,31 @@ watch(() => props.entityId, async (id) => {
                   No results
                 </div>
               </div>
+            </div>
+
+            <!-- computed: read-only derived query results -->
+            <div v-else-if="field.type === 'computed'" class="ref-field">
+              <span v-if="computedLoading[field.name]" class="computed-loading">Loading…</span>
+              <span v-else-if="computedErrors[field.name]" class="computed-error">
+                {{ computedErrors[field.name] }}
+              </span>
+              <div v-else-if="computedResults[field.name]?.length" class="ref-chips-list">
+                <div
+                  v-for="item in computedResults[field.name]"
+                  :key="item.id"
+                  class="ref-chip entity-chip"
+                >
+                  <button
+                    class="ref-chip-open"
+                    :title="`Open ${item.name} (Shift=new pane, Cmd=new tab)`"
+                    @click="openComputedEntity($event, item)"
+                  >
+                    <ExternalLink :size="11" />
+                    {{ item.name }}
+                  </button>
+                </div>
+              </div>
+              <span v-else class="computed-empty">—</span>
             </div>
 
             <!-- text_list: comma-separated -->
@@ -899,5 +964,18 @@ watch(() => props.entityId, async (id) => {
 
 .btn-trash-confirm:hover {
   background: rgba(240, 96, 112, 0.25);
+}
+
+/* ── Computed fields ─────────────────────────────────────────────────────── */
+
+.computed-loading,
+.computed-empty {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.computed-error {
+  font-size: 12px;
+  color: #f06070;
 }
 </style>

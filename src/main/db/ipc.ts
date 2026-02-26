@@ -7,6 +7,8 @@ import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
 import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, type ChatModelId } from '../embedding/chat'
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
+import { parseQuery } from '../entity-query/parser'
+import { evalQuery } from '../entity-query/evaluator'
 
 type NoteRow = {
   id: string
@@ -661,6 +663,25 @@ export function registerDbIpcHandlers(): void {
     }
     return result
   })
+
+  /**
+   * entities:computed-query — execute a WQL query scoped to a specific entity.
+   * Input:  { query: string, thisId: string }
+   * Returns: { ok: true, results: EntityRef[] } | { ok: false, error: string }
+   */
+  ipcMain.handle(
+    'entities:computed-query',
+    (_event, { query, thisId }: { query: string; thisId: string }) => {
+      try {
+        const db = getDatabase()
+        const ast = parseQuery(query)
+        const results = evalQuery(db, ast, thisId)
+        return { ok: true, results }
+      } catch (err) {
+        return { ok: false, error: (err as Error).message }
+      }
+    }
+  )
 
   // ─── Note Templates ──────────────────────────────────────────────────────────
 

@@ -12,12 +12,14 @@ type FieldType =
   | 'entity_ref_list'
   | 'text_list'
   | 'note_ref'
+  | 'computed'
 
 type FieldDef = {
   name: string
   type: FieldType
-  options: string   // comma-separated, only for 'select'
+  options: string     // comma-separated, only for 'select'
   entity_type: string // only for entity_ref / entity_ref_list
+  query: string       // WQL source, only for 'computed'
 }
 
 type StoredFieldDef = {
@@ -25,6 +27,7 @@ type StoredFieldDef = {
   type: FieldType
   options?: string[]
   entity_type?: string
+  query?: string
 }
 
 type ExistingType = {
@@ -90,10 +93,11 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: 'entity_ref', label: 'Entity reference' },
   { value: 'entity_ref_list', label: 'Entity reference list' },
   { value: 'note_ref', label: 'Note reference' },
+  { value: 'computed', label: 'Computed query' },
 ]
 
 function addField(): void {
-  fields.value.push({ name: '', type: 'text', options: '', entity_type: '' })
+  fields.value.push({ name: '', type: 'text', options: '', entity_type: '', query: '' })
 }
 
 function removeField(index: number): void {
@@ -116,6 +120,9 @@ function buildSchema(): string {
       }
       if ((f.type === 'entity_ref' || f.type === 'entity_ref_list') && f.entity_type) {
         def.entity_type = f.entity_type
+      }
+      if (f.type === 'computed') {
+        def.query = f.query.trim()
       }
       return def
     })
@@ -171,6 +178,7 @@ onMounted(async () => {
         type: f.type,
         options: Array.isArray(f.options) ? f.options.join(', ') : '',
         entity_type: f.entity_type ?? '',
+        query: f.query ?? '',
       }))
     } catch {
       fields.value = []
@@ -228,43 +236,56 @@ onMounted(async () => {
           </div>
 
           <div class="fields-list">
-            <div v-for="(field, i) in fields" :key="i" class="field-row">
-              <input
-                v-model="field.name"
-                class="modal-input field-name-input"
-                type="text"
-                placeholder="field name"
+            <div v-for="(field, i) in fields" :key="i" class="field-entry">
+              <div class="field-row">
+                <input
+                  v-model="field.name"
+                  class="modal-input field-name-input"
+                  type="text"
+                  placeholder="field name"
+                />
+                <select v-model="field.type" class="modal-input field-type-select">
+                  <option v-for="ft in FIELD_TYPES" :key="ft.value" :value="ft.value">
+                    {{ ft.label }}
+                  </option>
+                </select>
+
+                <!-- Options input for 'select' type -->
+                <input
+                  v-if="field.type === 'select'"
+                  v-model="field.options"
+                  class="modal-input field-extra-input"
+                  type="text"
+                  placeholder="opt1, opt2, opt3"
+                />
+
+                <!-- Entity type picker for entity_ref / entity_ref_list -->
+                <select
+                  v-else-if="field.type === 'entity_ref' || field.type === 'entity_ref_list'"
+                  v-model="field.entity_type"
+                  class="modal-input field-extra-input"
+                >
+                  <option value="">— any type —</option>
+                  <option v-for="et in existingTypes" :key="et.id" :value="et.id">
+                    {{ et.name }}
+                  </option>
+                </select>
+
+                <button class="field-remove-btn" title="Remove field" @click="removeField(i)">
+                  <Trash2 :size="13" />
+                </button>
+              </div>
+
+              <!-- WQL query editor for 'computed' type -->
+              <textarea
+                v-if="field.type === 'computed'"
+                v-model="field.query"
+                class="modal-input field-query-input"
+                placeholder="SELECT p FROM Person WHERE p.team = {this}"
+                spellcheck="false"
+                autocomplete="off"
+                autocorrect="off"
               />
-              <select v-model="field.type" class="modal-input field-type-select">
-                <option v-for="ft in FIELD_TYPES" :key="ft.value" :value="ft.value">
-                  {{ ft.label }}
-                </option>
-              </select>
-
-              <!-- Options input for 'select' type -->
-              <input
-                v-if="field.type === 'select'"
-                v-model="field.options"
-                class="modal-input field-extra-input"
-                type="text"
-                placeholder="opt1, opt2, opt3"
-              />
-
-              <!-- Entity type picker for entity_ref / entity_ref_list -->
-              <select
-                v-else-if="field.type === 'entity_ref' || field.type === 'entity_ref_list'"
-                v-model="field.entity_type"
-                class="modal-input field-extra-input"
-              >
-                <option value="">— any type —</option>
-                <option v-for="et in existingTypes" :key="et.id" :value="et.id">
-                  {{ et.name }}
-                </option>
-              </select>
-
-              <button class="field-remove-btn" title="Remove field" @click="removeField(i)">
-                <Trash2 :size="13" />
-              </button>
             </div>
           </div>
         </div>
@@ -455,6 +476,12 @@ onMounted(async () => {
   gap: 8px;
 }
 
+.field-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
 .field-row {
   display: flex;
   gap: 6px;
@@ -472,6 +499,17 @@ onMounted(async () => {
 
 .field-extra-input {
   flex: 0 0 180px;
+}
+
+.field-query-input {
+  width: 100%;
+  min-height: 52px;
+  max-height: 120px;
+  resize: vertical;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  box-sizing: border-box;
 }
 
 .field-remove-btn {
