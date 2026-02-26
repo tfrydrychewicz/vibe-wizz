@@ -3,6 +3,7 @@ import { migration as m0001 } from './0001_add_entities_trashed_at'
 import { migration as m0002 } from './0002_add_action_items_updated_at'
 import { migration as m0003 } from './0003_team_computed_members'
 import { migration as m0004 } from './0004_recurring_meetings'
+import { migration as m0005 } from './0005_calendar_sources'
 
 export interface Migration {
   /** Integer matching the 4-digit file prefix, e.g. file 0003_... → version 3 */
@@ -20,7 +21,7 @@ export interface Migration {
  *   3. If adding a new table, also add CREATE TABLE IF NOT EXISTS to schema.ts
  *      If adding a column to an existing table, migration file only (do NOT touch schema.ts)
  */
-const ALL_MIGRATIONS: Migration[] = [m0001, m0002, m0003, m0004]
+const ALL_MIGRATIONS: Migration[] = [m0001, m0002, m0003, m0004, m0005]
 
 /**
  * Run all pending migrations synchronously. Call once inside initDatabase(),

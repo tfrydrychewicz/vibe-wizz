@@ -17,6 +17,10 @@ import {
   type UpdateScope,
   type DeleteScope,
 } from '../calendar/recurrenceEngine'
+import { getProvider } from '../calendar/sync/registry'
+import { syncSourceNow } from '../calendar/sync/scheduler'
+import type { CalendarSource } from '../calendar/sync/provider'
+import { APPS_SCRIPT_SOURCE, APPS_SCRIPT_INSTRUCTIONS } from '../calendar/sync/providers/googleAppsScript'
 
 type NoteRow = {
   id: string
@@ -1855,6 +1859,7 @@ export function registerDbIpcHandlers(): void {
   type CalendarEventRow = {
     id: number
     external_id: string | null
+    source_id: string | null
     title: string
     start_at: string
     end_at: string
@@ -2134,4 +2139,122 @@ export function registerDbIpcHandlers(): void {
     )
     return { ok: true }
   })
+
+  // ─── Calendar Sources ─────────────────────────────────────────────────────────
+
+  /** calendar-sources:list — all configured sync sources. */
+  ipcMain.handle('calendar-sources:list', () => {
+    const db = getDatabase()
+    return db.prepare('SELECT * FROM calendar_sources ORDER BY created_at ASC').all() as CalendarSource[]
+  })
+
+  /** calendar-sources:create — add a new sync source. */
+  ipcMain.handle(
+    'calendar-sources:create',
+    (
+      _event,
+      opts: {
+        provider_id: string
+        name: string
+        config: Record<string, string>
+        sync_interval_minutes?: number
+      },
+    ) => {
+      const db = getDatabase()
+      const id = randomUUID()
+      db.prepare(
+        `INSERT INTO calendar_sources (id, provider_id, name, config, sync_interval_minutes)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        opts.provider_id,
+        opts.name,
+        JSON.stringify(opts.config),
+        opts.sync_interval_minutes ?? 60,
+      )
+      return db.prepare('SELECT * FROM calendar_sources WHERE id = ?').get(id) as CalendarSource
+    },
+  )
+
+  /** calendar-sources:update — partial update of name, config, enabled, or sync_interval_minutes. */
+  ipcMain.handle(
+    'calendar-sources:update',
+    (
+      _event,
+      opts: {
+        id: string
+        name?: string
+        config?: Record<string, string>
+        enabled?: boolean
+        sync_interval_minutes?: number
+      },
+    ) => {
+      const db = getDatabase()
+      const sets: string[] = []
+      const vals: unknown[] = []
+
+      if (opts.name !== undefined) { sets.push('name = ?'); vals.push(opts.name) }
+      if (opts.config !== undefined) { sets.push('config = ?'); vals.push(JSON.stringify(opts.config)) }
+      if (opts.enabled !== undefined) { sets.push('enabled = ?'); vals.push(opts.enabled ? 1 : 0) }
+      if (opts.sync_interval_minutes !== undefined) { sets.push('sync_interval_minutes = ?'); vals.push(opts.sync_interval_minutes) }
+
+      if (sets.length === 0) return { ok: true }
+
+      vals.push(opts.id)
+      db.prepare(`UPDATE calendar_sources SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+      return { ok: true }
+    },
+  )
+
+  /** calendar-sources:delete — remove a source and all its synced events that have no linked note. */
+  ipcMain.handle('calendar-sources:delete', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+
+    // Detach any synced events that have a linked note (user annotated them) so they
+    // become standalone local events rather than disappearing entirely.
+    db.prepare(
+      `UPDATE calendar_events SET external_id = NULL, source_id = NULL
+       WHERE source_id = ? AND linked_note_id IS NOT NULL`,
+    ).run(id)
+
+    // Hard-delete the remaining synced events for this source (no linked note).
+    db.prepare('DELETE FROM calendar_events WHERE source_id = ?').run(id)
+
+    // Delete the source itself.
+    db.prepare('DELETE FROM calendar_sources WHERE id = ?').run(id)
+
+    return { ok: true }
+  })
+
+  /** calendar-sources:verify — test provider connectivity without persisting anything. */
+  ipcMain.handle(
+    'calendar-sources:verify',
+    async (
+      _event,
+      { provider_id, config }: { provider_id: string; config: Record<string, string> },
+    ) => {
+      const provider = getProvider(provider_id)
+      if (!provider) {
+        return { ok: false, error: `Unknown provider: ${provider_id}` }
+      }
+      return provider.verify(config)
+    },
+  )
+
+  /** calendar-sources:sync-now — immediately sync one source, bypassing the interval check. */
+  ipcMain.handle('calendar-sources:sync-now', async (_event, { id }: { id: string }) => {
+    try {
+      const count = await syncSourceNow(id)
+      return { ok: true, count }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return { ok: false, error: message }
+    }
+  })
+
+  /** calendar-sources:get-script — returns the Apps Script source + instructions for display in the Settings UI. */
+  ipcMain.handle('calendar-sources:get-script', () => ({
+    source: APPS_SCRIPT_SOURCE,
+    instructions: APPS_SCRIPT_INSTRUCTIONS,
+  }))
 }

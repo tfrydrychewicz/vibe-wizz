@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { X, Eye, EyeOff, BrainCircuit, CalendarDays, Bug } from 'lucide-vue-next'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { X, Eye, EyeOff, BrainCircuit, CalendarDays, Bug, Plus, RefreshCw, Pencil, Trash2, AlertCircle, Loader2 } from 'lucide-vue-next'
+import CalendarSourceModal from './CalendarSourceModal.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -16,7 +17,7 @@ const categories: { id: CategoryId; label: string; icon: typeof BrainCircuit }[]
 
 // ── Sub-tab navigation ────────────────────────────────────────────────────────
 type AiTab = 'llm' | 'transcription' | 'followup' | 'models'
-type CalendarTab = 'general' | 'attendees'
+type CalendarTab = 'general' | 'sync' | 'attendees'
 
 const selectedAiTab = ref<AiTab>('llm')
 const selectedCalendarTab = ref<CalendarTab>('general')
@@ -36,8 +37,99 @@ const availableModels = [
 
 const calendarTabs: { id: CalendarTab; label: string }[] = [
   { id: 'general', label: 'General' },
+  { id: 'sync', label: 'Sync' },
   { id: 'attendees', label: 'Attendees' },
 ]
+
+// ── Calendar Sync sources ──────────────────────────────────────────────────────
+interface CalendarSource {
+  id: string
+  provider_id: string
+  name: string
+  config: string
+  enabled: number
+  sync_interval_minutes: number
+  last_sync_at: string | null
+  created_at: string
+}
+
+const calendarSources = ref<CalendarSource[]>([])
+const syncingSourceIds = ref(new Set<string>())
+const syncErrors = ref(new Map<string, string>())
+const showSourceModal = ref(false)
+const editingSource = ref<CalendarSource | undefined>(undefined)
+const deleteConfirmId = ref<string | null>(null)
+
+// Push-event cleanup
+const _syncUnsubs: (() => void)[] = []
+
+function formatLastSync(lastSyncAt: string | null): string {
+  if (!lastSyncAt) return 'Never synced'
+  const diff = Date.now() - new Date(lastSyncAt).getTime()
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 1) return 'Just now'
+  if (mins < 60) return `${mins} minute${mins !== 1 ? 's' : ''} ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs} hour${hrs !== 1 ? 's' : ''} ago`
+  const days = Math.floor(hrs / 24)
+  return `${days} day${days !== 1 ? 's' : ''} ago`
+}
+
+function formatInterval(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`
+  if (minutes < 1440) return `${minutes / 60} hr`
+  return '24 hr'
+}
+
+function openAddSource(): void {
+  editingSource.value = undefined
+  showSourceModal.value = true
+}
+
+function openEditSource(src: CalendarSource): void {
+  editingSource.value = src
+  showSourceModal.value = true
+}
+
+function onSourceSaved(saved: CalendarSource): void {
+  showSourceModal.value = false
+  const idx = calendarSources.value.findIndex((s) => s.id === saved.id)
+  if (idx >= 0) {
+    calendarSources.value[idx] = saved
+  } else {
+    calendarSources.value.push(saved)
+  }
+}
+
+async function toggleSourceEnabled(src: CalendarSource): Promise<void> {
+  const newEnabled = src.enabled ? 0 : 1
+  await window.api.invoke('calendar-sources:update', { id: src.id, enabled: newEnabled === 1 })
+  src.enabled = newEnabled
+}
+
+async function syncNow(src: CalendarSource): Promise<void> {
+  if (syncingSourceIds.value.has(src.id)) return
+  syncingSourceIds.value.add(src.id)
+  syncErrors.value.delete(src.id)
+  try {
+    const result = await window.api.invoke('calendar-sources:sync-now', { id: src.id }) as { ok: boolean; count?: number; error?: string }
+    if (result.ok) {
+      src.last_sync_at = new Date().toISOString()
+    } else {
+      syncErrors.value.set(src.id, result.error ?? 'Sync failed.')
+    }
+  } catch (err) {
+    syncErrors.value.set(src.id, err instanceof Error ? err.message : String(err))
+  } finally {
+    syncingSourceIds.value.delete(src.id)
+  }
+}
+
+async function deleteSource(id: string): Promise<void> {
+  await window.api.invoke('calendar-sources:delete', { id })
+  calendarSources.value = calendarSources.value.filter((s) => s.id !== id)
+  deleteConfirmId.value = null
+}
 
 // ── AI settings ───────────────────────────────────────────────────────────────
 const apiKey = ref('')
@@ -122,7 +214,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder, followupDays, followupTypeId, mChat, mDailyBrief, mBackground] = await Promise.all([
+  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder, followupDays, followupTypeId, mChat, mDailyBrief, mBackground, sources] = await Promise.all([
     window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
@@ -144,6 +236,7 @@ onMounted(async () => {
     window.api.invoke('settings:get', { key: 'model_chat' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'model_daily_brief' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'model_background' }) as Promise<string | null>,
+    window.api.invoke('calendar-sources:list') as Promise<CalendarSource[]>,
   ])
   apiKey.value = openai ?? ''
   anthropicKey.value = anthropic ?? ''
@@ -164,9 +257,33 @@ onMounted(async () => {
   modelChat.value = mChat ?? 'claude-sonnet-4-6'
   modelDailyBrief.value = mDailyBrief ?? 'claude-sonnet-4-6'
   modelBackground.value = mBackground ?? 'claude-haiku-4-5-20251001'
+  calendarSources.value = sources ?? []
   await nextTick()
   attendeeNameField.value = attNameField ?? ''
   attendeeEmailField.value = attEmailField ?? ''
+
+  // Subscribe to background sync push events so the source list updates live
+  _syncUnsubs.push(
+    window.api.on('calendar-sync:complete', (...args: unknown[]) => {
+      const { sourceId } = args[0] as { sourceId: string }
+      const src = calendarSources.value.find((s) => s.id === sourceId)
+      if (src) src.last_sync_at = new Date().toISOString()
+      syncingSourceIds.value.delete(sourceId)
+      syncErrors.value.delete(sourceId)
+    })
+  )
+  _syncUnsubs.push(
+    window.api.on('calendar-sync:error', (...args: unknown[]) => {
+      const { sourceId, message } = args[0] as { sourceId: string; message: string }
+      syncErrors.value.set(sourceId, message)
+      syncingSourceIds.value.delete(sourceId)
+    })
+  )
+})
+
+onUnmounted(() => {
+  for (const unsub of _syncUnsubs) unsub()
+  _syncUnsubs.length = 0
 })
 
 async function save(): Promise<void> {
@@ -564,6 +681,90 @@ function onBackdropKeydown(e: KeyboardEvent): void {
               </div>
             </template>
 
+            <!-- Sync tab -->
+            <template v-else-if="selectedCalendarTab === 'sync'">
+              <div class="sync-header">
+                <span class="field-label" style="text-transform:none; font-size:13px; font-weight:500; letter-spacing:0; color:var(--color-text);">Calendar Sources</span>
+                <button class="add-source-btn" @click="openAddSource">
+                  <Plus :size="13" />
+                  <span>Add source</span>
+                </button>
+              </div>
+
+              <!-- Empty state -->
+              <div v-if="calendarSources.length === 0" class="sync-empty">
+                <p>No calendar sources configured.</p>
+                <p>Add a source to start syncing events from Google Calendar or iCal.</p>
+              </div>
+
+              <!-- Source cards -->
+              <div v-else class="source-list">
+                <div v-for="src in calendarSources" :key="src.id" class="source-card">
+                  <div class="source-card-main">
+                    <!-- Enabled toggle -->
+                    <label class="source-toggle" :title="src.enabled ? 'Disable sync' : 'Enable sync'">
+                      <input
+                        type="checkbox"
+                        :checked="src.enabled === 1"
+                        class="toggle-checkbox"
+                        @change="toggleSourceEnabled(src)"
+                      />
+                    </label>
+
+                    <div class="source-info">
+                      <div class="source-name-row">
+                        <span class="source-name" :class="{ muted: !src.enabled }">{{ src.name }}</span>
+                        <span class="source-provider-badge">{{ src.provider_id === 'google_apps_script' ? 'Apps Script' : src.provider_id }}</span>
+                      </div>
+                      <div class="source-meta">
+                        <span>{{ formatLastSync(src.last_sync_at) }}</span>
+                        <span class="meta-sep">·</span>
+                        <span>Every {{ formatInterval(src.sync_interval_minutes) }}</span>
+                        <template v-if="syncErrors.get(src.id)">
+                          <span class="meta-sep">·</span>
+                          <span class="source-error-badge">
+                            <AlertCircle :size="11" />
+                            {{ syncErrors.get(src.id) }}
+                          </span>
+                        </template>
+                      </div>
+                    </div>
+
+                    <div class="source-actions">
+                      <button
+                        class="source-action-btn"
+                        :disabled="syncingSourceIds.has(src.id)"
+                        :title="'Sync now'"
+                        @click="syncNow(src)"
+                      >
+                        <Loader2 v-if="syncingSourceIds.has(src.id)" :size="13" class="spin" />
+                        <RefreshCw v-else :size="13" />
+                      </button>
+                      <button class="source-action-btn" title="Edit" @click="openEditSource(src)">
+                        <Pencil :size="13" />
+                      </button>
+                      <button
+                        class="source-action-btn danger"
+                        title="Remove"
+                        @click="deleteConfirmId = src.id"
+                      >
+                        <Trash2 :size="13" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Delete confirmation -->
+                  <div v-if="deleteConfirmId === src.id" class="delete-confirm">
+                    <span>Remove this source? Synced events without linked notes will be deleted.</span>
+                    <div class="delete-confirm-btns">
+                      <button class="dc-cancel" @click="deleteConfirmId = null">Cancel</button>
+                      <button class="dc-delete" @click="deleteSource(src.id)">Remove</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
             <!-- Attendees tab -->
             <template v-else-if="selectedCalendarTab === 'attendees'">
               <div class="field-group">
@@ -634,6 +835,14 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 
     </div>
   </div>
+
+  <!-- Calendar source add/edit modal (rendered outside the settings panel so it floats above) -->
+  <CalendarSourceModal
+    v-if="showSourceModal"
+    :source="editingSource"
+    @saved="onSourceSaved"
+    @close="showSourceModal = false"
+  />
 </template>
 
 <style scoped>
@@ -1057,5 +1266,214 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 .modal-footer :global(.btn-primary) {
   margin-top: 0;
   font-family: inherit;
+}
+
+/* ── Calendar Sync tab ────────────────────────────────────────────────────── */
+.sync-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.add-source-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: var(--color-accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.add-source-btn:hover { opacity: 0.88; }
+
+.sync-empty {
+  padding: 24px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sync-empty p {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-card {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+.source-card-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.source-toggle {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.source-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.source-name-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.source-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.source-name.muted { color: var(--color-text-muted); }
+
+.source-provider-badge {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-text-muted) 14%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.source-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-wrap: wrap;
+}
+
+.meta-sep {
+  color: var(--color-border);
+}
+
+.source-error-badge {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: #f87171;
+  font-size: 11px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.source-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.source-action-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+  color: var(--color-text);
+}
+.source-action-btn.danger:hover {
+  background: color-mix(in srgb, #f87171 12%, transparent);
+  color: #f87171;
+}
+.source-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Delete confirmation inline strip ────────────────────────────────────── */
+.delete-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, #f87171 8%, transparent);
+  border-top: 1px solid color-mix(in srgb, #f87171 20%, transparent);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.delete-confirm-btns {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.dc-cancel {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.dc-cancel:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+
+.dc-delete {
+  padding: 4px 10px;
+  background: #f87171;
+  border: none;
+  border-radius: 5px;
+  color: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.dc-delete:hover { opacity: 0.85; }
+
+/* ── Spinner ──────────────────────────────────────────────────────────────── */
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

@@ -148,6 +148,20 @@ CREATE TABLE IF NOT EXISTS action_items (
 );
 
 -- ─────────────────────────────────────────────
+-- Calendar sources (external calendar integrations)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS calendar_sources (
+  id                    TEXT PRIMARY KEY,
+  provider_id           TEXT NOT NULL,              -- 'google_apps_script' | 'ical' | ...
+  name                  TEXT NOT NULL,              -- user-given label
+  config                TEXT NOT NULL DEFAULT '{}', -- JSON: provider-specific fields
+  enabled               INTEGER NOT NULL DEFAULT 1,
+  sync_interval_minutes INTEGER NOT NULL DEFAULT 60,
+  last_sync_at          TEXT,                       -- ISO 8601 of last successful sync
+  created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- ─────────────────────────────────────────────
 -- Calendar events
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS calendar_events (
@@ -160,6 +174,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
   linked_note_id       TEXT REFERENCES notes(id) ON DELETE SET NULL,
   transcript_note_id   TEXT REFERENCES notes(id) ON DELETE SET NULL,
   recurrence_rule      TEXT,
+  source_id            TEXT REFERENCES calendar_sources(id) ON DELETE SET NULL,
   synced_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -242,7 +257,8 @@ CREATE INDEX IF NOT EXISTS idx_action_items_status      ON action_items(status);
 CREATE INDEX IF NOT EXISTS idx_action_items_source_note ON action_items(source_note_id);
 CREATE INDEX IF NOT EXISTS idx_action_items_assigned    ON action_items(assigned_entity_id);
 
-CREATE INDEX IF NOT EXISTS idx_calendar_events_start    ON calendar_events(start_at);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_at);
+-- idx_calendar_events_source_id is created by migration 0005 after source_id is added to existing DBs
 
 -- ─────────────────────────────────────────────
 -- Settings (key/value store for user preferences, e.g. API keys)

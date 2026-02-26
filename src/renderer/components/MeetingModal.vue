@@ -7,6 +7,7 @@ import type { OpenMode } from '../stores/tabStore'
 export interface CalendarEvent {
   id: number
   external_id: string | null
+  source_id: string | null      // non-null = synced from external calendar (read-only)
   title: string
   start_at: string
   end_at: string

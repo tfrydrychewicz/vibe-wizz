@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { ChevronLeft, ChevronRight, Calendar, Plus, RefreshCw } from 'lucide-vue-next'
+import { ChevronLeft, ChevronRight, Calendar, Plus, RefreshCw, Cloud } from 'lucide-vue-next'
 import MeetingModal from './MeetingModal.vue'
+import SyncedEventPopup from './SyncedEventPopup.vue'
 import type { CalendarEvent } from './MeetingModal.vue'
 import type { OpenMode } from '../stores/tabStore'
 
@@ -20,11 +21,15 @@ const currentDate = ref(new Date())
 const events = ref<CalendarEvent[]>([])
 const loading = ref(false)
 
-// Modal
+// Modal (locally-created events)
 const showModal = ref(false)
 const modalEvent = ref<CalendarEvent | null>(null)
 const modalDefaultStart = ref('')
 const modalDefaultEnd = ref('')
+
+// Synced event info popup
+const syncedPopupEvent = ref<CalendarEvent | null>(null)
+const syncedPopupPos = ref({ x: 0, y: 0 })
 
 // Slot duration (minutes) loaded from settings
 const slotDuration = ref(30)
@@ -70,6 +75,7 @@ const hourHeight = computed(() =>
 )
 
 let resizeObserver: ResizeObserver | null = null
+let _calSyncUnsub: (() => void) | null = null
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -231,10 +237,13 @@ onMounted(async () => {
     })
     resizeObserver.observe(gridScrollRef.value)
   }
+  // Reload events when a background sync completes for any source
+  _calSyncUnsub = window.api.on('calendar-sync:complete', () => { void loadEvents() })
 })
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
+  _calSyncUnsub?.()
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
   window.removeEventListener('mousemove', onGlobalMouseMove)
@@ -330,6 +339,37 @@ function eventTooltip(ev: CalendarEvent): string {
     ? `↻ ${describeRule(ev.recurrence_rule)}`
     : ev.recurrence_series_id ? '↻ Recurring' : ''
   return recur ? `${ev.title}\n${time}\n${recur}` : `${ev.title}\n${time}`
+}
+
+// ── Synced event helpers ──────────────────────────────────────────────────────
+
+function isSourced(ev: CalendarEvent): boolean {
+  return ev.source_id !== null
+}
+
+function openSyncedPopup(ev: CalendarEvent, pos: { x: number; y: number }): void {
+  syncedPopupEvent.value = ev
+  syncedPopupPos.value = pos
+}
+
+function onSyncedNoteLinked(payload: { eventId: number; linkedNoteId: string; linkedNoteTitle: string }): void {
+  const idx = events.value.findIndex(e => e.id === payload.eventId)
+  if (idx !== -1) {
+    events.value[idx] = { ...events.value[idx], linked_note_id: payload.linkedNoteId, linked_note_title: payload.linkedNoteTitle }
+    if (syncedPopupEvent.value?.id === payload.eventId) {
+      syncedPopupEvent.value = events.value[idx]
+    }
+  }
+}
+
+function onSyncedNoteUnlinked(payload: { eventId: number }): void {
+  const idx = events.value.findIndex(e => e.id === payload.eventId)
+  if (idx !== -1) {
+    events.value[idx] = { ...events.value[idx], linked_note_id: null, linked_note_title: null }
+    if (syncedPopupEvent.value?.id === payload.eventId) {
+      syncedPopupEvent.value = events.value[idx]
+    }
+  }
 }
 
 // ── Modal helpers ─────────────────────────────────────────────────────────────
@@ -429,6 +469,21 @@ function onEventMouseDown(ev: CalendarEvent, e: MouseEvent): void {
   if (e.button !== 0) return
   e.preventDefault()
   e.stopPropagation()
+  // Synced events are read-only — still track the mousedown so a click opens the popup,
+  // but use a simplified state that won't ghost/move the event.
+  if (isSourced(ev)) {
+    moveDrag.value = {
+      event: ev,
+      offsetMinutes: 0,
+      currentDay: new Date(ev.start_at),
+      currentStartMinutes: new Date(ev.start_at).getHours() * 60 + new Date(ev.start_at).getMinutes(),
+      startX: e.clientX,
+      startY: e.clientY,
+      hasMoved: false,
+    }
+    window.addEventListener('mouseup', onMoveMouseUp)
+    return
+  }
   const eventStartMinutes = new Date(ev.start_at).getHours() * 60 + new Date(ev.start_at).getMinutes()
   const clickMinutes = getMinutesFromMouseY(e.clientY)
   moveDrag.value = {
@@ -453,6 +508,7 @@ function onDayMouseEnter(day: Date): void {
 
 function onMoveMouseMove(e: MouseEvent): void {
   if (!moveDrag.value) return
+  if (isSourced(moveDrag.value.event)) return  // no drag for synced events
   const dx = Math.abs(e.clientX - moveDrag.value.startX)
   const dy = Math.abs(e.clientY - moveDrag.value.startY)
   if (dx < 4 && dy < 4) return
@@ -471,9 +527,12 @@ function onMoveMouseUp(): void {
   window.removeEventListener('mousemove', onMoveMouseMove)
   window.removeEventListener('mouseup', onMoveMouseUp)
   if (!moveDrag.value) return
-  const { event, currentDay, currentStartMinutes, hasMoved } = moveDrag.value
+  const { event, currentDay, currentStartMinutes, hasMoved, startX, startY } = moveDrag.value
   moveDrag.value = null
-  if (!hasMoved) { openEditModal(event); return }
+  if (!hasMoved) {
+    if (isSourced(event)) { openSyncedPopup(event, { x: startX, y: startY }); return }
+    openEditModal(event); return
+  }
   const durationMs = new Date(event.end_at).getTime() - new Date(event.start_at).getTime()
   const newStart = new Date(currentDay.getFullYear(), currentDay.getMonth(), currentDay.getDate(),
     Math.floor(currentStartMinutes / 60), currentStartMinutes % 60, 0)
@@ -481,6 +540,7 @@ function onMoveMouseUp(): void {
   const newStartISO = newStart.toISOString()
   const newEndISO = newEnd.toISOString()
   if (newStartISO === event.start_at && newEndISO === event.end_at) return
+  if (isSourced(event)) return  // should not reach here, but guard anyway
   const idx = events.value.findIndex((e) => e.id === event.id)
   if (idx !== -1) events.value[idx] = { ...event, start_at: newStartISO, end_at: newEndISO }
   void window.api.invoke('calendar-events:update', { id: event.id, start_at: newStartISO, end_at: newEndISO })
@@ -490,6 +550,7 @@ function onMoveMouseUp(): void {
 
 function onResizeStart(ev: CalendarEvent, e: MouseEvent): void {
   if (e.button !== 0) return
+  if (isSourced(ev)) return  // synced events are read-only
   e.preventDefault()
   e.stopPropagation()
   const end = new Date(ev.end_at)
@@ -665,6 +726,7 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
               v-for="ev in eventsForDay(col)"
               :key="ev.id"
               class="event-block"
+              :class="{ 'is-synced': isSourced(ev) }"
               :style="getEventDisplayStyle(ev)"
               :title="eventTooltip(ev)"
               @mousedown.prevent.stop="onEventMouseDown(ev, $event)"
@@ -672,9 +734,10 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
               <div class="event-header-row">
                 <span class="event-title">{{ ev.title }}</span>
                 <RefreshCw v-if="isRecurring(ev)" :size="9" class="event-recur-icon" />
+                <Cloud v-else-if="isSourced(ev)" :size="9" class="event-synced-icon" />
               </div>
               <span v-if="showEventTime(ev)" class="event-time">{{ formatEventTime(ev.start_at) }}</span>
-              <div class="event-resize-handle" @mousedown.prevent.stop="onResizeStart(ev, $event)" />
+              <div v-if="!isSourced(ev)" class="event-resize-handle" @mousedown.prevent.stop="onResizeStart(ev, $event)" />
             </div>
           </div>
         </div>
@@ -705,12 +768,14 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
                 v-for="ev in eventsForDay(day)"
                 :key="ev.id"
                 class="month-event-chip"
+                :class="{ 'is-synced': isSourced(ev) }"
                 :title="eventTooltip(ev)"
-                @click.stop="openEditModal(ev)"
+                @click.stop="isSourced(ev) ? openSyncedPopup(ev, { x: $event.clientX, y: $event.clientY }) : openEditModal(ev)"
               >
                 <span class="month-event-time">{{ formatEventTime(ev.start_at) }}</span>
                 {{ ev.title }}
                 <RefreshCw v-if="isRecurring(ev)" :size="8" class="month-event-recur-icon" />
+                <Cloud v-else-if="isSourced(ev)" :size="8" class="month-event-recur-icon" />
               </div>
             </div>
           </div>
@@ -718,7 +783,7 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
       </div>
     </template>
 
-    <!-- Meeting modal -->
+    <!-- Meeting modal (locally-created events) -->
     <MeetingModal
       v-if="showModal"
       :event="modalEvent"
@@ -728,6 +793,17 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
       @deleted="onModalDeleted"
       @cancel="showModal = false"
       @open-note="emit('open-note', $event)"
+    />
+
+    <!-- Synced event info popup (read-only) -->
+    <SyncedEventPopup
+      v-if="syncedPopupEvent"
+      :event="syncedPopupEvent"
+      :position="syncedPopupPos"
+      @close="syncedPopupEvent = null"
+      @open-note="emit('open-note', $event); syncedPopupEvent = null"
+      @note-linked="onSyncedNoteLinked"
+      @note-unlinked="onSyncedNoteUnlinked"
     />
   </div>
 </template>
@@ -998,6 +1074,25 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
   cursor: grabbing;
 }
 
+/* Synced (read-only) events — teal tint */
+.event-block.is-synced {
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.35);
+  border-left-color: #4ade80;
+  cursor: pointer;
+}
+
+.event-block.is-synced:hover {
+  background: rgba(74, 222, 128, 0.18);
+}
+
+.event-synced-icon {
+  flex-shrink: 0;
+  color: #4ade80;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
 .drag-preview {
   pointer-events: none;
   opacity: 0.5;
@@ -1161,6 +1256,15 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
 
 .month-event-chip:hover {
   background: rgba(91, 141, 239, 0.22);
+}
+
+.month-event-chip.is-synced {
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.3);
+}
+
+.month-event-chip.is-synced:hover {
+  background: rgba(74, 222, 128, 0.18);
 }
 
 .month-event-time {

@@ -7,6 +7,7 @@ import { startMicMonitor, stopMicMonitor, getMicStatus } from './mic/monitor'
 import { createMeetingWindow, destroyMeetingWindow } from './mic/meetingWindow'
 import { registerTranscriptionIpcHandlers } from './transcription/session'
 import { scheduleNightlyClusterBatch } from './embedding/scheduler'
+import { startCalendarSyncScheduler } from './calendar/sync/scheduler'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
@@ -62,6 +63,7 @@ app.whenReady().then(() => {
   startMicMonitor()
   createMeetingWindow()
   scheduleNightlyClusterBatch()
+  startCalendarSyncScheduler()
 
   app.on('activate', () => {
     // On macOS re-create a window when the dock icon is clicked and no windows are open
