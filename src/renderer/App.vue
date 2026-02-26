@@ -299,12 +299,12 @@ function onPaletteNavigate(view: string): void {
 }
 
 function onPaletteNewNote(templateId: string | undefined, mode: OpenMode): void {
-  if (mode === 'default') activeView.value = 'notes'
+  activeView.value = 'notes'
   void newNote(templateId, mode)
 }
 
 async function onPaletteNewEntity(typeId: string, mode: OpenMode): Promise<void> {
-  if (mode === 'default') await onNavClick(typeId)
+  await onNavClick(typeId)
   const et = entityTypes.value.find((t) => t.id === typeId)
   const entity = (await window.api.invoke('entities:create', {
     type_id: typeId,
