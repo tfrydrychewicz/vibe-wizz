@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { Trash2, X, ExternalLink } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
 import { entityTrashStatus } from '../stores/mentionStore'
@@ -52,6 +52,7 @@ const emit = defineEmits<{
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
 }>()
 
+const nameInputRef = ref<HTMLInputElement | null>(null)
 const entityName = ref('')
 const fieldValues = ref<Record<string, string>>({})
 const schema = ref<EntitySchema>({ fields: [] })
@@ -196,6 +197,11 @@ async function loadEntity(id: string): Promise<void> {
   fieldValues.value = values
   isLoading.value = false
   emit('loaded', entityName.value || 'Untitled')
+  if (entityName.value === 'Untitled') {
+    await nextTick()
+    nameInputRef.value?.focus()
+    nameInputRef.value?.select()
+  }
 
   // Resolve display data for ref fields
   await resolveRefFields()
@@ -433,6 +439,7 @@ watch(() => props.entityId, async (id) => {
         <div class="entity-field-row">
           <label class="entity-field-label">Name</label>
           <input
+            ref="nameInputRef"
             v-model="entityName"
             class="entity-field-input"
             type="text"
