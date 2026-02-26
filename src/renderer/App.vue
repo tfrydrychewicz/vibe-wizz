@@ -481,6 +481,8 @@ onBeforeUnmount(() => {
                   @loaded="(n) => updatePaneTitle(pane.contentId, n)"
                   @saved="(n) => onEntitySaved(pane.contentId, n)"
                   @trashed="onEntityTrashed"
+                  @open-entity="onOpenEntity"
+                  @open-note="onOpenNote"
                 />
                 <CalendarView
                   v-else-if="pane.type === 'calendar'"

@@ -1554,6 +1554,7 @@ onBeforeUnmount(() => {
       :anchor-rect="popupAnchorRect"
       @close="popupEntityId = null"
       @open-entity="emit('open-entity', $event)"
+      @open-note="emit('open-note', $event)"
     />
 
     <TrashedNoteLinkPopup

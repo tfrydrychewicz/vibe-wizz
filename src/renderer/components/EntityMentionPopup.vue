@@ -17,11 +17,29 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
+  'open-note': [{ noteId: string; title: string; mode: OpenMode }]
 }>()
+
+type ResolvedEntityItem = { id: string; typeId: string; name: string }
+type ResolvedRef =
+  | { kind: 'entity'; item: ResolvedEntityItem }
+  | { kind: 'entity_list'; items: ResolvedEntityItem[] }
+  | { kind: 'note'; id: string; title: string }
+
+type FieldDisplay = {
+  label: string
+  plain?: string       // non-ref fields
+  ref?: ResolvedRef    // ref fields (once resolved)
+  loading?: boolean    // ref field still resolving
+}
 
 const data = ref<EntityData | null>(null)
 const failed = ref(false)
 const popupRef = ref<HTMLElement | null>(null)
+// Resolved navigation data for ref fields
+const resolvedRefs = ref<Record<string, ResolvedRef>>({})
+// Tracks which ref fields are still loading
+const loadingRefs = ref<Record<string, boolean>>({})
 
 const POPUP_APPROX_HEIGHT = 220
 
@@ -37,7 +55,7 @@ const popupLeft = computed(() =>
   Math.min(props.anchorRect.left, window.innerWidth - 288)
 )
 
-const fields = computed<Array<{ label: string; value: string }>>(() => {
+const fields = computed<FieldDisplay[]>(() => {
   if (!data.value) return []
   let schemaDef: { fields: FieldDef[] } = { fields: [] }
   let values: Record<string, unknown> = {}
@@ -49,15 +67,89 @@ const fields = computed<Array<{ label: string; value: string }>>(() => {
     values = JSON.parse(data.value.entity.fields) as Record<string, unknown>
   } catch { /* ignore malformed fields */ }
 
+  const isRef = (type: string) =>
+    type === 'entity_ref' || type === 'entity_ref_list' || type === 'note_ref'
+
   return schemaDef.fields
-    .filter((f) => values[f.name] != null && values[f.name] !== '')
-    .map((f) => ({
-      label: f.name.replace(/_/g, ' '),
-      value: Array.isArray(values[f.name])
+    .filter((f) => values[f.name] != null && values[f.name] !== '' && values[f.name] !== '[]')
+    .map((f): FieldDisplay => {
+      const label = f.name.replace(/_/g, ' ')
+      if (isRef(f.type)) {
+        const resolved = resolvedRefs.value[f.name]
+        return resolved
+          ? { label, ref: resolved }
+          : { label, loading: !!loadingRefs.value[f.name] }
+      }
+      const plain = Array.isArray(values[f.name])
         ? (values[f.name] as unknown[]).filter(Boolean).join(', ')
-        : String(values[f.name]),
-    }))
+        : String(values[f.name])
+      return { label, plain }
+    })
 })
+
+async function resolveRefFields(
+  schemaDef: { fields: FieldDef[] },
+  values: Record<string, unknown>,
+): Promise<void> {
+  for (const f of schemaDef.fields) {
+    const raw = values[f.name]
+    if (raw == null || raw === '' || raw === '[]') continue
+
+    if (f.type === 'entity_ref') {
+      const id = String(raw)
+      loadingRefs.value[f.name] = true
+      const result = (await window.api.invoke('entities:get', { id })) as {
+        entity: { id: string; name: string; type_id: string }
+      } | null
+      loadingRefs.value[f.name] = false
+      if (result) {
+        resolvedRefs.value[f.name] = {
+          kind: 'entity',
+          item: { id: result.entity.id, typeId: result.entity.type_id, name: result.entity.name },
+        }
+      }
+    } else if (f.type === 'entity_ref_list') {
+      let ids: string[] = []
+      try {
+        ids = Array.isArray(raw) ? (raw as string[]) : (JSON.parse(String(raw)) as string[])
+      } catch { ids = [] }
+      loadingRefs.value[f.name] = true
+      const items: ResolvedEntityItem[] = []
+      for (const id of ids) {
+        const result = (await window.api.invoke('entities:get', { id })) as {
+          entity: { id: string; name: string; type_id: string }
+        } | null
+        if (result) {
+          items.push({ id: result.entity.id, typeId: result.entity.type_id, name: result.entity.name })
+        }
+      }
+      loadingRefs.value[f.name] = false
+      if (items.length) resolvedRefs.value[f.name] = { kind: 'entity_list', items }
+    } else if (f.type === 'note_ref') {
+      const id = String(raw)
+      loadingRefs.value[f.name] = true
+      const note = (await window.api.invoke('notes:get', { id })) as {
+        id: string; title: string
+      } | null
+      loadingRefs.value[f.name] = false
+      if (note) resolvedRefs.value[f.name] = { kind: 'note', id: note.id, title: note.title || 'Untitled' }
+    }
+  }
+}
+
+function openMode(e: MouseEvent): OpenMode {
+  return (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+}
+
+function onClickEntityItem(e: MouseEvent, item: ResolvedEntityItem): void {
+  emit('open-entity', { entityId: item.id, typeId: item.typeId, mode: openMode(e) })
+  emit('close')
+}
+
+function onClickNoteRef(e: MouseEvent, id: string, title: string): void {
+  emit('open-note', { noteId: id, title, mode: openMode(e) })
+  emit('close')
+}
 
 onMounted(async () => {
   // Attach listeners first so the popup is always dismissible
@@ -68,6 +160,18 @@ onMounted(async () => {
     const result = await window.api.invoke('entities:get', { id: props.entityId })
     if (result) {
       data.value = result as EntityData
+
+      // Resolve ref field display names in the background
+      let schemaDef: { fields: FieldDef[] } = { fields: [] }
+      let fieldValues: Record<string, unknown> = {}
+      try {
+        const parsed = JSON.parse(data.value.entityType.schema)
+        if (parsed && Array.isArray(parsed.fields)) schemaDef = parsed as { fields: FieldDef[] }
+      } catch { /* ignore */ }
+      try {
+        fieldValues = JSON.parse(data.value.entity.fields) as Record<string, unknown>
+      } catch { /* ignore */ }
+      void resolveRefFields(schemaDef, fieldValues)
     } else {
       failed.value = true
     }
@@ -120,7 +224,39 @@ function openEntity(e: MouseEvent): void {
       <div v-if="fields.length" class="entity-popup-fields">
         <div v-for="field in fields" :key="field.label" class="entity-popup-field">
           <span class="entity-popup-field-label">{{ field.label }}</span>
-          <span class="entity-popup-field-value">{{ field.value }}</span>
+
+          <!-- plain value -->
+          <span v-if="field.plain != null" class="entity-popup-field-value">{{ field.plain }}</span>
+
+          <!-- still resolving -->
+          <span v-else-if="field.loading" class="entity-popup-field-value entity-popup-field-muted">…</span>
+
+          <!-- entity_ref -->
+          <button
+            v-else-if="field.ref?.kind === 'entity'"
+            class="entity-popup-ref-link"
+            :title="`Open (Shift=new pane, Cmd=new tab)`"
+            @click="onClickEntityItem($event, field.ref.item)"
+          >{{ field.ref.item.name }}</button>
+
+          <!-- entity_ref_list -->
+          <span v-else-if="field.ref?.kind === 'entity_list'" class="entity-popup-ref-list">
+            <button
+              v-for="item in field.ref.items"
+              :key="item.id"
+              class="entity-popup-ref-link"
+              :title="`Open (Shift=new pane, Cmd=new tab)`"
+              @click="onClickEntityItem($event, item)"
+            >{{ item.name }}</button>
+          </span>
+
+          <!-- note_ref -->
+          <button
+            v-else-if="field.ref?.kind === 'note'"
+            class="entity-popup-ref-link entity-popup-ref-note"
+            :title="`Open (Shift=new pane, Cmd=new tab)`"
+            @click="onClickNoteRef($event, field.ref.id, field.ref.title)"
+          >{{ field.ref.title }}</button>
         </div>
       </div>
     </template>
@@ -224,6 +360,46 @@ function openEntity(e: MouseEvent): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.entity-popup-field-muted {
+  color: var(--color-text-muted);
+}
+
+.entity-popup-ref-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
+}
+
+.entity-popup-ref-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 0.1s, opacity 0.1s;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.entity-popup-ref-link:hover {
+  text-decoration-color: var(--color-accent);
+}
+
+.entity-popup-ref-note {
+  color: #50c0a0;
+}
+
+.entity-popup-ref-note:hover {
+  text-decoration-color: #50c0a0;
 }
 
 .entity-popup-status {
