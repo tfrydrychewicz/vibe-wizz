@@ -5,7 +5,8 @@ import { scheduleEmbedding } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, type ChatModelId } from '../embedding/chat'
+import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, type ChatModelId } from '../embedding/chat'
+import { parseMarkdownToTipTap } from '../transcription/postProcessor'
 
 type NoteRow = {
   id: string
@@ -896,6 +897,108 @@ export function registerDbIpcHandlers(): void {
       return { heading: 'Action Items', items: [] }
     }
   })
+
+  /**
+   * notes:ai-inline — generate inline content to insert or replace in the note editor.
+   *
+   * Input:  { prompt, noteBodyPlain, selectedText? }
+   * Output: { content: TipTapNode[] } or { error: string }
+   *
+   * Flow:
+   *   1. Read anthropic_api_key from settings; return { error } if missing.
+   *   2. FTS5 keyword search on prompt (top 5) for knowledge base context.
+   *   3. Call generateInlineContent() → markdown string.
+   *   4. Parse markdown → TipTap nodes via parseMarkdownToTipTap().
+   *   5. Return { content }.
+   */
+  ipcMain.handle(
+    'notes:ai-inline',
+    async (
+      _event,
+      {
+        prompt,
+        noteBodyPlain,
+        selectedText,
+      }: { prompt: string; noteBodyPlain: string; selectedText?: string },
+    ): Promise<{ content: object[] } | { error: string }> => {
+      const db = getDatabase()
+
+      const setting = db
+        .prepare('SELECT value FROM settings WHERE key = ?')
+        .get('anthropic_api_key') as { value: string } | undefined
+      const apiKey = setting?.value ?? ''
+      if (!apiKey) {
+        return {
+          error:
+            'No Anthropic API key configured. Add your API key in Settings → AI to use inline generation.',
+        }
+      }
+
+      const bgModelRow = db
+        .prepare('SELECT value FROM settings WHERE key = ?')
+        .get('model_background') as { value: string } | undefined
+      const bgModel = bgModelRow?.value || 'claude-haiku-4-5-20251001'
+
+      setChatAnthropicKey(apiKey)
+
+      // FTS5 keyword search on the prompt for knowledge base context (top 5 notes)
+      const contextNotes: { title: string; excerpt: string }[] = []
+      if (prompt.trim()) {
+        try {
+          const keywords = prompt
+            .split(/\s+/)
+            .filter((w) => w.length >= 3)
+            .slice(0, 8)
+          if (keywords.length > 0) {
+            const ftsQuery = keywords
+              .map((w) => w.replace(/["\(\)\^\*\+\-]/g, ''))
+              .filter(Boolean)
+              .join(' OR ')
+            if (ftsQuery) {
+              const rows = db
+                .prepare(
+                  `SELECT n.title, n.body_plain
+                   FROM notes_fts
+                   JOIN notes n ON n.rowid = notes_fts.rowid
+                   WHERE notes_fts MATCH ? AND n.archived_at IS NULL
+                   ORDER BY rank LIMIT 5`,
+                )
+                .all(ftsQuery) as { title: string; body_plain: string }[]
+              for (const row of rows) {
+                contextNotes.push({
+                  title: row.title,
+                  excerpt:
+                    row.body_plain.length > 500
+                      ? row.body_plain.slice(0, 500) + '…'
+                      : row.body_plain,
+                })
+              }
+            }
+          }
+        } catch {
+          // FTS error — proceed without context
+        }
+      }
+
+      try {
+        const markdown = await generateInlineContent(
+          prompt,
+          noteBodyPlain,
+          selectedText,
+          contextNotes,
+          bgModel,
+        )
+        if (!markdown) {
+          return { error: 'AI returned empty content. Please try a different prompt.' }
+        }
+        const nodes = parseMarkdownToTipTap(markdown)
+        return { content: nodes }
+      } catch (err) {
+        console.error('[AI Inline] Generation failed:', err)
+        return { error: 'AI generation failed. Please check your API key and try again.' }
+      }
+    },
+  )
 
   /** action-items:get-statuses — batch-fetch status for a list of action item IDs. */
   ipcMain.handle('action-items:get-statuses', (_event, { ids }: { ids: string[] }) => {

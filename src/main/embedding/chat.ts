@@ -546,6 +546,69 @@ export async function reRankResults<T extends { title: string; excerpt: string |
 }
 
 /**
+ * Generate inline content for the note editor (insert or replace mode).
+ * Returns a Markdown string to be parsed by parseMarkdownToTipTap().
+ */
+export async function generateInlineContent(
+  userPrompt: string,
+  noteBodyPlain: string,
+  selectedText: string | undefined,
+  contextNotes: { title: string; excerpt: string }[],
+  model = KEYWORD_MODEL,
+): Promise<string> {
+  if (!_client) throw new Error('Anthropic client not initialized')
+
+  const MAX_NOTE_CHARS = 3000
+  const MAX_CONTEXT_CHARS = 2000
+
+  const truncatedBody =
+    noteBodyPlain.length > MAX_NOTE_CHARS
+      ? noteBodyPlain.slice(0, MAX_NOTE_CHARS) + '…'
+      : noteBodyPlain
+
+  let systemPrompt =
+    'You are an inline writing assistant embedded in a personal knowledge base editor. ' +
+    'Your job is to produce content that fits seamlessly into the note at the cursor position. ' +
+    'Always respond in the same language as the user prompt and note content. ' +
+    'Return ONLY the content to insert — no preamble, no meta-commentary, no explanation. ' +
+    'Use Markdown formatting: ## headings, - for bullets, - [ ] for tasks, **bold**, *italic*, `code`. ' +
+    'GFM tables (| Col | Col |\\n| --- | --- |\\n| cell | cell |) for structured data.'
+
+  if (truncatedBody) {
+    systemPrompt +=
+      `\n\nCurrent note content (for context — do not repeat it, just continue naturally):\n${truncatedBody}`
+  }
+
+  if (contextNotes.length > 0) {
+    let ctxStr = contextNotes.map((n) => `Note: "${n.title}"\n${n.excerpt}`).join('\n\n---\n\n')
+    if (ctxStr.length > MAX_CONTEXT_CHARS) ctxStr = ctxStr.slice(0, MAX_CONTEXT_CHARS) + '…'
+    systemPrompt += `\n\nRelated notes from the knowledge base (use as reference if relevant):\n${ctxStr}`
+  }
+
+  let userMessage: string
+  if (selectedText) {
+    userMessage =
+      `Selected text to rewrite:\n"""\n${selectedText}\n"""\n\n` +
+      `Instructions: ${userPrompt}\n\n` +
+      `Rewrite the selected text following the instructions. Return only the replacement content.`
+  } else {
+    userMessage =
+      `Instructions: ${userPrompt}\n\n` +
+      `Generate the requested content to insert at the cursor position in the note.`
+  }
+
+  const response = await _client.messages.create({
+    model,
+    max_tokens: 1500,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }],
+  })
+
+  const block = response.content[0]
+  return block.type === 'text' ? block.text.trim() : ''
+}
+
+/**
  * Send a chat message with optional knowledge base context.
  *
  * Supports Claude tool use: if Claude decides to call a calendar or action item

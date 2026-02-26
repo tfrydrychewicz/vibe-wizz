@@ -8,6 +8,7 @@ export {}
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { useEditor, EditorContent, VueRenderer, VueNodeViewRenderer } from '@tiptap/vue-3'
+import { BubbleMenu } from '@tiptap/vue-3/menus'
 import Mention from '@tiptap/extension-mention'
 import StarterKit from '@tiptap/starter-kit'
 import { Extension } from '@tiptap/core'
@@ -52,12 +53,14 @@ import ToolbarDropdown from './ToolbarDropdown.vue'
 import AutoMentionPopup from './AutoMentionPopup.vue'
 import { AutoMentionDecoration } from '../extensions/AutoMentionDecoration'
 import type { AutoDetection } from '../extensions/AutoMentionDecoration'
+import { AILinePlaceholder } from '../extensions/AILinePlaceholder'
 import { Table } from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
 import { isInTable, CellSelection } from '@tiptap/pm/tables'
 import TableContextMenu from './TableContextMenu.vue'
+import AIPromptModal from './AIPromptModal.vue'
 import {
   hoveredAutoDetection,
   scheduleHideAutoDetection,
@@ -410,6 +413,17 @@ const datePickerValue = ref('')
 const datePickerInputRef = ref<HTMLInputElement | null>(null)
 const datePickerPopupRef = ref<HTMLDivElement | null>(null)
 
+// ── AI Inline Modal state ────────────────────────────────────────────────────
+const showAIModal = ref(false)
+const aiModalLoading = ref(false)
+const aiModalMode = ref<'insert' | 'replace'>('insert')
+const aiModalError = ref<string | null>(null)
+let aiInsertPos = 0    // paragraph $from.before() (insert mode)
+let aiInsertEnd = 0    // paragraph $from.after()  (insert mode)
+let aiReplaceFrom = 0  // selection from (replace mode)
+let aiReplaceTo = 0    // selection to   (replace mode)
+let aiSelectedText = '' // selected text  (replace mode)
+
 type AutoDetectionRow = {
   entity_id: string
   entity_name: string
@@ -675,6 +689,32 @@ const SlashCommandExtension = Extension.create({
   },
 })
 
+/**
+ * AISpaceExtension: intercept Space at the start of a completely empty paragraph.
+ * Opens the AI prompt modal in "insert" mode, consuming the space key.
+ */
+const AISpaceExtension = Extension.create({
+  name: 'aiSpace',
+  addKeyboardShortcuts() {
+    return {
+      ' ': ({ editor: ed }) => {
+        const { $from, empty } = ed.state.selection
+        if (!empty) return false
+        if ($from.parent.type.name !== 'paragraph') return false
+        if ($from.parent.textContent !== '') return false
+        if ($from.parentOffset !== 0) return false
+        // Record the full paragraph node boundaries for deleteRange later
+        aiInsertPos = $from.before()
+        aiInsertEnd = $from.after()
+        aiModalMode.value = 'insert'
+        aiModalError.value = null
+        showAIModal.value = true
+        return true
+      },
+    }
+  },
+})
+
 const editor = useEditor({
   extensions: [
     StarterKit,
@@ -720,7 +760,9 @@ const editor = useEditor({
       suggestion: buildNoteLinkSuggestion(),
     }),
     AutoMentionDecoration,
+    AILinePlaceholder,
     SlashCommandExtension,
+    AISpaceExtension,
     Table.configure({ resizable: true }),
     TableRow,
     TableHeader,
@@ -996,6 +1038,77 @@ function closeTableContextMenu(): void {
   tableContextMenu.value = null
 }
 
+// ── AI Inline handlers ───────────────────────────────────────────────────────
+
+/**
+ * Called when the AI sparkles button in the BubbleMenu is clicked.
+ * Captures the current selection range + text, then opens the modal in "replace" mode.
+ * @mousedown.prevent on the button preserves the editor selection.
+ */
+function openAIBubble(): void {
+  if (!editor.value) return
+  const { from, to, empty } = editor.value.state.selection
+  if (empty) return
+  aiReplaceFrom = from
+  aiReplaceTo = to
+  aiSelectedText = editor.value.state.doc.textBetween(from, to, '\n')
+  aiModalMode.value = 'replace'
+  aiModalError.value = null
+  showAIModal.value = true
+}
+
+async function onAIPromptSubmit(prompt: string): Promise<void> {
+  if (!editor.value) return
+  aiModalLoading.value = true
+  aiModalError.value = null
+  const noteBodyPlain = editor.value.getText()
+  try {
+    const result = (await window.api.invoke('notes:ai-inline', {
+      prompt,
+      noteBodyPlain,
+      selectedText: aiModalMode.value === 'replace' ? aiSelectedText : undefined,
+    })) as { content: object[] } | { error: string }
+
+    if ('error' in result) {
+      aiModalError.value = result.error
+      return
+    }
+    if (!result.content.length) {
+      aiModalError.value = 'AI returned empty content. Try a different prompt.'
+      return
+    }
+
+    if (aiModalMode.value === 'insert') {
+      editor.value
+        .chain()
+        .focus()
+        .deleteRange({ from: aiInsertPos, to: aiInsertEnd })
+        .insertContentAt(aiInsertPos, result.content)
+        .run()
+    } else {
+      editor.value
+        .chain()
+        .focus()
+        .deleteRange({ from: aiReplaceFrom, to: aiReplaceTo })
+        .insertContentAt(aiReplaceFrom, result.content)
+        .run()
+    }
+
+    showAIModal.value = false
+    scheduleSave()
+  } catch (err) {
+    aiModalError.value = err instanceof Error ? err.message : 'Unexpected error. Please try again.'
+  } finally {
+    aiModalLoading.value = false
+  }
+}
+
+function closeAIModal(): void {
+  if (aiModalLoading.value) return
+  showAIModal.value = false
+  aiModalError.value = null
+}
+
 function onInsertAutoMention(payload: {
   entityId: string
   entityName: string
@@ -1121,6 +1234,7 @@ function syncTaskItemChecked(actionId: string, checked: boolean): void {
 watch(
   () => props.noteId,
   async (newId, oldId) => {
+    showAIModal.value = false
     if (saveTimer && oldId) {
       clearTimeout(saveTimer)
       saveTimer = null
@@ -1446,6 +1560,25 @@ onBeforeUnmount(() => {
 
     <!-- Editor + optional transcript side panel -->
     <div class="note-content-row">
+      <!-- AI Bubble Menu: shown when text is selected -->
+      <BubbleMenu
+        v-if="editor"
+        :editor="editor"
+        :should-show="({ view, state, from, to }) => view.hasFocus() && !state.selection.empty && from < to"
+        :options="{ placement: 'top' }"
+        class="ai-bubble-menu"
+      >
+        <button
+          class="ai-bubble-btn"
+          title="AI: rewrite selection"
+          @mousedown.prevent
+          @click="openAIBubble()"
+        >
+          <Sparkles :size="13" />
+          <span class="ai-bubble-label">AI</span>
+        </button>
+      </BubbleMenu>
+
       <div class="note-body" @mousedown="onNoteBodyMouseDown" @contextmenu="onEditorContextMenu">
         <EditorContent :editor="editor" />
       </div>
@@ -1612,6 +1745,16 @@ onBeforeUnmount(() => {
       :x="tableContextMenu.x"
       :y="tableContextMenu.y"
       @close="closeTableContextMenu"
+    />
+
+    <!-- AI Inline Prompt Modal -->
+    <AIPromptModal
+      v-if="showAIModal"
+      :loading="aiModalLoading"
+      :mode="aiModalMode"
+      :error-message="aiModalError ?? undefined"
+      @submit="onAIPromptSubmit"
+      @close="closeAIModal"
     />
   </div>
 </template>
@@ -1860,5 +2003,55 @@ onBeforeUnmount(() => {
 
 .note-body :deep(.tiptap.resize-cursor) {
   cursor: col-resize;
+}
+
+/* ── AI Bubble Menu ──────────────────────────────────────────────────────── */
+.ai-bubble-menu {
+  display: flex;
+  align-items: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  padding: 2px;
+  gap: 2px;
+}
+
+.ai-bubble-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--color-accent, #5b8def);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.ai-bubble-btn:hover {
+  background: rgba(91, 141, 239, 0.12);
+}
+
+.ai-bubble-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+/* ── AI Line Placeholder hint ────────────────────────────────────────────── */
+/* Shown on the focused empty paragraph when the note already has content.   */
+.note-body :deep(p.has-ai-line-hint::before) {
+  content: 'Type Space for AI';
+  color: var(--color-text-muted);
+  opacity: 0.45;
+  pointer-events: none;
+  /* float + height:0 keeps the hint from affecting text layout (TipTap pattern) */
+  float: left;
+  height: 0;
+  font-size: 13px;
 }
 </style>
