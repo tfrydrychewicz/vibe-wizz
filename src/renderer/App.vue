@@ -118,7 +118,7 @@ function activeEntityType(): EntityTypeRow | undefined {
 
 // ── Note actions ────────────────────────────────────────────────────────────
 
-async function newNote(templateId?: string): Promise<void> {
+async function newNote(templateId?: string, mode: OpenMode = 'default'): Promise<void> {
   let body: string | undefined
   let name: string | undefined
   if (templateId) {
@@ -133,7 +133,7 @@ async function newNote(templateId?: string): Promise<void> {
     body,
     template_id: templateId,
   })) as { id: string }
-  openContent('note', note.id, name ?? 'Untitled', 'default', undefined, 'file-text')
+  openContent('note', note.id, name ?? 'Untitled', mode, undefined, 'file-text')
   await noteListRef.value?.refresh()
 }
 
@@ -298,19 +298,19 @@ function onPaletteNavigate(view: string): void {
   }
 }
 
-function onPaletteNewNote(templateId?: string): void {
-  activeView.value = 'notes'
-  void newNote(templateId)
+function onPaletteNewNote(templateId: string | undefined, mode: OpenMode): void {
+  if (mode === 'default') activeView.value = 'notes'
+  void newNote(templateId, mode)
 }
 
-async function onPaletteNewEntity(typeId: string): Promise<void> {
-  await onNavClick(typeId)
+async function onPaletteNewEntity(typeId: string, mode: OpenMode): Promise<void> {
+  if (mode === 'default') await onNavClick(typeId)
   const et = entityTypes.value.find((t) => t.id === typeId)
   const entity = (await window.api.invoke('entities:create', {
     type_id: typeId,
     name: 'Untitled',
   })) as { id: string }
-  openContent('entity', entity.id, 'Untitled', 'default', typeId, et?.icon ?? 'tag', et?.color ?? undefined)
+  openContent('entity', entity.id, 'Untitled', mode, typeId, et?.icon ?? 'tag', et?.color ?? undefined)
   await entityListRef.value?.refresh()
 }
 

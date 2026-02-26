@@ -39,8 +39,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   navigate: [view: string]
-  'new-note': [templateId?: string]
-  'new-entity': [typeId: string]
+  'new-note': [templateId: string | undefined, mode: OpenMode]
+  'new-entity': [typeId: string, mode: OpenMode]
   'open-note': [noteId: string, mode: OpenMode]
   'open-entity': [entityId: string, typeId: string, mode: OpenMode]
 }>()
@@ -75,13 +75,13 @@ const navigateCommands = computed((): PaletteCommand[] => [
 ])
 
 const createCommands = computed((): PaletteCommand[] => [
-  { id: 'create-note', label: 'New Note', iconName: 'plus', shortcut: '⌘N', category: 'create', run: () => { emit('new-note') } },
+  { id: 'create-note', label: 'New Note', iconName: 'plus', shortcut: '⌘N', category: 'create', run: (mode) => { emit('new-note', undefined, mode) } },
   ...props.noteTemplates.map((t): PaletteCommand => ({
     id: `create-tmpl-${t.id}`,
     label: `New Note from "${t.name}"`,
     iconName: t.icon,
     category: 'create',
-    run: () => { emit('new-note', t.id) },
+    run: (mode) => { emit('new-note', t.id, mode) },
   })),
   ...props.entityTypes.map((et): PaletteCommand => ({
     id: `create-et-${et.id}`,
@@ -89,7 +89,7 @@ const createCommands = computed((): PaletteCommand[] => [
     iconName: et.icon,
     iconColor: et.color ?? undefined,
     category: 'create',
-    run: () => { emit('new-entity', et.id) },
+    run: (mode) => { emit('new-entity', et.id, mode) },
   })),
 ])
 
