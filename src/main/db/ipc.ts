@@ -1189,26 +1189,28 @@ export function registerDbIpcHandlers(): void {
         }
       }
 
-      // Fetch entity context for explicitly @mentioned entities
-      const entityContext: { id: string; name: string; type_name: string; fields?: string }[] = []
+      // Fetch rich entity context with BFS field expansion for explicitly @mentioned entities
+      let richEntities: RichEntityContext[] = []
       if (mentionedEntityIds && mentionedEntityIds.length > 0) {
         try {
-          const placeholders = mentionedEntityIds.map(() => '?').join(', ')
-          const rows = db
-            .prepare(
-              `SELECT e.id, e.name, et.name AS type_name, e.fields
-               FROM entities e
-               JOIN entity_types et ON et.id = e.type_id
-               WHERE e.id IN (${placeholders}) AND e.trashed_at IS NULL`,
-            )
-            .all(...mentionedEntityIds) as { id: string; name: string; type_name: string; fields: string }[]
-          for (const row of rows) {
-            entityContext.push({
-              id: row.id,
-              name: row.name,
-              type_name: row.type_name,
-              fields: row.fields && row.fields !== '{}' ? row.fields : undefined,
-            })
+          const { richEntities: re, entityLinkedNoteIds } = buildRichEntityContext(db, mentionedEntityIds)
+          richEntities = re
+
+          // Fetch body_plain for entity-linked notes and add to context
+          const linkNoteIds = [...entityLinkedNoteIds].slice(0, 3)
+          if (linkNoteIds.length > 0) {
+            const placeholders = linkNoteIds.map(() => '?').join(', ')
+            const noteRows = db
+              .prepare(
+                `SELECT title, body_plain FROM notes WHERE id IN (${placeholders}) AND archived_at IS NULL`,
+              )
+              .all(...linkNoteIds) as { title: string; body_plain: string }[]
+            for (const nr of noteRows) {
+              contextNotes.push({
+                title: nr.title,
+                excerpt: nr.body_plain.length > 800 ? nr.body_plain.slice(0, 800) + '…' : nr.body_plain,
+              })
+            }
           }
         } catch {
           // entity fetch error — proceed without entity context
@@ -1245,7 +1247,7 @@ export function registerDbIpcHandlers(): void {
           selectedText,
           contextNotes,
           bgModel,
-          entityContext.length > 0 ? entityContext : undefined,
+          richEntities.length > 0 ? richEntities : undefined,
           images && images.length > 0 ? images as { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[] : undefined,
           files && files.length > 0 ? files : undefined,
         )

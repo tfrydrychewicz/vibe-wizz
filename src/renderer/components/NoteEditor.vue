@@ -423,6 +423,8 @@ let aiInsertEnd = 0    // paragraph $from.after()  (insert mode)
 let aiReplaceFrom = 0  // selection from (replace mode)
 let aiReplaceTo = 0    // selection to   (replace mode)
 let aiSelectedText = '' // selected text  (replace mode)
+let aiSelectionEntityIds: string[] = [] // entity IDs found in selection chips
+let aiSelectionNoteIds: string[] = []   // note IDs found in selection chips
 
 type AutoDetectionRow = {
   entity_id: string
@@ -1051,7 +1053,24 @@ function openAIBubble(): void {
   if (empty) return
   aiReplaceFrom = from
   aiReplaceTo = to
-  aiSelectedText = editor.value.state.doc.textBetween(from, to, '\n')
+  aiSelectionEntityIds = []
+  aiSelectionNoteIds = []
+  // Serialize with token format so mention/noteLink chips survive the AI round-trip
+  aiSelectedText = editor.value.state.doc.textBetween(from, to, '\n', (node: any) => {
+    if (node.type.name === 'mention') {
+      const id = node.attrs.id as string
+      const label = node.attrs.label as string
+      if (!aiSelectionEntityIds.includes(id)) aiSelectionEntityIds.push(id)
+      return `{{entity:${id}:${label}}}`
+    }
+    if (node.type.name === 'noteLink') {
+      const id = node.attrs.id as string
+      const label = node.attrs.label as string
+      if (!aiSelectionNoteIds.includes(id)) aiSelectionNoteIds.push(id)
+      return `{{note:${id}:${label}}}`
+    }
+    return ''
+  })
   aiModalMode.value = 'replace'
   aiModalError.value = null
   showAIModal.value = true
@@ -1067,8 +1086,14 @@ async function onAIPromptSubmit(payload: import('./AIPromptModal.vue').AIPromptS
       prompt: payload.prompt,
       noteBodyPlain,
       selectedText: aiModalMode.value === 'replace' ? aiSelectedText : undefined,
-      mentionedEntityIds: payload.mentionedEntityIds.length > 0 ? payload.mentionedEntityIds : undefined,
-      mentionedNoteIds: payload.mentionedNoteIds.length > 0 ? payload.mentionedNoteIds : undefined,
+      mentionedEntityIds: (() => {
+        const ids = [...new Set([...payload.mentionedEntityIds, ...(aiModalMode.value === 'replace' ? aiSelectionEntityIds : [])])]
+        return ids.length > 0 ? ids : undefined
+      })(),
+      mentionedNoteIds: (() => {
+        const ids = [...new Set([...payload.mentionedNoteIds, ...(aiModalMode.value === 'replace' ? aiSelectionNoteIds : [])])]
+        return ids.length > 0 ? ids : undefined
+      })(),
       images: payload.images.length > 0 ? payload.images : undefined,
       files: payload.files.length > 0 ? payload.files : undefined,
     })) as { content: object[] } | { error: string }

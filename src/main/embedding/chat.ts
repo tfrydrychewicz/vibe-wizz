@@ -574,7 +574,7 @@ export async function generateInlineContent(
   selectedText: string | undefined,
   contextNotes: { title: string; excerpt: string }[],
   model = KEYWORD_MODEL,
-  entityContext?: { id: string; name: string; type_name: string; fields?: string }[],
+  richEntities?: RichEntityContext[],
   images?: { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[],
   files?: AttachedFilePayload[],
 ): Promise<string> {
@@ -607,28 +607,23 @@ export async function generateInlineContent(
     systemPrompt += `\n\nRelated notes from the knowledge base (use as reference if relevant):\n${ctxStr}`
   }
 
-  if (entityContext && entityContext.length > 0) {
-    const entityLines = entityContext.map((e) => {
-      let line = `{{entity:${e.id}:${e.name}}} (type: ${e.type_name})`
-      if (e.fields && e.fields !== '{}') {
-        try {
-          const parsed = JSON.parse(e.fields) as Record<string, unknown>
-          const fieldStr = Object.entries(parsed)
-            .filter(([, v]) => v !== null && v !== undefined && v !== '')
-            .map(([k, v]) => `${k}: ${String(v)}`)
-            .join(', ')
-          if (fieldStr) line += `\n  fields: ${fieldStr}`
-        } catch { /* ignore malformed fields */ }
-      }
-      return line
-    })
-    systemPrompt += `\n\nExplicitly mentioned entities (use their data to inform the content):\n${entityLines.join('\n')}`
+  if (richEntities && richEntities.length > 0) {
+    const depthLabel = (d: number) =>
+      d === 0 ? '← directly mentioned' : d === 1 ? '← via entity field' : '← via entity field (no further expansion)'
+    const entityBlocks = richEntities
+      .map((e) => {
+        const header = `### {{entity:${e.id}:${e.name}}} (${e.type_name})  ${depthLabel(e.depth)}`
+        const fieldLines = e.fields.map((f) => `  ${f.name}: ${f.value}`).join('\n')
+        return fieldLines ? `${header}\n${fieldLines}` : header
+      })
+      .join('\n\n')
     systemPrompt +=
-      '\n\nWhen referencing one of these entities in your output, write {{entity:uuid:Name}} ' +
-      '(use the exact uuid listed above). ' +
-      'When referencing a note by title, write {{note:uuid:Name}} (if the uuid is known), ' +
-      'or just [[Note Title]] if unknown. ' +
-      'These tokens will be rendered as interactive chips in the editor.'
+      '\n\n## Entity context\n' +
+      'Entities mentioned in the prompt (use their data to inform the content).\n' +
+      'When referencing any entity in your output, write {{entity:uuid:Name}} (use the exact uuid listed).\n' +
+      'When referencing a note by title, write {{note:uuid:Name}} (if the uuid is known), or just [[Note Title]] if unknown.\n' +
+      'These tokens will be rendered as interactive chips in the editor:\n\n' +
+      entityBlocks
   }
 
   let userText: string
