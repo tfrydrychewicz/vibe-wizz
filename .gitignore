@@ -6,5 +6,7 @@ dist/
 resources/MicMonitor
 resources/Transcriber
 resources/Transcriber.app/
+resources/AudioCapture.app/
 swift/MicMonitor/.build/
 swift/Transcriber/.build/
+swift/AudioCapture/.build/
