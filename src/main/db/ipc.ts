@@ -7,6 +7,7 @@ import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
 import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField, type ChatModelId } from '../embedding/chat'
 import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
+import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { parseQuery } from '../entity-query/parser'
 import { evalQuery } from '../entity-query/evaluator'
 import {
@@ -1985,9 +1986,8 @@ export function registerDbIpcHandlers(): void {
       // Collect any {{entity:uuid:Name}} refs from the response that sendChatMessage() didn't
       // already capture (e.g. because the entity wasn't in the original entity context).
       // ID is embedded directly — no DB lookup needed.
-      const ENTITY_WITH_ID_RE = /\{\{entity:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}/g
       const refsById = new Map(entityRefs.map((e) => [e.id, e]))
-      for (const m of content.matchAll(ENTITY_WITH_ID_RE)) {
+      for (const m of content.matchAll(new RegExp(ENTITY_TOKEN_RE.source, 'g'))) {
         const id   = m[1]
         const name = m[2].trim()
         if (id && !refsById.has(id)) refsById.set(id, { id, name })

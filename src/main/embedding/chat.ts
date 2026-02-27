@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto'
 import { getDatabase } from '../db/index'
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
 import { scheduleEmbedding } from './pipeline'
+import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 
 let _client: Anthropic | null = null
 let _currentKey = ''
@@ -887,8 +888,7 @@ export async function sendChatMessage(
 
   // Scan final response for {{entity:uuid:Name}} tokens — ID is embedded directly.
   const entityRefsMap = new Map<string, { id: string; name: string }>()
-  const ENTITY_WITH_ID_RE = /\{\{entity:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}/g
-  for (const m of finalText.matchAll(ENTITY_WITH_ID_RE)) {
+  for (const m of finalText.matchAll(new RegExp(ENTITY_TOKEN_RE.source, 'g'))) {
     const id   = m[1]
     const name = m[2].trim()
     if (id && name && !entityRefsMap.has(id)) entityRefsMap.set(id, { id, name })

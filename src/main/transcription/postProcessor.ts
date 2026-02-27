@@ -15,6 +15,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { getDatabase } from '../db/index'
 import { scheduleEmbedding } from '../embedding/pipeline'
 import { pushToRenderer } from '../push'
+import { UUID_RE_STR } from '../utils/tokenFormat'
 
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 const MAX_TRANSCRIPT_CHARS = 8000
@@ -57,16 +58,52 @@ export interface ParseContext {
   resolveNote?:   (title: string) => { id: string; label: string } | null
 }
 
-// Groups: [1]=***bold+italic  [2]=___bold+italic  [3]=**bold  [4]=__bold
-//         [5]=*italic  [6]=_italic  [7]=`code`
-//         [8]=[[note title]] [id:uuid]  (title + UUID — ID embedded, multi-word OK)
-//         [9]=[[note title]]            (title only — resolved via ctx)
-//         [10]=@entity name [id:uuid]   (name + UUID — ID embedded, multi-word OK)
-//         [11]=@entity name             (single-word name — resolved via ctx)
+// Inline pattern groups:
+//   [1]=***bold+italic  [2]=___bold+italic  [3]=**bold  [4]=__bold
+//   [5]=*italic  [6]=_italic  [7]=`code`
+//   [8]={{note:uuid}} UUID  [9]={{note:uuid:Title}} title
+//   [10]=[[Note Title]] (name-only, resolved via ctx)
+//   [11]={{entity:uuid}} UUID  [12]={{entity:uuid:Name}} name
+//   [13]=@EntityName (single-word, resolved via ctx)
+//
+// Name capture uses [^}]* (not .*?) so entity/note names with colons, arrows (->),
+// or other special chars are matched reliably without lazy-quantifier edge cases.
+const INLINE_PATTERN = new RegExp(
+  [
+    /\*\*\*(.+?)\*\*\*/.source,           // [1] ***bold+italic***
+    /___(.+?)___/.source,                  // [2] ___bold+italic___
+    /\*\*(.+?)\*\*/.source,               // [3] **bold**
+    /__(.+?)__/.source,                    // [4] __bold__
+    /\*(.+?)\*/.source,                   // [5] *italic*
+    /_(.+?)_/.source,                     // [6] _italic_
+    /`(.+?)`/.source,                     // [7] `code`
+    `\\{\\{note:(${UUID_RE_STR}):([^}]*)\\}\\}`,   // [8][9] {{note:uuid:Title}}
+    /\[\[([^\]]{1,200})\]\]/.source,      // [10] [[Note Title]]
+    `\\{\\{entity:(${UUID_RE_STR}):([^}]*)\\}\\}`, // [11][12] {{entity:uuid:Name}}
+    /(@[A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/.source, // [13] @Name
+  ].join('|'),
+  'g',
+)
+
+/**
+ * Apply one or more TipTap marks to an array of inline nodes.
+ * Non-text nodes (mention, noteLink) are passed through unchanged —
+ * ProseMirror does not support marks on non-text nodes.
+ */
+function withMarks(innerNodes: TipTapNode[], ...markTypes: string[]): TipTapNode[] {
+  const newMarks = markTypes.map((t) => ({ type: t }))
+  return innerNodes.map((n) => {
+    if (n.type !== 'text') return n
+    return { ...n, marks: [...(n.marks ?? []), ...newMarks] }
+  })
+}
+
 function parseInlineMarkdown(text: string, ctx?: ParseContext): TipTapNode[] {
+  // ProseMirror forbids empty text nodes
+  if (!text) return []
+
   const nodes: TipTapNode[] = []
-  const pattern =
-    /\*\*\*(.+?)\*\*\*|___(.+?)___|\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`|\{\{note:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}|\[\[([^\]]{1,200})\]\]|\{\{entity:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}|@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g
+  const pattern = new RegExp(INLINE_PATTERN.source, 'g')
   let lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -76,41 +113,41 @@ function parseInlineMarkdown(text: string, ctx?: ParseContext): TipTapNode[] {
     }
 
     if (match[1] !== undefined || match[2] !== undefined) {
-      nodes.push({ type: 'text', text: (match[1] ?? match[2])!, marks: [{ type: 'bold' }, { type: 'italic' }] })
+      // ***bold+italic*** or ___bold+italic___ — recurse so tokens inside are resolved
+      nodes.push(...withMarks(parseInlineMarkdown(match[1] ?? match[2]!, ctx), 'bold', 'italic'))
     } else if (match[3] !== undefined || match[4] !== undefined) {
-      nodes.push({ type: 'text', text: (match[3] ?? match[4])!, marks: [{ type: 'bold' }] })
+      // **bold** or __bold__ — recurse
+      nodes.push(...withMarks(parseInlineMarkdown(match[3] ?? match[4]!, ctx), 'bold'))
     } else if (match[5] !== undefined || match[6] !== undefined) {
-      nodes.push({ type: 'text', text: (match[5] ?? match[6])!, marks: [{ type: 'italic' }] })
+      // *italic* or _italic_ — recurse
+      nodes.push(...withMarks(parseInlineMarkdown(match[5] ?? match[6]!, ctx), 'italic'))
     } else if (match[7] !== undefined) {
+      // `code` — literal, no token expansion inside code spans
       nodes.push({ type: 'text', text: match[7], marks: [{ type: 'code' }] })
     } else if (match[8] !== undefined) {
-      // {{note:uuid:Name}} — ID embedded directly, no DB lookup needed
-      const id    = match[8]
-      const title = match[9]!.trim()
-      nodes.push({ type: 'noteLink', attrs: { id, label: title } })
+      // {{note:uuid:Title}} — UUID embedded, no DB lookup needed
+      nodes.push({ type: 'noteLink', attrs: { id: match[8], label: match[9]!.trim() } })
     } else if (match[10] !== undefined) {
-      // [[Note Title]] — try to resolve via ctx
+      // [[Note Title]] — resolve via ctx
       const title = match[10].trim()
       const resolved = ctx?.resolveNote?.(title)
-      if (resolved) {
-        nodes.push({ type: 'noteLink', attrs: { id: resolved.id, label: resolved.label } })
-      } else {
-        nodes.push({ type: 'text', text: `[[${title}]]` })
-      }
+      nodes.push(
+        resolved
+          ? { type: 'noteLink', attrs: { id: resolved.id, label: resolved.label } }
+          : { type: 'text', text: `[[${title}]]` },
+      )
     } else if (match[11] !== undefined) {
-      // {{entity:uuid:Name}} — ID embedded directly, no DB lookup needed
-      const id   = match[11]
-      const name = match[12]!.trim()
-      nodes.push({ type: 'mention', attrs: { id, label: name } })
+      // {{entity:uuid:Name}} — UUID embedded, no DB lookup needed
+      nodes.push({ type: 'mention', attrs: { id: match[11], label: match[12]!.trim() } })
     } else if (match[13] !== undefined) {
-      // @Entity Name (single-word, no UUID) — trim trailing punctuation then try to resolve
-      const raw = match[13].replace(/[.,!?;:'")\]]+$/, '').trim()
+      // @EntityName (single word) — trim trailing punctuation, resolve via ctx
+      const raw = match[13].slice(1).replace(/[.,!?;:'")\]]+$/, '').trim()
       const resolved = ctx?.resolveEntity?.(raw)
-      if (resolved) {
-        nodes.push({ type: 'mention', attrs: { id: resolved.id, label: resolved.label } })
-      } else {
-        nodes.push({ type: 'text', text: `@${raw}` })
-      }
+      nodes.push(
+        resolved
+          ? { type: 'mention', attrs: { id: resolved.id, label: resolved.label } }
+          : { type: 'text', text: `@${raw}` },
+      )
     }
 
     lastIndex = match.index + match[0].length
@@ -120,8 +157,6 @@ function parseInlineMarkdown(text: string, ctx?: ParseContext): TipTapNode[] {
     nodes.push({ type: 'text', text: text.slice(lastIndex) })
   }
 
-  // ProseMirror forbids empty text nodes — return [] for empty input
-  if (!text) return []
   return nodes.length > 0 ? nodes : [{ type: 'text', text }]
 }
 
