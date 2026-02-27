@@ -152,6 +152,16 @@ function onOpenSomething(e: MouseEvent, id: string): void {
 
 This applies to: list item clicks (`NoteList`, `EntityList`), "Open →" buttons in popups (`EntityMentionPopup`), any future "Go to" links, search result items, backlink entries, etc. **Do not add a new content-opening entry point without wiring up all three modes.**
 
+### Consistency & Reuse Rule — ALWAYS FOLLOW
+
+**Whenever a feature is planned or implemented, it must prioritise consistency in behaviour and look, and reuse existing abstractions where helpful.**
+
+- If a pattern already exists (file attachment, `@mention`, `[[` note-link, chip display, dropdown picker, open-mode click handling…), use it — don't reinvent it inline.
+- Shared logic → composable (e.g. `useFileAttachment`, `useInputMention`, `useInputNoteLink`).
+- Shared visual element → component (e.g. `AttachmentBar`).
+- Shared types → exported from the canonical source (composable or store), re-exported for backward compatibility where needed.
+- Before writing any new UI pattern, search the codebase for an existing equivalent. Divergence between surfaces is a bug.
+
 ### Key Design Decisions
 
 - **Local-first**: All data on-device in SQLite; no cloud backend currently

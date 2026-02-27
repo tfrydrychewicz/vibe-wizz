@@ -10,6 +10,7 @@ Wizz is the operating system for an engineering manager's brain. It captures eve
 2. **Context builds over time.** Every note, transcript, and interaction makes Wizz smarter. After 6 months, Wizz knows your org better than your wiki.
 3. **AI acts, not just answers.** Wizz doesn't wait for queries — it proactively surfaces follow-ups, conflicts, and opportunities.
 4. **Local-first, private by default.** Your management notes are sensitive. Data lives on your machine. Cloud is opt-in, only for AI inference.
+5. **Consistency in behaviour and look.** Every surface that shares a concept (e.g. file attachment, @mention, note linking) must look and behave identically. When planning or implementing a feature, always check whether a similar pattern already exists and reuse it — shared composables, shared components, shared types. Divergence between surfaces is a bug, not a style choice.
 
 ## Target User
 
