@@ -66,7 +66,7 @@ export interface ParseContext {
 function parseInlineMarkdown(text: string, ctx?: ParseContext): TipTapNode[] {
   const nodes: TipTapNode[] = []
   const pattern =
-    /\*\*\*(.+?)\*\*\*|___(.+?)___|\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`|\[\[([^\]]{1,200})\]\]\s*\[id:([a-f0-9-]{36})\]|\[\[([^\]]{1,200})\]\]|@([A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*(?:[ ][A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*){0,9})\s*\[id:([a-f0-9-]{36})\]|@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g
+    /\*\*\*(.+?)\*\*\*|___(.+?)___|\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`|\{\{note:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}|\[\[([^\]]{1,200})\]\]|\{\{entity:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}|@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g
   let lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -84,9 +84,9 @@ function parseInlineMarkdown(text: string, ctx?: ParseContext): TipTapNode[] {
     } else if (match[7] !== undefined) {
       nodes.push({ type: 'text', text: match[7], marks: [{ type: 'code' }] })
     } else if (match[8] !== undefined) {
-      // [[Note Title]] [id:uuid] — ID embedded directly, no DB lookup needed
-      const title = match[8].trim()
-      const id    = match[9]!
+      // {{note:uuid:Name}} — ID embedded directly, no DB lookup needed
+      const id    = match[8]
+      const title = match[9]!.trim()
       nodes.push({ type: 'noteLink', attrs: { id, label: title } })
     } else if (match[10] !== undefined) {
       // [[Note Title]] — try to resolve via ctx
@@ -98,9 +98,9 @@ function parseInlineMarkdown(text: string, ctx?: ParseContext): TipTapNode[] {
         nodes.push({ type: 'text', text: `[[${title}]]` })
       }
     } else if (match[11] !== undefined) {
-      // @EntityName [id:uuid] — ID embedded directly, no DB lookup needed (multi-word OK)
-      const name = match[11].trim()
-      const id   = match[12]!
+      // {{entity:uuid:Name}} — ID embedded directly, no DB lookup needed
+      const id   = match[11]
+      const name = match[12]!.trim()
       nodes.push({ type: 'mention', attrs: { id, label: name } })
     } else if (match[13] !== undefined) {
       // @Entity Name (single-word, no UUID) — trim trailing punctuation then try to resolve

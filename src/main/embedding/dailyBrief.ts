@@ -18,6 +18,7 @@ type CalendarRow = {
   start_at: string
   end_at: string
   attendees: string
+  linked_note_id: string | null
   linked_note_title: string | null
 }
 
@@ -28,9 +29,11 @@ type ActionRow = {
   due_date: string | null
   created_at: string
   last_activity: string              // COALESCE(updated_at, created_at)
+  assigned_entity_id: string | null
   assigned_entity_name: string | null
   assigned_entity_type_id: string | null
   source_note_title: string | null
+  source_note_id: string | null
 }
 
 type RecentNote = {
@@ -41,6 +44,7 @@ type RecentNote = {
 }
 
 type HistoricalNote = {
+  id: string
   title: string
   body_plain: string
   updated_at: string
@@ -66,7 +70,7 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
   const todayEvents = db
     .prepare(
       `SELECT ce.id, ce.title, ce.start_at, ce.end_at, ce.attendees,
-              n.title AS linked_note_title
+              ce.linked_note_id, n.title AS linked_note_title
        FROM calendar_events ce
        LEFT JOIN notes n ON n.id = ce.linked_note_id AND n.archived_at IS NULL
        WHERE ce.start_at >= ? AND ce.start_at <= ?
@@ -79,8 +83,9 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
     .prepare(
       `SELECT ai.id, ai.title, ai.status, ai.due_date, ai.created_at,
               COALESCE(ai.updated_at, ai.created_at) AS last_activity,
+              ai.assigned_entity_id,
               e.name AS assigned_entity_name, e.type_id AS assigned_entity_type_id,
-              n.title AS source_note_title
+              ai.source_note_id, n.title AS source_note_title
        FROM action_items ai
        LEFT JOIN entities e ON e.id = ai.assigned_entity_id AND e.trashed_at IS NULL
        LEFT JOIN notes n ON n.id = ai.source_note_id AND n.archived_at IS NULL
@@ -146,7 +151,7 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
 
     const prevNotes = db
       .prepare(
-        `SELECT n.title, n.body_plain, n.updated_at FROM notes n
+        `SELECT n.id, n.title, n.body_plain, n.updated_at FROM notes n
          JOIN entity_mentions em ON em.note_id = n.id
          JOIN entities e ON e.id = em.entity_id AND e.trashed_at IS NULL
          WHERE e.name LIKE ? AND n.archived_at IS NULL
@@ -157,7 +162,7 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
       .all(`%${attendeeName}%`) as HistoricalNote[]
 
     if (prevNotes.length > 0) {
-      const lines = prevNotes.map((n) => `  - "${n.title}" (${n.updated_at.slice(0, 10)})`).join('\n')
+      const lines = prevNotes.map((n) => `  - {{note:${n.id}:${n.title}}} (${n.updated_at.slice(0, 10)})`).join('\n')
       historicalContext.push(`Recent notes mentioning ${attendeeName}:\n${lines}`)
     }
   }
@@ -178,7 +183,11 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
               const att = JSON.parse(ev.attendees) as { name?: string; email?: string }[]
               if (att.length > 0) line += ` (${att.map((a) => a.name || a.email || '?').join(', ')})`
             } catch { /* ignore */ }
-            if (ev.linked_note_title) line += ` [notes: "${ev.linked_note_title}"]`
+            if (ev.linked_note_id && ev.linked_note_title) {
+              line += ` [notes: {{note:${ev.linked_note_id}:${ev.linked_note_title}}}]`
+            } else if (ev.linked_note_title) {
+              line += ` [notes: "${ev.linked_note_title}"]`
+            }
             return line
           })
           .join('\n')
@@ -198,8 +207,16 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
 
   function fmtAction(a: ActionRow): string {
     let s = `- ${a.title}`
-    if (a.assigned_entity_name) s += ` → ${a.assigned_entity_name}`
-    if (a.source_note_title) s += ` (from: "${a.source_note_title}")`
+    if (a.assigned_entity_id && a.assigned_entity_name) {
+      s += ` → {{entity:${a.assigned_entity_id}:${a.assigned_entity_name}}}`
+    } else if (a.assigned_entity_name) {
+      s += ` → ${a.assigned_entity_name}`
+    }
+    if (a.source_note_id && a.source_note_title) {
+      s += ` (from: {{note:${a.source_note_id}:${a.source_note_title}}})`
+    } else if (a.source_note_title) {
+      s += ` (from: "${a.source_note_title}")`
+    }
     return s
   }
 
@@ -226,7 +243,7 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
     const parts: string[] = []
     for (const note of recentNotes) {
       const excerpt = note.body_plain.length > 600 ? note.body_plain.slice(0, 600) + '…' : note.body_plain
-      const block = `"${note.title}" (${note.updated_at.slice(0, 10)}):\n${excerpt}`
+      const block = `{{note:${note.id}:${note.title}}} (${note.updated_at.slice(0, 10)}):\n${excerpt}`
       if (total + block.length > MAX_NOTES_CHARS) break
       parts.push(block)
       total += block.length
@@ -246,8 +263,15 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
     staleLines = staleFollowups
       .map((a) => {
         const days = daysSince(a.last_activity)
-        let s = `- "${a.title}" → @${a.assigned_entity_name} (no updates in ${days} day${days !== 1 ? 's' : ''})`
-        if (a.source_note_title) s += ` — from: "${a.source_note_title}"`
+        const entityRef = a.assigned_entity_id && a.assigned_entity_name
+          ? `{{entity:${a.assigned_entity_id}:${a.assigned_entity_name}}}`
+          : a.assigned_entity_name ?? '?'
+        let s = `- "${a.title}" → ${entityRef} (no updates in ${days} day${days !== 1 ? 's' : ''})`
+        if (a.source_note_id && a.source_note_title) {
+          s += ` — from: {{note:${a.source_note_id}:${a.source_note_title}}}`
+        } else if (a.source_note_title) {
+          s += ` — from: "${a.source_note_title}"`
+        }
         return s
       })
       .join('\n')
@@ -282,7 +306,10 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
     `- For 1:1 meetings, mention topics from the historical notes when available.\n` +
     `- Use - [ ] checkbox syntax for every action item line (not - or *).\n` +
     `- Keep the brief concise (aim for 300–600 words total).\n` +
-    `- Write only the markdown content, no preamble or meta-commentary.`
+    `- Write only the markdown content, no preamble or meta-commentary.\n` +
+    `- When referencing an entity from the data, preserve the {{entity:uuid:Name}} token exactly.\n` +
+    `- When referencing a note from the data, preserve the {{note:uuid:Name}} token exactly.\n` +
+    `- These tokens render as interactive chips in the UI — do not rewrite them as plain text.`
 
   try {
     const response = await client.messages.create({

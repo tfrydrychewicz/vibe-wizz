@@ -291,11 +291,10 @@ function renderMessage(
   // Build lookup maps
   const noteByTitle = new Map(references.map((r) => [r.title.toLowerCase(), r]))
 
-  // 1a. Swap out @EntityName [id:uuid] tokens — ID is embedded directly in the response text.
-  //     This pattern allows multi-word entity names; the UUID suffix makes it unambiguous.
+  // 1a. Swap out {{entity:uuid:Name}} tokens — ID is embedded directly in the response text.
   //     Must run before pass 1b so these are not double-matched.
-  const ENTITY_WITH_ID_RE = /@([A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*(?:[ ][A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*){0,9})\s*\[id:([a-f0-9-]{36})\]/g
-  let withEntityPlaceholders = content.replace(ENTITY_WITH_ID_RE, (_m, rawName: string, id: string) => {
+  const ENTITY_WITH_ID_RE = /\{\{entity:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}/g
+  let withEntityPlaceholders = content.replace(ENTITY_WITH_ID_RE, (_m, id: string, rawName: string) => {
     const name = rawName.trim()
     entityRefItems.push({ id, name })
     return `WIZZENT${entityRefItems.length - 1}WIZZENT`
@@ -320,10 +319,10 @@ function renderMessage(
     }
   }
 
-  // 1c. Swap out [[Note Title]] [id:uuid] tokens — ID embedded directly in response text.
+  // 1c. Swap out {{note:uuid:Name}} tokens — ID embedded directly in response text.
   //     Must run before the plain [[Title]] pass so these aren't double-matched.
-  const NOTE_WITH_ID_RE = /\[\[([^\]]{1,200})\]\]\s*\[id:([a-f0-9-]{36})\]/g
-  const withNoteIdPlaceholders = withEntityPlaceholders.replace(NOTE_WITH_ID_RE, (_m, title: string, id: string) => {
+  const NOTE_WITH_ID_RE = /\{\{note:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}/g
+  const withNoteIdPlaceholders = withEntityPlaceholders.replace(NOTE_WITH_ID_RE, (_m, id: string, title: string) => {
     const trimmedTitle = title.trim()
     // Push into noteRefTitles but also add to references lookup so WIZZREF resolves correctly
     if (!noteByTitle.has(trimmedTitle.toLowerCase())) {

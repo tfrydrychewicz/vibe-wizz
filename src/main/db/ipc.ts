@@ -1980,14 +1980,14 @@ export function registerDbIpcHandlers(): void {
         }
       }
 
-      // Collect any @Name [id:uuid] refs from the response that sendChatMessage() didn't
+      // Collect any {{entity:uuid:Name}} refs from the response that sendChatMessage() didn't
       // already capture (e.g. because the entity wasn't in the original entity context).
       // ID is embedded directly — no DB lookup needed.
-      const ENTITY_WITH_ID_RE = /@([A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*(?:[ ][A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*){0,9})\s*\[id:([a-f0-9-]{36})\]/g
+      const ENTITY_WITH_ID_RE = /\{\{entity:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}/g
       const refsById = new Map(entityRefs.map((e) => [e.id, e]))
       for (const m of content.matchAll(ENTITY_WITH_ID_RE)) {
-        const name = m[1].trim()
-        const id   = m[2]
+        const id   = m[1]
+        const name = m[2].trim()
         if (id && !refsById.has(id)) refsById.set(id, { id, name })
       }
       entityRefs = Array.from(refsById.values())

@@ -135,27 +135,37 @@ async function onBriefClick(e: MouseEvent): Promise<void> {
   const target = e.target as HTMLElement
   const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
 
+  // Entity: prefer embedded ID ({{entity:uuid:Name}} tokens), fall back to name search
   const entityBtn = target.closest('[data-entity-name]') as HTMLElement | null
   if (entityBtn) {
+    const entityId = entityBtn.dataset.entityId
     const name = entityBtn.dataset.entityName
-    if (!name) return
-    try {
-      const rows = await window.api.invoke('entities:search', { query: name }) as { id: string; name: string; type_id: string }[]
-      const entity = rows.find((r) => r.name.toLowerCase() === name.toLowerCase())
-      if (entity) emit('open-entity', { entityId: entity.id, mode })
-    } catch { /* not found — no-op */ }
+    if (entityId) {
+      emit('open-entity', { entityId, mode })
+    } else if (name) {
+      try {
+        const rows = await window.api.invoke('entities:search', { query: name }) as { id: string; name: string; type_id: string }[]
+        const entity = rows.find((r) => r.name.toLowerCase() === name.toLowerCase())
+        if (entity) emit('open-entity', { entityId: entity.id, mode })
+      } catch { /* not found — no-op */ }
+    }
     return
   }
 
+  // Note: prefer embedded ID ({{note:uuid:Name}} tokens), fall back to title search
   const noteBtn = target.closest('[data-note-title]') as HTMLElement | null
   if (!noteBtn) return
+  const noteId = noteBtn.dataset.noteId
   const title = noteBtn.dataset.noteTitle
-  if (!title) return
-  try {
-    const rows = await window.api.invoke('notes:search', { query: title }) as { id: string; title: string }[]
-    const note = rows.find((r) => r.title.toLowerCase() === title.toLowerCase())
-    if (note) emit('open-note', { noteId: note.id, title: note.title, mode })
-  } catch { /* not found — no-op */ }
+  if (noteId && title) {
+    emit('open-note', { noteId, title, mode })
+  } else if (title) {
+    try {
+      const rows = await window.api.invoke('notes:search', { query: title }) as { id: string; title: string }[]
+      const note = rows.find((r) => r.title.toLowerCase() === title.toLowerCase())
+      if (note) emit('open-note', { noteId: note.id, title: note.title, mode })
+    } catch { /* not found — no-op */ }
+  }
 }
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
@@ -169,12 +179,22 @@ function escapeHtml(text: string): string {
 }
 
 function renderInline(raw: string): string {
-  // Pass 1: replace @EntityName and [[NoteTitle]] with placeholders before escaping
-  // so the escape step doesn't break the button HTML we'll inject.
-  const entityItems: { name: string }[] = []
-  const noteLinkTitles: string[] = []
+  const entityItems: { id?: string; name: string }[] = []
+  const noteLinkItems: { id?: string; title: string }[] = []
 
-  const withEntityPlaceholders = raw.replace(
+  const UUID_RE = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+
+  // Pass 1a: {{entity:uuid:Name}} — ID embedded, no DB lookup needed
+  const withEntityId = raw.replace(
+    new RegExp(`\\{\\{entity:(${UUID_RE}):(.*?)\\}\\}`, 'g'),
+    (_m, id: string, name: string) => {
+      entityItems.push({ id, name: name.trim() })
+      return `WIZZENT${entityItems.length - 1}WIZZENT`
+    },
+  )
+
+  // Pass 1b: @EntityName — plain fallback, resolved by name at click time
+  const withEntityPlaceholders = withEntityId.replace(
     /@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g,
     (_m, name: string) => {
       const trimmed = name.replace(/[.,!?;:'")\]]+$/, '').trim()
@@ -182,11 +202,22 @@ function renderInline(raw: string): string {
       return `WIZZENT${entityItems.length - 1}WIZZENT`
     },
   )
-  const withNoteLinkPlaceholders = withEntityPlaceholders.replace(
+
+  // Pass 1c: {{note:uuid:Name}} — ID embedded, no DB lookup needed
+  const withNoteId = withEntityPlaceholders.replace(
+    new RegExp(`\\{\\{note:(${UUID_RE}):(.*?)\\}\\}`, 'g'),
+    (_m, id: string, title: string) => {
+      noteLinkItems.push({ id, title: title.trim() })
+      return `WIZZLINK${noteLinkItems.length - 1}WIZZLINK`
+    },
+  )
+
+  // Pass 1d: [[NoteTitle]] — plain fallback, resolved by title at click time
+  const withNoteLinkPlaceholders = withNoteId.replace(
     /\[\[([^\]]{1,200})\]\]/g,
     (_m, title: string) => {
-      noteLinkTitles.push(title.trim())
-      return `WIZZLINK${noteLinkTitles.length - 1}WIZZLINK`
+      noteLinkItems.push({ title: title.trim() })
+      return `WIZZLINK${noteLinkItems.length - 1}WIZZLINK`
     },
   )
 
@@ -204,11 +235,14 @@ function renderInline(raw: string): string {
   result = result.replace(/WIZZENT(\d+)WIZZENT/g, (_m, idxStr: string) => {
     const item = entityItems[Number(idxStr)]
     if (!item) return ''
-    return `<button class="brief-entity-ref" data-entity-name="${escapeHtml(item.name)}">@${escapeHtml(item.name)}</button>`
+    const idAttr = item.id ? ` data-entity-id="${escapeHtml(item.id)}"` : ''
+    return `<button class="brief-entity-ref"${idAttr} data-entity-name="${escapeHtml(item.name)}">@${escapeHtml(item.name)}</button>`
   })
   result = result.replace(/WIZZLINK(\d+)WIZZLINK/g, (_m, idxStr: string) => {
-    const title = noteLinkTitles[Number(idxStr)] ?? ''
-    return `<button class="brief-note-ref" data-note-title="${escapeHtml(title)}">${escapeHtml(title)}</button>`
+    const item = noteLinkItems[Number(idxStr)]
+    if (!item) return ''
+    const idAttr = item.id ? ` data-note-id="${escapeHtml(item.id)}"` : ''
+    return `<button class="brief-note-ref"${idAttr} data-note-title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</button>`
   })
 
   return result

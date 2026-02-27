@@ -64,7 +64,7 @@ export type EntityLinkedNote = {
 
 export type ResolvedField = {
   name: string
-  value: string  // human-readable; refs formatted as "@Name [id:uuid]" or "[[Title]] [id:uuid]"
+  value: string  // human-readable; refs formatted as "{{entity:uuid:Name}}" or "{{note:uuid:Name}}"
 }
 
 export type RichEntityContext = {
@@ -609,7 +609,7 @@ export async function generateInlineContent(
 
   if (entityContext && entityContext.length > 0) {
     const entityLines = entityContext.map((e) => {
-      let line = `[id:${e.id}] @${e.name} (type: ${e.type_name})`
+      let line = `{{entity:${e.id}:${e.name}}} (type: ${e.type_name})`
       if (e.fields && e.fields !== '{}') {
         try {
           const parsed = JSON.parse(e.fields) as Record<string, unknown>
@@ -624,9 +624,9 @@ export async function generateInlineContent(
     })
     systemPrompt += `\n\nExplicitly mentioned entities (use their data to inform the content):\n${entityLines.join('\n')}`
     systemPrompt +=
-      '\n\nWhen referencing one of these entities in your output, write @EntityName [id:uuid] ' +
-      '(include the [id:...] exactly as listed above). ' +
-      'When referencing a note by title, write [[Note Title]] [id:uuid] (if the note\'s [id:...] is known), ' +
+      '\n\nWhen referencing one of these entities in your output, write {{entity:uuid:Name}} ' +
+      '(use the exact uuid listed above). ' +
+      'When referencing a note by title, write {{note:uuid:Name}} (if the uuid is known), ' +
       'or just [[Note Title]] if unknown. ' +
       'These tokens will be rendered as interactive chips in the editor.'
   }
@@ -727,7 +727,7 @@ export async function sendChatMessage(
 
   if (pinnedNotes.length > 0) {
     const pinnedStr = pinnedNotes
-      .map((n) => `### [[${n.title}]] [id:${n.id}]\n${n.excerpt}`)
+      .map((n) => `### {{note:${n.id}:${n.title}}}\n${n.excerpt}`)
       .join('\n\n---\n\n')
     systemPrompt +=
       '\n\nThe user has explicitly attached the following notes to this conversation. ' +
@@ -737,7 +737,7 @@ export async function sendChatMessage(
 
   if (contextNotes.length > 0) {
     let contextStr = contextNotes
-      .map((n) => `Note: "${n.title}" [id:${n.id}]\n${n.excerpt}`)
+      .map((n) => `{{note:${n.id}:${n.title}}}\n${n.excerpt}`)
       .join('\n\n---\n\n')
 
     if (contextStr.length > MAX_CONTEXT_CHARS) {
@@ -749,9 +749,9 @@ export async function sendChatMessage(
       'including related notes retrieved via knowledge graph connections (wiki-links and shared entity mentions):\n\n' +
       contextStr +
       '\n\nWhen referencing an entity or note from the context, ALWAYS include its ID:\n' +
-      '- Entity mention: @EntityName [id:uuid]  (use the exact [id:...] provided)\n' +
-      '- Note reference: [[Note Title]] [id:uuid]  (use the exact [id:...] provided)\n' +
-      '- Legacy note citation (only if no [id:...] was provided): [Note: "Title"]\n' +
+      '- Entity mention: {{entity:uuid:Name}}  (use the exact uuid provided)\n' +
+      '- Note reference: {{note:uuid:Name}}  (use the exact uuid provided)\n' +
+      '- Legacy note citation (only if no uuid was provided): [Note: "Title"]\n' +
       'These tokens render as clickable chips in the UI.'
   }
 
@@ -776,7 +776,7 @@ export async function sendChatMessage(
       d === 0 ? '← directly mentioned' : d === 1 ? '← via entity field' : '← via entity field (no further expansion)'
     const entityBlocks = richEntities
       .map((e) => {
-        const header = `### @${e.name} (${e.type_name}) [id:${e.id}]  ${depthLabel(e.depth)}`
+        const header = `### {{entity:${e.id}:${e.name}}} (${e.type_name})  ${depthLabel(e.depth)}`
         const fieldLines = e.fields.map((f) => `  ${f.name}: ${f.value}`).join('\n')
         return fieldLines ? `${header}\n${fieldLines}` : header
       })
@@ -784,16 +784,16 @@ export async function sendChatMessage(
     systemPrompt +=
       '\n\n## Entity context\n' +
       'Entities mentioned or referenced in this conversation.\n' +
-      'When mentioning any entity in your response, write @EntityName [id:uuid] (use the [id:...] exactly as listed).\n' +
-      'Use [id:...] when assigning tasks or referencing entities (e.g. only assign to Person-type entities):\n\n' +
+      'When mentioning any entity in your response, write {{entity:uuid:Name}} (use the exact uuid listed).\n' +
+      'Use the uuid when assigning tasks or referencing entities (e.g. only assign to Person-type entities):\n\n' +
       entityBlocks
   } else if (entityContext.length > 0) {
     const entityLines = entityContext
-      .map((e) => `- [id:${e.id}] @${e.name} (type: ${e.type_name})`)
+      .map((e) => `- {{entity:${e.id}:${e.name}}} (type: ${e.type_name})`)
       .join('\n')
     systemPrompt +=
       '\n\nEntities mentioned in this conversation. When mentioning any entity in your response, ' +
-      'write @EntityName [id:uuid] (use the [id:...] exactly as listed). ' +
+      'write {{entity:uuid:Name}} (use the exact uuid listed). ' +
       'Always confirm the entity type is appropriate for the operation ' +
       '(e.g. only assign tasks to Person-type entities):\n' +
       entityLines
@@ -801,7 +801,7 @@ export async function sendChatMessage(
 
   if (entityLinkedNotes.length > 0) {
     const noteBlocks = entityLinkedNotes
-      .map((n) => `### [[${n.title}]] [id:${n.id}]\n${n.excerpt}`)
+      .map((n) => `### {{note:${n.id}:${n.title}}}\n${n.excerpt}`)
       .join('\n\n---\n\n')
     systemPrompt +=
       '\n\n## Notes linked via entity fields\n' +
@@ -890,12 +890,12 @@ export async function sendChatMessage(
     loopMessages.push({ role: 'user', content: toolResults })
   }
 
-  // Scan final response for @EntityName [id:uuid] tokens — ID is embedded directly.
+  // Scan final response for {{entity:uuid:Name}} tokens — ID is embedded directly.
   const entityRefsMap = new Map<string, { id: string; name: string }>()
-  const ENTITY_WITH_ID_RE = /@([A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*(?:[ ][A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*){0,9})\s*\[id:([a-f0-9-]{36})\]/g
+  const ENTITY_WITH_ID_RE = /\{\{entity:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(.*?)\}\}/g
   for (const m of finalText.matchAll(ENTITY_WITH_ID_RE)) {
-    const name = m[1].trim()
-    const id   = m[2]
+    const id   = m[1]
+    const name = m[2].trim()
     if (id && name && !entityRefsMap.has(id)) entityRefsMap.set(id, { id, name })
   }
   const entityRefs = Array.from(entityRefsMap.values())
