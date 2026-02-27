@@ -4,17 +4,10 @@ import { marked } from 'marked'
 import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText } from 'lucide-vue-next'
 import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction, type AttachedImage, type AttachedFile } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
-
-interface EntityResult {
-  id: string
-  name: string
-  type_name: string
-}
-
-interface NoteResult {
-  id: string
-  title: string
-}
+import { useInputMention } from '../composables/useInputMention'
+import { useInputNoteLink } from '../composables/useInputNoteLink'
+import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
+import AttachmentBar from './AttachmentBar.vue'
 
 const emit = defineEmits<{
   close: []
@@ -34,31 +27,45 @@ const inputText = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const attachedImages = ref<AttachedImage[]>([])
-const attachedFiles = ref<AttachedFile[]>([])
-const isDragOver = ref(false)
 const selectedModel = ref<ModelId>('claude-sonnet-4-6')
 
-// ── @mention entity picker ────────────────────────────────────────────────────
-const mentionedEntities = ref<EntityResult[]>([])  // entities confirmed for this session
-const mentionActive = ref(false)
-const mentionQuery = ref('')
-const mentionStart = ref(-1)  // index of @ in textarea value
-const mentionResults = ref<EntityResult[]>([])
-const mentionIndex = ref(0)
-let mentionTimer: ReturnType<typeof setTimeout> | null = null
+// ── File attachment (shared composable) ──────────────────────────────────────
+const {
+  attachedImages,
+  attachedFiles,
+  isDragOver,
+  dropError,
+  removeImage,
+  removeFile,
+  onPaste,
+  onDrop,
+  onFileInputChange,
+} = useFileAttachment()
 
-// ── [[note link picker ────────────────────────────────────────────────────────
-const mentionedNotes = ref<NoteResult[]>([])  // notes pinned for this session
-const noteLinkActive = ref(false)
-const noteLinkQuery = ref('')
-const noteLinkStart = ref(-1)  // index of [[ in textarea value
-const noteLinkResults = ref<NoteResult[]>([])
-const noteLinkIndex = ref(0)
-let noteLinkTimer: ReturnType<typeof setTimeout> | null = null
+// ── @mention + [[note link pickers (shared composables) ──────────────────────
+const {
+  mentionActive,
+  mentionResults,
+  mentionIndex,
+  mentionedEntities,
+  updateState: updateMentionState,
+  handleKeydown: handleMentionKeydown,
+  pick: pickMention,
+  close: closeMention,
+  removeEntity: removeMentionEntity,
+} = useInputMention(textareaRef, inputText, adjustTextareaHeight)
 
-const SUPPORTED_FILE_TYPES = '.pdf,.txt,.csv,.md'
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+const {
+  noteLinkActive,
+  noteLinkResults,
+  noteLinkIndex,
+  mentionedNotes,
+  updateState: updateNoteLinkState,
+  handleKeydown: handleNoteLinkKeydown,
+  pick: pickNote,
+  close: closeNoteLinkPicker,
+  removeNote: removeNoteLinkNote,
+} = useInputNoteLink(textareaRef, inputText, adjustTextareaHeight)
 
 // Configure marked: no GFM tables/extensions needed beyond basic, keep it safe
 marked.setOptions({ breaks: true })
@@ -88,224 +95,10 @@ function adjustTextareaHeight(): void {
   el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 }
 
-function processFile(file: File): void {
-  const mime = file.type as AttachedImage['mimeType']
-  if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(mime)) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    attachedImages.value.push({
-      id: crypto.randomUUID(),
-      dataUrl: reader.result as string,
-      mimeType: mime,
-    })
-  }
-  reader.readAsDataURL(file)
-}
-
-function processDocumentFile(file: File): void {
-  if (file.size > MAX_FILE_SIZE) return  // silently ignore oversized files
-  const isPdf = file.type === 'application/pdf'
-  const isText = file.type.startsWith('text/') || file.name.endsWith('.md') || file.name.endsWith('.csv')
-  if (!isPdf && !isText) return
-
-  const reader = new FileReader()
-  reader.onload = () => {
-    let content: string
-    const apiMime: AttachedFile['mimeType'] = isPdf ? 'application/pdf' : 'text/plain'
-    if (isPdf) {
-      // FileReader.readAsDataURL gives "data:application/pdf;base64,<data>" — strip the prefix
-      const dataUrl = reader.result as string
-      content = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
-    } else {
-      content = reader.result as string
-    }
-    attachedFiles.value.push({ id: crypto.randomUUID(), name: file.name, content, mimeType: apiMime, size: file.size })
-  }
-  if (isPdf) reader.readAsDataURL(file)
-  else reader.readAsText(file)
-}
-
-function onFileInputChange(e: Event): void {
-  for (const file of (e.target as HTMLInputElement).files ?? []) {
-    processDocumentFile(file)
-  }
-  // Reset so the same file can be re-attached after removal
-  if (fileInputRef.value) fileInputRef.value.value = ''
-}
-
-function removeFile(id: string): void {
-  const idx = attachedFiles.value.findIndex((f) => f.id === id)
-  if (idx !== -1) attachedFiles.value.splice(idx, 1)
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function onPaste(e: ClipboardEvent): void {
-  for (const item of e.clipboardData?.items ?? []) {
-    if (item.kind === 'file' && item.type.startsWith('image/')) {
-      e.preventDefault()
-      const file = item.getAsFile()
-      if (file) processFile(file)
-    }
-  }
-}
-
-function onDrop(e: DragEvent): void {
-  isDragOver.value = false
-  for (const file of e.dataTransfer?.files ?? []) {
-    if (file.type.startsWith('image/')) processFile(file)
-    else processDocumentFile(file)
-  }
-}
-
-function removeImage(id: string): void {
-  const idx = attachedImages.value.findIndex((img) => img.id === id)
-  if (idx !== -1) attachedImages.value.splice(idx, 1)
-}
-
-// ── @mention entity picker ────────────────────────────────────────────────────
-
-function closeMention(): void {
-  mentionActive.value = false
-  mentionResults.value = []
-  mentionStart.value = -1
-  mentionQuery.value = ''
-  mentionIndex.value = 0
-  if (mentionTimer) { clearTimeout(mentionTimer); mentionTimer = null }
-}
-
-function debouncedMentionSearch(query: string): void {
-  if (mentionTimer) { clearTimeout(mentionTimer); mentionTimer = null }
-  mentionResults.value = []
-  mentionIndex.value = 0
-  mentionTimer = setTimeout(async () => {
-    try {
-      const results = await window.api.invoke('entities:search', { query }) as EntityResult[]
-      mentionResults.value = results.slice(0, 8)
-    } catch {
-      mentionResults.value = []
-    }
-  }, 150)
-}
-
-function updateMentionState(): void {
-  const ta = textareaRef.value
-  if (!ta) return
-  const val = ta.value
-  const pos = ta.selectionStart ?? val.length
-  const before = val.slice(0, pos)
-
-  // @entity mention check (takes priority)
-  const atMatch = before.match(/@([^\s@]*)$/)
-  if (atMatch) {
-    const newStart = before.length - atMatch[0].length
-    const newQuery = atMatch[1]
-    const stateChanged = newStart !== mentionStart.value || newQuery !== mentionQuery.value
-    mentionStart.value = newStart
-    mentionQuery.value = newQuery
-    mentionActive.value = true
-    closeNoteLinkPicker()
-    if (stateChanged) debouncedMentionSearch(newQuery)
-    return
-  }
-  closeMention()
-
-  // [[note link check (only when no @ trigger is active)
-  const noteLinkMatch = before.match(/\[\[([^\]]*)$/)
-  if (noteLinkMatch) {
-    const newStart = before.length - noteLinkMatch[0].length
-    const newQuery = noteLinkMatch[1]
-    const stateChanged = newStart !== noteLinkStart.value || newQuery !== noteLinkQuery.value
-    noteLinkStart.value = newStart
-    noteLinkQuery.value = newQuery
-    noteLinkActive.value = true
-    if (stateChanged) debouncedNoteLinkSearch(newQuery)
-    return
-  }
-  closeNoteLinkPicker()
-}
-
 function onInputWithMention(): void {
   adjustTextareaHeight()
-  updateMentionState()
-}
-
-function pickMention(entity: EntityResult): void {
-  const ta = textareaRef.value
-  if (!ta || mentionStart.value < 0) return
-  const val = ta.value
-  const cursorPos = ta.selectionStart ?? val.length
-  inputText.value = val.slice(0, mentionStart.value) + `@${entity.name}` + val.slice(cursorPos)
-  // Add to mentioned entities (deduplicate)
-  if (!mentionedEntities.value.find((e) => e.id === entity.id)) {
-    mentionedEntities.value.push(entity)
-  }
-  const insertEnd = mentionStart.value + entity.name.length + 1
-  closeMention()
-  nextTick(() => {
-    ta.setSelectionRange(insertEnd, insertEnd)
-    ta.focus()
-    adjustTextareaHeight()
-  })
-}
-
-function removeMentionEntity(id: string): void {
-  const idx = mentionedEntities.value.findIndex((e) => e.id === id)
-  if (idx !== -1) mentionedEntities.value.splice(idx, 1)
-}
-
-// ── [[note link picker ────────────────────────────────────────────────────────
-
-function closeNoteLinkPicker(): void {
-  noteLinkActive.value = false
-  noteLinkResults.value = []
-  noteLinkStart.value = -1
-  noteLinkQuery.value = ''
-  noteLinkIndex.value = 0
-  if (noteLinkTimer) { clearTimeout(noteLinkTimer); noteLinkTimer = null }
-}
-
-function debouncedNoteLinkSearch(query: string): void {
-  if (noteLinkTimer) { clearTimeout(noteLinkTimer); noteLinkTimer = null }
-  noteLinkResults.value = []
-  noteLinkIndex.value = 0
-  noteLinkTimer = setTimeout(async () => {
-    try {
-      const results = await window.api.invoke('notes:search', { query }) as NoteResult[]
-      noteLinkResults.value = results.slice(0, 8)
-    } catch {
-      noteLinkResults.value = []
-    }
-  }, 150)
-}
-
-function pickNote(note: NoteResult): void {
-  const ta = textareaRef.value
-  if (!ta || noteLinkStart.value < 0) return
-  const val = ta.value
-  const cursorPos = ta.selectionStart ?? val.length
-  const inserted = `[[${note.title}]]`
-  inputText.value = val.slice(0, noteLinkStart.value) + inserted + val.slice(cursorPos)
-  // Add to pinned notes (deduplicated, max 5)
-  if (mentionedNotes.value.length < 5 && !mentionedNotes.value.find((n) => n.id === note.id)) {
-    mentionedNotes.value.push(note)
-  }
-  const insertEnd = noteLinkStart.value + inserted.length
-  closeNoteLinkPicker()
-  nextTick(() => {
-    ta.setSelectionRange(insertEnd, insertEnd)
-    ta.focus()
-    adjustTextareaHeight()
-  })
-}
-
-function removeNoteLinkNote(id: string): void {
-  const idx = mentionedNotes.value.findIndex((n) => n.id === id)
-  if (idx !== -1) mentionedNotes.value.splice(idx, 1)
+  const hadMention = updateMentionState(closeNoteLinkPicker)
+  if (!hadMention) updateNoteLinkState(closeMention)
 }
 
 function onClear(): void {
@@ -380,54 +173,8 @@ async function send(): Promise<void> {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  // @mention picker keyboard navigation takes priority
-  if (mentionActive.value && mentionResults.value.length > 0) {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      mentionIndex.value = (mentionIndex.value + 1) % mentionResults.value.length
-      return
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      mentionIndex.value = (mentionIndex.value - 1 + mentionResults.value.length) % mentionResults.value.length
-      return
-    }
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      const entity = mentionResults.value[mentionIndex.value]
-      if (entity) pickMention(entity)
-      return
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      closeMention()
-      return
-    }
-  }
-  // [[note link picker keyboard navigation
-  if (noteLinkActive.value && noteLinkResults.value.length > 0) {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      noteLinkIndex.value = (noteLinkIndex.value + 1) % noteLinkResults.value.length
-      return
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      noteLinkIndex.value = (noteLinkIndex.value - 1 + noteLinkResults.value.length) % noteLinkResults.value.length
-      return
-    }
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      const note = noteLinkResults.value[noteLinkIndex.value]
-      if (note) pickNote(note)
-      return
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      closeNoteLinkPicker()
-      return
-    }
-  }
+  if (handleMentionKeydown(e)) return
+  if (handleNoteLinkKeydown(e)) return
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     void send()
@@ -646,30 +393,12 @@ function renderMessage(content: string, references: { id: string; title: string 
 
     <!-- Attachments bar (images + files + mentioned entities + pinned notes) -->
     <div v-if="attachedImages.length > 0 || attachedFiles.length > 0 || mentionedEntities.length > 0 || mentionedNotes.length > 0" class="chat-attachments-bar">
-      <div
-        v-for="img in attachedImages"
-        :key="img.id"
-        class="chat-attachment-thumb"
-      >
-        <img :src="img.dataUrl" class="chat-attachment-img" alt="" />
-        <button class="chat-attachment-remove" title="Remove" @click="removeImage(img.id)">
-          <X :size="10" />
-        </button>
-      </div>
-      <div
-        v-for="f in attachedFiles"
-        :key="f.id"
-        class="chat-attachment-file"
-      >
-        <FileText :size="14" class="chat-attachment-file-icon" />
-        <div class="chat-attachment-file-info">
-          <span class="chat-attachment-file-name">{{ f.name }}</span>
-          <span class="chat-attachment-file-size">{{ formatFileSize(f.size) }}</span>
-        </div>
-        <button class="chat-attachment-remove chat-attachment-remove--file" title="Remove" @click="removeFile(f.id)">
-          <X :size="10" />
-        </button>
-      </div>
+      <AttachmentBar
+        :attached-images="attachedImages"
+        :attached-files="attachedFiles"
+        @remove-image="removeImage"
+        @remove-file="removeFile"
+      />
       <!-- Mentioned entity chips -->
       <div
         v-for="entity in mentionedEntities"
@@ -678,7 +407,7 @@ function renderMessage(content: string, references: { id: string; title: string 
       >
         <span class="chat-mention-chip-name">@{{ entity.name }}</span>
         <span class="chat-mention-chip-type">{{ entity.type_name }}</span>
-        <button class="chat-attachment-remove chat-attachment-remove--file" title="Remove" @click="removeMentionEntity(entity.id)">
+        <button class="chat-chip-remove" title="Remove" @click="removeMentionEntity(entity.id)">
           <X :size="10" />
         </button>
       </div>
@@ -690,17 +419,20 @@ function renderMessage(content: string, references: { id: string; title: string 
       >
         <FileText :size="11" class="chat-note-chip-icon" />
         <span class="chat-note-chip-title">{{ note.title }}</span>
-        <button class="chat-attachment-remove chat-attachment-remove--file" title="Remove" @click="removeNoteLinkNote(note.id)">
+        <button class="chat-chip-remove" title="Remove" @click="removeNoteLinkNote(note.id)">
           <X :size="10" />
         </button>
       </div>
     </div>
 
+    <!-- File drop/type error -->
+    <div v-if="dropError" class="chat-drop-error">{{ dropError }}</div>
+
     <!-- Hidden file input -->
     <input
       ref="fileInputRef"
       type="file"
-      :accept="SUPPORTED_FILE_TYPES"
+      :accept="SUPPORTED_ALL_ACCEPT"
       multiple
       style="display: none"
       @change="onFileInputChange"
@@ -1083,47 +815,6 @@ function renderMessage(content: string, references: { id: string; title: string 
   background: var(--color-surface);
 }
 
-.chat-attachment-thumb {
-  position: relative;
-  flex-shrink: 0;
-  width: 64px;
-  height: 64px;
-  border-radius: 6px;
-  overflow: visible;
-}
-
-.chat-attachment-img {
-  width: 64px;
-  height: 64px;
-  object-fit: cover;
-  border-radius: 6px;
-  display: block;
-  border: 1px solid var(--color-border);
-}
-
-.chat-attachment-remove {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: rgba(30, 30, 30, 0.85);
-  border: 1px solid var(--color-border);
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  z-index: 1;
-  transition: background 0.1s;
-}
-
-.chat-attachment-remove:hover {
-  background: rgba(220, 80, 80, 0.9);
-}
-
 /* ── Input area ── */
 
 .chat-input-area {
@@ -1289,56 +980,39 @@ function renderMessage(content: string, references: { id: string; title: string 
   text-overflow: ellipsis;
 }
 
-/* ── File attachment chips in bar ── */
+/* ── Entity/note chip inline remove button ── */
 
-.chat-attachment-file {
+.chat-chip-remove {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--color-hover);
-  border: 1px solid var(--color-border);
-  position: relative;
-  flex-shrink: 0;
-  max-width: 180px;
-}
-
-.chat-attachment-file-icon {
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-}
-
-.chat-attachment-file-info {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.chat-attachment-file-name {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--color-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 120px;
-}
-
-.chat-attachment-file-size {
-  font-size: 10.5px;
-  color: var(--color-text-muted);
-}
-
-.chat-attachment-remove--file {
-  position: static;
+  justify-content: center;
   width: 16px;
   height: 16px;
   border-radius: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.5;
+  padding: 0;
   flex-shrink: 0;
-  top: unset;
-  right: unset;
+}
+
+.chat-chip-remove:hover {
+  opacity: 1;
+  background: rgba(220, 80, 80, 0.15);
+  color: #ef4444;
+}
+
+/* ── Drop error ── */
+
+.chat-drop-error {
+  font-size: 11px;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 4px;
+  padding: 5px 10px;
+  margin: 0 8px;
 }
 
 /* ── Attach button ── */

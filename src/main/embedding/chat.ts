@@ -574,6 +574,9 @@ export async function generateInlineContent(
   selectedText: string | undefined,
   contextNotes: { title: string; excerpt: string }[],
   model = KEYWORD_MODEL,
+  entityContext?: { id: string; name: string; type_name: string; fields?: string }[],
+  images?: { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[],
+  files?: AttachedFilePayload[],
 ): Promise<string> {
   if (!_client) throw new Error('Anthropic client not initialized')
 
@@ -604,23 +607,65 @@ export async function generateInlineContent(
     systemPrompt += `\n\nRelated notes from the knowledge base (use as reference if relevant):\n${ctxStr}`
   }
 
-  let userMessage: string
+  if (entityContext && entityContext.length > 0) {
+    const entityLines = entityContext.map((e) => {
+      let line = `[id:${e.id}] @${e.name} (type: ${e.type_name})`
+      if (e.fields && e.fields !== '{}') {
+        try {
+          const parsed = JSON.parse(e.fields) as Record<string, unknown>
+          const fieldStr = Object.entries(parsed)
+            .filter(([, v]) => v !== null && v !== undefined && v !== '')
+            .map(([k, v]) => `${k}: ${String(v)}`)
+            .join(', ')
+          if (fieldStr) line += `\n  fields: ${fieldStr}`
+        } catch { /* ignore malformed fields */ }
+      }
+      return line
+    })
+    systemPrompt += `\n\nExplicitly mentioned entities (use their data to inform the content):\n${entityLines.join('\n')}`
+  }
+
+  let userText: string
   if (selectedText) {
-    userMessage =
+    userText =
       `Selected text to rewrite:\n"""\n${selectedText}\n"""\n\n` +
       `Instructions: ${userPrompt}\n\n` +
       `Rewrite the selected text following the instructions. Return only the replacement content.`
   } else {
-    userMessage =
+    userText =
       `Instructions: ${userPrompt}\n\n` +
       `Generate the requested content to insert at the cursor position in the note.`
   }
+
+  // When images or files are provided, build a multipart content array; otherwise use plain string
+  const hasImages = images && images.length > 0
+  const hasFiles = files && files.length > 0
+  const userContent: Parameters<Anthropic['messages']['create']>[0]['messages'][0]['content'] =
+    hasImages || hasFiles
+      ? [
+          ...(hasImages ? images.map((img): Anthropic.ImageBlockParam => ({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: img.mimeType,
+              data: img.dataUrl.includes(',') ? img.dataUrl.split(',')[1] : img.dataUrl,
+            },
+          })) : []),
+          ...(hasFiles ? files.map((f) => ({
+            type: 'document' as const,
+            source: f.mimeType === 'application/pdf'
+              ? { type: 'base64' as const, media_type: 'application/pdf' as const, data: f.content }
+              : { type: 'text' as const, media_type: 'text/plain' as const, data: f.content },
+          })) : []),
+          { type: 'text' as const, text: userText },
+        ]
+      : userText
 
   const response = await _client.messages.create({
     model,
     max_tokens: 1500,
     system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }],
+    messages: [{ role: 'user', content: userContent }],
   })
 
   const block = response.content[0]

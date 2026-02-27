@@ -1096,15 +1096,17 @@ export function registerDbIpcHandlers(): void {
   /**
    * notes:ai-inline — generate inline content to insert or replace in the note editor.
    *
-   * Input:  { prompt, noteBodyPlain, selectedText? }
+   * Input:  { prompt, noteBodyPlain, selectedText?, mentionedEntityIds?, mentionedNoteIds?, images? }
    * Output: { content: TipTapNode[] } or { error: string }
    *
    * Flow:
    *   1. Read anthropic_api_key from settings; return { error } if missing.
    *   2. FTS5 keyword search on prompt (top 5) for knowledge base context.
-   *   3. Call generateInlineContent() → markdown string.
-   *   4. Parse markdown → TipTap nodes via parseMarkdownToTipTap().
-   *   5. Return { content }.
+   *   3. Fetch entity fields for each mentionedEntityId → entityContext.
+   *   4. Fetch body_plain for each mentionedNoteId → append to contextNotes.
+   *   5. Call generateInlineContent() → markdown string.
+   *   6. Parse markdown → TipTap nodes via parseMarkdownToTipTap().
+   *   7. Return { content }.
    */
   ipcMain.handle(
     'notes:ai-inline',
@@ -1114,7 +1116,19 @@ export function registerDbIpcHandlers(): void {
         prompt,
         noteBodyPlain,
         selectedText,
-      }: { prompt: string; noteBodyPlain: string; selectedText?: string },
+        mentionedEntityIds,
+        mentionedNoteIds,
+        images,
+        files,
+      }: {
+        prompt: string
+        noteBodyPlain: string
+        selectedText?: string
+        mentionedEntityIds?: string[]
+        mentionedNoteIds?: string[]
+        images?: { dataUrl: string; mimeType: string }[]
+        files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
+      },
     ): Promise<{ content: object[] } | { error: string }> => {
       const db = getDatabase()
 
@@ -1175,6 +1189,55 @@ export function registerDbIpcHandlers(): void {
         }
       }
 
+      // Fetch entity context for explicitly @mentioned entities
+      const entityContext: { id: string; name: string; type_name: string; fields?: string }[] = []
+      if (mentionedEntityIds && mentionedEntityIds.length > 0) {
+        try {
+          const placeholders = mentionedEntityIds.map(() => '?').join(', ')
+          const rows = db
+            .prepare(
+              `SELECT e.id, e.name, et.name AS type_name, e.fields
+               FROM entities e
+               JOIN entity_types et ON et.id = e.type_id
+               WHERE e.id IN (${placeholders}) AND e.trashed_at IS NULL`,
+            )
+            .all(...mentionedEntityIds) as { id: string; name: string; type_name: string; fields: string }[]
+          for (const row of rows) {
+            entityContext.push({
+              id: row.id,
+              name: row.name,
+              type_name: row.type_name,
+              fields: row.fields && row.fields !== '{}' ? row.fields : undefined,
+            })
+          }
+        } catch {
+          // entity fetch error — proceed without entity context
+        }
+      }
+
+      // Fetch body_plain for explicitly [[linked]] notes (append to context)
+      if (mentionedNoteIds && mentionedNoteIds.length > 0) {
+        try {
+          const placeholders = mentionedNoteIds.map(() => '?').join(', ')
+          const rows = db
+            .prepare(
+              `SELECT title, body_plain FROM notes
+               WHERE id IN (${placeholders}) AND archived_at IS NULL`,
+            )
+            .all(...mentionedNoteIds) as { title: string; body_plain: string }[]
+          for (const row of rows) {
+            const excerpt =
+              row.body_plain.length > 800
+                ? row.body_plain.slice(0, 800) + '…'
+                : row.body_plain
+            // prepend explicitly-linked notes so they rank highest in context
+            contextNotes.unshift({ title: row.title, excerpt })
+          }
+        } catch {
+          // note fetch error — proceed without explicit note context
+        }
+      }
+
       try {
         const markdown = await generateInlineContent(
           prompt,
@@ -1182,6 +1245,9 @@ export function registerDbIpcHandlers(): void {
           selectedText,
           contextNotes,
           bgModel,
+          entityContext.length > 0 ? entityContext : undefined,
+          images && images.length > 0 ? images as { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[] : undefined,
+          files && files.length > 0 ? files : undefined,
         )
         if (!markdown) {
           return { error: 'AI returned empty content. Please try a different prompt.' }

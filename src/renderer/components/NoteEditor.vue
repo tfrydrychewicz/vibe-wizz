@@ -1057,16 +1057,20 @@ function openAIBubble(): void {
   showAIModal.value = true
 }
 
-async function onAIPromptSubmit(prompt: string): Promise<void> {
+async function onAIPromptSubmit(payload: import('./AIPromptModal.vue').AIPromptSubmit): Promise<void> {
   if (!editor.value) return
   aiModalLoading.value = true
   aiModalError.value = null
   const noteBodyPlain = editor.value.getText()
   try {
     const result = (await window.api.invoke('notes:ai-inline', {
-      prompt,
+      prompt: payload.prompt,
       noteBodyPlain,
       selectedText: aiModalMode.value === 'replace' ? aiSelectedText : undefined,
+      mentionedEntityIds: payload.mentionedEntityIds.length > 0 ? payload.mentionedEntityIds : undefined,
+      mentionedNoteIds: payload.mentionedNoteIds.length > 0 ? payload.mentionedNoteIds : undefined,
+      images: payload.images.length > 0 ? payload.images : undefined,
+      files: payload.files.length > 0 ? payload.files : undefined,
     })) as { content: object[] } | { error: string }
 
     if ('error' in result) {

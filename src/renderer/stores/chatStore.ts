@@ -5,19 +5,7 @@
 
 import { ref } from 'vue'
 
-export interface AttachedImage {
-  id: string
-  dataUrl: string
-  mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
-}
-
-export interface AttachedFile {
-  id: string
-  name: string
-  content: string                              // plain text, or base64 (no data: prefix) for PDFs
-  mimeType: 'application/pdf' | 'text/plain'  // normalised for Anthropic API
-  size: number
-}
+export type { AttachedImage, AttachedFile } from '../composables/useFileAttachment'
 
 export interface ExecutedAction {
   type:
