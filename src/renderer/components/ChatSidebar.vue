@@ -12,6 +12,7 @@ import AttachmentBar from './AttachmentBar.vue'
 const emit = defineEmits<{
   close: []
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
+  'open-entity': [{ entityId: string; typeId?: string; mode: OpenMode }]
   'open-view': [view: string]
   'note-created': []
 }>()
@@ -149,12 +150,13 @@ async function send(): Promise<void> {
       mentionedNoteIds: mentionedNotes.value.length > 0
         ? mentionedNotes.value.map((n) => n.id)
         : undefined,
-    })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }
+    })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[] }
 
     messages.value.push({
       role: 'assistant',
       content: result.content,
       references: result.references,
+      entityRefs: result.entityRefs,
       actions: result.actions,
     })
     if (result.actions?.some((a) => a.type === 'created_note')) {
@@ -184,6 +186,11 @@ function onKeydown(e: KeyboardEvent): void {
 function openNote(e: MouseEvent, noteId: string, title: string): void {
   const mode: OpenMode = e.metaKey || e.ctrlKey ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
   emit('open-note', { noteId, title, mode })
+}
+
+function openEntity(e: MouseEvent, entityId: string): void {
+  const mode: OpenMode = e.metaKey || e.ctrlKey ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-entity', { entityId, mode })
 }
 
 // ── Action card helpers ────────────────────────────────────────────────────
@@ -240,12 +247,19 @@ function formatActionPayload(action: ExecutedAction): string {
   return parts.join(' · ')
 }
 
-/** Event delegation — handles clicks on note-ref buttons rendered inside v-html */
-function onBubbleClick(e: MouseEvent, msg: ChatMessage): void {
-  const btn = (e.target as HTMLElement).closest('[data-note-id]') as HTMLElement | null
-  if (!btn) return
-  const noteId = btn.dataset.noteId
-  const noteTitle = btn.dataset.noteTitle ?? ''
+/** Event delegation — handles clicks on note-ref and entity-ref buttons rendered inside v-html */
+function onBubbleClick(e: MouseEvent, _msg: ChatMessage): void {
+  const target = e.target as HTMLElement
+  const entityBtn = target.closest('[data-entity-id]') as HTMLElement | null
+  if (entityBtn) {
+    const entityId = entityBtn.dataset.entityId
+    if (entityId) openEntity(e, entityId)
+    return
+  }
+  const noteBtn = target.closest('[data-note-id]') as HTMLElement | null
+  if (!noteBtn) return
+  const noteId = noteBtn.dataset.noteId
+  const noteTitle = noteBtn.dataset.noteTitle ?? ''
   if (noteId) openNote(e, noteId, noteTitle)
 }
 
@@ -257,34 +271,117 @@ function escapeHtml(s: string): string {
 }
 
 /**
- * Convert assistant message content to safe HTML with Markdown rendered and
- * [Note: "Title"] citations replaced by clickable chip buttons.
+ * Convert assistant message content to safe HTML with Markdown rendered,
+ * [Note: "Title"] citations, @EntityName mentions, and [[NoteTitle]] links
+ * replaced by clickable chip buttons.
  *
- * Strategy: replace note-ref patterns with unique placeholders before handing
- * to marked (so the markdown parser never sees the brackets), then substitute
- * placeholders with the final button HTML in the marked output.
+ * Strategy: replace all special patterns with unique placeholders before
+ * handing to marked (so the markdown parser never sees the brackets/@ chars),
+ * then substitute placeholders with the final button HTML in the marked output.
  */
-function renderMessage(content: string, references: { id: string; title: string }[]): string {
-  const titles: string[] = []
+function renderMessage(
+  content: string,
+  references: { id: string; title: string }[],
+  entityRefs?: { id: string; name: string }[],
+): string {
+  const noteRefTitles: string[] = []
+  const entityRefItems: { id: string; name: string }[] = []
+  const noteLinkTitles: string[] = []
 
-  // 1. Swap out [Note: "Title"] for inert placeholders
-  const withPlaceholders = content.replace(/\[Note:\s*"([^"]+)"\]/g, (_match, title: string) => {
-    titles.push(title)
-    return `WIZZREF${titles.length - 1}WIZZREF`
+  // Build lookup maps
+  const noteByTitle = new Map(references.map((r) => [r.title.toLowerCase(), r]))
+
+  // 1a. Swap out @EntityName [id:uuid] tokens — ID is embedded directly in the response text.
+  //     This pattern allows multi-word entity names; the UUID suffix makes it unambiguous.
+  //     Must run before pass 1b so these are not double-matched.
+  const ENTITY_WITH_ID_RE = /@([A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*(?:[ ][A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*){0,9})\s*\[id:([a-f0-9-]{36})\]/g
+  let withEntityPlaceholders = content.replace(ENTITY_WITH_ID_RE, (_m, rawName: string, id: string) => {
+    const name = rawName.trim()
+    entityRefItems.push({ id, name })
+    return `WIZZENT${entityRefItems.length - 1}WIZZENT`
   })
 
-  // 2. Parse Markdown
-  const html = marked.parse(withPlaceholders) as string
+  // 1b. Swap out remaining @EntityName tokens using exact name matching from entityRefs.
+  //     Sort by name length descending so longer names are matched before shorter prefixes.
+  //     Skip names already replaced in pass 1a.
+  if (entityRefs && entityRefs.length > 0) {
+    const alreadyHandled = new Set(entityRefItems.map((e) => e.name.toLowerCase()))
+    const sorted = [...entityRefs].sort((a, b) => b.name.length - a.name.length)
+    for (const entity of sorted) {
+      if (alreadyHandled.has(entity.name.toLowerCase())) continue
+      const escaped = entity.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      withEntityPlaceholders = withEntityPlaceholders.replace(
+        new RegExp(`@${escaped}`, 'g'),
+        () => {
+          entityRefItems.push(entity)
+          return `WIZZENT${entityRefItems.length - 1}WIZZENT`
+        },
+      )
+    }
+  }
 
-  // 3. Replace placeholders with styled buttons
-  return html.replace(/WIZZREF(\d+)WIZZREF/g, (_m, idxStr: string) => {
-    const title = titles[Number(idxStr)] ?? ''
-    const ref = references.find((r) => r.title.toLowerCase() === title.toLowerCase())
+  // 1c. Swap out [[Note Title]] [id:uuid] tokens — ID embedded directly in response text.
+  //     Must run before the plain [[Title]] pass so these aren't double-matched.
+  const NOTE_WITH_ID_RE = /\[\[([^\]]{1,200})\]\]\s*\[id:([a-f0-9-]{36})\]/g
+  const withNoteIdPlaceholders = withEntityPlaceholders.replace(NOTE_WITH_ID_RE, (_m, title: string, id: string) => {
+    const trimmedTitle = title.trim()
+    // Push into noteRefTitles but also add to references lookup so WIZZREF resolves correctly
+    if (!noteByTitle.has(trimmedTitle.toLowerCase())) {
+      noteByTitle.set(trimmedTitle.toLowerCase(), { id, title: trimmedTitle })
+    }
+    noteRefTitles.push(trimmedTitle)
+    return `WIZZREF${noteRefTitles.length - 1}WIZZREF`
+  })
+
+  // 1d. Swap out [[Note Title]] tokens for noteLink placeholders
+  const withNoteLinkPlaceholders = withNoteIdPlaceholders.replace(
+    /\[\[([^\]]{1,200})\]\]/g,
+    (_match, title: string) => {
+      noteLinkTitles.push(title.trim())
+      return `WIZZLINK${noteLinkTitles.length - 1}WIZZLINK`
+    },
+  )
+
+  // 1e. Swap out [Note: "Title"] citations
+  const withAllPlaceholders = withNoteLinkPlaceholders.replace(
+    /\[Note:\s*"([^"]+)"\]/g,
+    (_match, title: string) => {
+      noteRefTitles.push(title)
+      return `WIZZREF${noteRefTitles.length - 1}WIZZREF`
+    },
+  )
+
+  // 2. Parse Markdown
+  const html = marked.parse(withAllPlaceholders) as string
+
+  // 3. Substitute placeholders back with styled buttons
+  let result = html
+
+  result = result.replace(/WIZZENT(\d+)WIZZENT/g, (_m, idxStr: string) => {
+    const entity = entityRefItems[Number(idxStr)]
+    if (!entity) return ''
+    return `<button class="chat-entity-ref" data-entity-id="${escapeAttr(entity.id)}" data-entity-name="${escapeAttr(entity.name)}">@${escapeHtml(entity.name)}</button>`
+  })
+
+  result = result.replace(/WIZZLINK(\d+)WIZZLINK/g, (_m, idxStr: string) => {
+    const title = noteLinkTitles[Number(idxStr)] ?? ''
+    const ref = noteByTitle.get(title.toLowerCase())
+    if (ref) {
+      return `<button class="chat-note-ref" data-note-id="${escapeAttr(ref.id)}" data-note-title="${escapeAttr(ref.title)}">${escapeHtml(title)}</button>`
+    }
+    return `<span class="chat-note-ref-plain">[[${escapeHtml(title)}]]</span>`
+  })
+
+  result = result.replace(/WIZZREF(\d+)WIZZREF/g, (_m, idxStr: string) => {
+    const title = noteRefTitles[Number(idxStr)] ?? ''
+    const ref = noteByTitle.get(title.toLowerCase())
     if (ref) {
       return `<button class="chat-note-ref" data-note-id="${escapeAttr(ref.id)}" data-note-title="${escapeAttr(ref.title)}">${escapeHtml(title)}</button>`
     }
     return `<span class="chat-note-ref-plain">${escapeHtml(title)}</span>`
   })
+
+  return result
 }
 </script>
 
@@ -354,7 +451,7 @@ function renderMessage(content: string, references: { id: string; title: string 
           v-else
           class="chat-bubble chat-bubble-assistant"
           :class="{ 'chat-bubble-error': msg.error }"
-          v-html="renderMessage(msg.content, msg.references ?? [])"
+          v-html="renderMessage(msg.content, msg.references ?? [], msg.entityRefs)"
           @click="onBubbleClick($event, msg)"
         />
 
@@ -765,6 +862,27 @@ function renderMessage(content: string, references: { id: string; title: string 
   border: none;
   border-top: 1px solid var(--color-border);
   margin: 8px 0;
+}
+
+/* Entity mention chip injected by renderMessage() — matches chat-mention-chip (input bar) styling */
+.chat-bubble-assistant :deep(.chat-entity-ref) {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(91, 141, 239, 0.15);
+  color: var(--color-accent);
+  border: 1px solid rgba(91, 141, 239, 0.3);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  margin: 0 1px;
+  vertical-align: middle;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.chat-bubble-assistant :deep(.chat-entity-ref:hover) {
+  background: rgba(91, 141, 239, 0.25);
 }
 
 /* Note reference chip injected by renderMessage() */

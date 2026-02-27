@@ -6,7 +6,7 @@ import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
 import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField, type ChatModelId } from '../embedding/chat'
-import { parseMarkdownToTipTap } from '../transcription/postProcessor'
+import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
 import { parseQuery } from '../entity-query/parser'
 import { evalQuery } from '../entity-query/evaluator'
 import {
@@ -1252,7 +1252,43 @@ export function registerDbIpcHandlers(): void {
         if (!markdown) {
           return { error: 'AI returned empty content. Please try a different prompt.' }
         }
-        const nodes = parseMarkdownToTipTap(markdown)
+
+        // Scan generated markdown for @EntityName / [[NoteTitle]] tokens,
+        // batch-resolve them against the DB, and build a ParseContext so the
+        // parser can emit interactive mention / noteLink TipTap nodes.
+        const entityNames = new Set<string>()
+        const noteTitles = new Set<string>()
+        for (const m of markdown.matchAll(/@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g)) {
+          entityNames.add(m[1].replace(/[.,!?;:'")\]]+$/, '').trim())
+        }
+        for (const m of markdown.matchAll(/\[\[([^\]]{1,200})\]\]/g)) {
+          noteTitles.add(m[1].trim())
+        }
+
+        const entityMap = new Map<string, { id: string; label: string }>()
+        const noteMap   = new Map<string, { id: string; label: string }>()
+
+        if (entityNames.size > 0) {
+          const ph = Array.from(entityNames).map(() => '?').join(',')
+          const rows = db.prepare(
+            `SELECT id, name FROM entities WHERE name IN (${ph}) AND trashed_at IS NULL`,
+          ).all(...Array.from(entityNames)) as { id: string; name: string }[]
+          for (const r of rows) entityMap.set(r.name, { id: r.id, label: r.name })
+        }
+        if (noteTitles.size > 0) {
+          const ph = Array.from(noteTitles).map(() => '?').join(',')
+          const rows = db.prepare(
+            `SELECT id, title FROM notes WHERE title IN (${ph}) AND archived_at IS NULL`,
+          ).all(...Array.from(noteTitles)) as { id: string; title: string }[]
+          for (const r of rows) noteMap.set(r.title, { id: r.id, label: r.title })
+        }
+
+        const parseCtx: ParseContext = {
+          resolveEntity: (name)  => entityMap.get(name)  ?? null,
+          resolveNote:   (title) => noteMap.get(title)   ?? null,
+        }
+
+        const nodes = parseMarkdownToTipTap(markdown, parseCtx)
         return { content: nodes }
       } catch (err) {
         console.error('[AI Inline] Generation failed:', err)
@@ -1619,7 +1655,7 @@ export function registerDbIpcHandlers(): void {
         mentionedEntityIds?: string[]
         mentionedNoteIds?: string[]
       },
-    ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[] }> => {
+    ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[] }> => {
       const db = getDatabase()
 
       const setting = db
@@ -1633,6 +1669,7 @@ export function registerDbIpcHandlers(): void {
             'No Anthropic API key configured. Open **Settings** (bottom of the sidebar) and add your API key to enable AI chat.',
           references: [],
           actions: [],
+          entityRefs: [],
         }
       }
 
@@ -1915,16 +1952,19 @@ export function registerDbIpcHandlers(): void {
 
       let content: string
       let executedActions: ExecutedAction[] = []
+      let entityRefs: { id: string; name: string }[] = []
       try {
         const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes)
         content = result.content
         executedActions = result.actions
+        entityRefs = result.entityRefs
       } catch (err) {
         console.error('[Chat] Claude API error:', err)
         return {
           content: 'Something went wrong calling the Claude API. Please check your API key and try again.',
           references: [],
           actions: [],
+          entityRefs: [],
         }
       }
 
@@ -1940,7 +1980,19 @@ export function registerDbIpcHandlers(): void {
         }
       }
 
-      return { content, references, actions: executedActions }
+      // Collect any @Name [id:uuid] refs from the response that sendChatMessage() didn't
+      // already capture (e.g. because the entity wasn't in the original entity context).
+      // ID is embedded directly — no DB lookup needed.
+      const ENTITY_WITH_ID_RE = /@([A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*(?:[ ][A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*){0,9})\s*\[id:([a-f0-9-]{36})\]/g
+      const refsById = new Map(entityRefs.map((e) => [e.id, e]))
+      for (const m of content.matchAll(ENTITY_WITH_ID_RE)) {
+        const name = m[1].trim()
+        const id   = m[2]
+        if (id && !refsById.has(id)) refsById.set(id, { id, name })
+      }
+      entityRefs = Array.from(refsById.values())
+
+      return { content, references, actions: executedActions, entityRefs }
     },
   )
 

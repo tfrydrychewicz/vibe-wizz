@@ -234,6 +234,30 @@ function onOpenEntity({ entityId, typeId, mode }: { entityId: string; typeId: st
   openContent('entity', entityId, 'Untitled', mode, typeId, et?.icon ?? 'tag', et?.color ?? undefined)
 }
 
+/** Views that occupy the full main area and hide the tab/pane content area. */
+const FULL_SCREEN_VIEWS = new Set(['today', 'actions', 'calendar', 'search', 'trash', 'templates'])
+
+/** Handle open-entity from chat sidebar (typeId may not be known — look it up). */
+async function onChatOpenEntity({ entityId, mode }: { entityId: string; typeId?: string; mode: OpenMode }): Promise<void> {
+  try {
+    const result = await window.api.invoke('entities:get', { id: entityId }) as { entity: { type_id: string; name: string } } | null
+    if (result) {
+      onOpenEntity({ entityId, typeId: result.entity.type_id, mode })
+    } else {
+      // Entity not found — switch away from full-screen views so the pane area is visible
+      if (mode === 'default' && FULL_SCREEN_VIEWS.has(activeView.value)) {
+        activeView.value = 'notes'
+      }
+      openContent('entity', entityId, 'Untitled', mode)
+    }
+  } catch {
+    if (mode === 'default' && FULL_SCREEN_VIEWS.has(activeView.value)) {
+      activeView.value = 'notes'
+    }
+    openContent('entity', entityId, 'Untitled', mode)
+  }
+}
+
 function onOpenNote({ noteId, title, mode }: { noteId: string; title: string; mode: OpenMode }): void {
   if (mode === 'default') activeView.value = 'notes'
   openContent('note', noteId, title, mode, undefined, 'file-text')
@@ -645,7 +669,10 @@ onBeforeUnmount(() => {
 
       <!-- Today / Daily Brief view -->
       <template v-else-if="activeView === 'today'">
-        <TodayView />
+        <TodayView
+          @open-entity="onChatOpenEntity"
+          @open-note="onOpenNote"
+        />
       </template>
 
       <!-- All other fixed views -->
@@ -700,6 +727,7 @@ onBeforeUnmount(() => {
       v-if="showChat"
       @close="showChat = false"
       @open-note="onOpenNote"
+      @open-entity="onChatOpenEntity"
       @open-view="onChatOpenView"
       @note-created="noteListRef?.refresh()"
     />

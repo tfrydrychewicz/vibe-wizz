@@ -33,6 +33,7 @@ export interface ChatMessage {
   images?: { dataUrl: string }[]
   files?: { name: string }[]
   references?: { id: string; title: string }[]
+  entityRefs?: { id: string; name: string }[]
   actions?: ExecutedAction[]
   error?: boolean
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { ChevronLeft, ChevronRight, RefreshCw, Sparkles } from 'lucide-vue-next'
+import type { OpenMode } from '../stores/tabStore'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -13,6 +14,11 @@ interface DailyBrief {
   generated_at: string
   acknowledged_at: string | null
 }
+
+const emit = defineEmits<{
+  'open-entity': [{ entityId: string; typeId?: string; mode: OpenMode }]
+  'open-note':   [{ noteId: string; title: string; mode: OpenMode }]
+}>()
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -123,6 +129,35 @@ watch(currentDate, () => {
   loadBrief()
 }, { immediate: true })
 
+// ── Brief click delegation ────────────────────────────────────────────────────
+
+async function onBriefClick(e: MouseEvent): Promise<void> {
+  const target = e.target as HTMLElement
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+
+  const entityBtn = target.closest('[data-entity-name]') as HTMLElement | null
+  if (entityBtn) {
+    const name = entityBtn.dataset.entityName
+    if (!name) return
+    try {
+      const rows = await window.api.invoke('entities:search', { query: name }) as { id: string; name: string; type_id: string }[]
+      const entity = rows.find((r) => r.name.toLowerCase() === name.toLowerCase())
+      if (entity) emit('open-entity', { entityId: entity.id, mode })
+    } catch { /* not found — no-op */ }
+    return
+  }
+
+  const noteBtn = target.closest('[data-note-title]') as HTMLElement | null
+  if (!noteBtn) return
+  const title = noteBtn.dataset.noteTitle
+  if (!title) return
+  try {
+    const rows = await window.api.invoke('notes:search', { query: title }) as { id: string; title: string }[]
+    const note = rows.find((r) => r.title.toLowerCase() === title.toLowerCase())
+    if (note) emit('open-note', { noteId: note.id, title: note.title, mode })
+  } catch { /* not found — no-op */ }
+}
+
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
 function escapeHtml(text: string): string {
@@ -134,14 +169,49 @@ function escapeHtml(text: string): string {
 }
 
 function renderInline(raw: string): string {
-  const safe = escapeHtml(raw)
-  return safe
+  // Pass 1: replace @EntityName and [[NoteTitle]] with placeholders before escaping
+  // so the escape step doesn't break the button HTML we'll inject.
+  const entityItems: { name: string }[] = []
+  const noteLinkTitles: string[] = []
+
+  const withEntityPlaceholders = raw.replace(
+    /@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g,
+    (_m, name: string) => {
+      const trimmed = name.replace(/[.,!?;:'")\]]+$/, '').trim()
+      entityItems.push({ name: trimmed })
+      return `WIZZENT${entityItems.length - 1}WIZZENT`
+    },
+  )
+  const withNoteLinkPlaceholders = withEntityPlaceholders.replace(
+    /\[\[([^\]]{1,200})\]\]/g,
+    (_m, title: string) => {
+      noteLinkTitles.push(title.trim())
+      return `WIZZLINK${noteLinkTitles.length - 1}WIZZLINK`
+    },
+  )
+
+  // Pass 2: standard inline markdown on the safe-escaped remainder
+  const safe = escapeHtml(withNoteLinkPlaceholders)
+  let result = safe
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/__(.+?)__/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/_(.+?)_/g, '<em>$1</em>')
     .replace(/`(.+?)`/g, '<code>$1</code>')
+
+  // Pass 3: substitute placeholders with styled buttons
+  result = result.replace(/WIZZENT(\d+)WIZZENT/g, (_m, idxStr: string) => {
+    const item = entityItems[Number(idxStr)]
+    if (!item) return ''
+    return `<button class="brief-entity-ref" data-entity-name="${escapeHtml(item.name)}">@${escapeHtml(item.name)}</button>`
+  })
+  result = result.replace(/WIZZLINK(\d+)WIZZLINK/g, (_m, idxStr: string) => {
+    const title = noteLinkTitles[Number(idxStr)] ?? ''
+    return `<button class="brief-note-ref" data-note-title="${escapeHtml(title)}">${escapeHtml(title)}</button>`
+  })
+
+  return result
 }
 
 function markdownToHtml(md: string): string {
@@ -263,6 +333,7 @@ function markdownToHtml(md: string): string {
           class="brief-body"
           :class="{ 'brief-body-dim': generating }"
           v-html="renderedBrief"
+          @click="onBriefClick"
         />
       </div>
 
@@ -585,6 +656,44 @@ function markdownToHtml(md: string): string {
 }
 
 :deep(.brief-task-text) { flex: 1; }
+
+/* Entity mention chip — matches MentionChip / .chat-entity-ref styling */
+:deep(.brief-entity-ref) {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(91, 141, 239, 0.15);
+  color: var(--color-accent);
+  border: 1px solid rgba(91, 141, 239, 0.3);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  margin: 0 1px;
+  vertical-align: middle;
+  font-family: inherit;
+  line-height: 1.4;
+}
+:deep(.brief-entity-ref:hover) { background: rgba(91, 141, 239, 0.25); }
+
+/* Note link chip in brief — matches .chat-note-ref tone */
+:deep(.brief-note-ref) {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: rgba(91, 141, 239, 0.15);
+  color: var(--color-accent);
+  border: 1px solid rgba(91, 141, 239, 0.3);
+  cursor: pointer;
+  vertical-align: middle;
+  white-space: nowrap;
+  font-family: inherit;
+  line-height: 1.4;
+}
+:deep(.brief-note-ref:hover) { background: rgba(91, 141, 239, 0.25); }
 
 /* ── Empty state ── */
 

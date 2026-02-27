@@ -623,6 +623,12 @@ export async function generateInlineContent(
       return line
     })
     systemPrompt += `\n\nExplicitly mentioned entities (use their data to inform the content):\n${entityLines.join('\n')}`
+    systemPrompt +=
+      '\n\nWhen referencing one of these entities in your output, write @EntityName [id:uuid] ' +
+      '(include the [id:...] exactly as listed above). ' +
+      'When referencing a note by title, write [[Note Title]] [id:uuid] (if the note\'s [id:...] is known), ' +
+      'or just [[Note Title]] if unknown. ' +
+      'These tokens will be rendered as interactive chips in the editor.'
   }
 
   let userText: string
@@ -704,7 +710,7 @@ export async function sendChatMessage(
   pinnedNotes: EntityLinkedNote[] = [],
   richEntities: RichEntityContext[] = [],
   entityLinkedNotes: EntityLinkedNote[] = [],
-): Promise<{ content: string; actions: ExecutedAction[] }> {
+): Promise<{ content: string; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
   let systemPrompt =
@@ -731,7 +737,7 @@ export async function sendChatMessage(
 
   if (contextNotes.length > 0) {
     let contextStr = contextNotes
-      .map((n) => `Note: "${n.title}"\n${n.excerpt}`)
+      .map((n) => `Note: "${n.title}" [id:${n.id}]\n${n.excerpt}`)
       .join('\n\n---\n\n')
 
     if (contextStr.length > MAX_CONTEXT_CHARS) {
@@ -742,8 +748,11 @@ export async function sendChatMessage(
       '\n\nHere are relevant notes from the user\'s knowledge base, ' +
       'including related notes retrieved via knowledge graph connections (wiki-links and shared entity mentions):\n\n' +
       contextStr +
-      '\n\nWhen referencing information from a specific note, cite it as [Note: "Title"]. ' +
-      'Use the exact note title as it appears above.'
+      '\n\nWhen referencing an entity or note from the context, ALWAYS include its ID:\n' +
+      '- Entity mention: @EntityName [id:uuid]  (use the exact [id:...] provided)\n' +
+      '- Note reference: [[Note Title]] [id:uuid]  (use the exact [id:...] provided)\n' +
+      '- Legacy note citation (only if no [id:...] was provided): [Note: "Title"]\n' +
+      'These tokens render as clickable chips in the UI.'
   }
 
   if (calendarEvents.length > 0) {
@@ -775,6 +784,7 @@ export async function sendChatMessage(
     systemPrompt +=
       '\n\n## Entity context\n' +
       'Entities mentioned or referenced in this conversation.\n' +
+      'When mentioning any entity in your response, write @EntityName [id:uuid] (use the [id:...] exactly as listed).\n' +
       'Use [id:...] when assigning tasks or referencing entities (e.g. only assign to Person-type entities):\n\n' +
       entityBlocks
   } else if (entityContext.length > 0) {
@@ -782,8 +792,9 @@ export async function sendChatMessage(
       .map((e) => `- [id:${e.id}] @${e.name} (type: ${e.type_name})`)
       .join('\n')
     systemPrompt +=
-      '\n\nEntities mentioned in this conversation. When assigning action items or referencing people/projects, ' +
-      'use the entity ID from [id:...]. Always confirm the entity type is appropriate for the operation ' +
+      '\n\nEntities mentioned in this conversation. When mentioning any entity in your response, ' +
+      'write @EntityName [id:uuid] (use the [id:...] exactly as listed). ' +
+      'Always confirm the entity type is appropriate for the operation ' +
       '(e.g. only assign tasks to Person-type entities):\n' +
       entityLines
   }
@@ -879,5 +890,15 @@ export async function sendChatMessage(
     loopMessages.push({ role: 'user', content: toolResults })
   }
 
-  return { content: finalText, actions }
+  // Scan final response for @EntityName [id:uuid] tokens — ID is embedded directly.
+  const entityRefsMap = new Map<string, { id: string; name: string }>()
+  const ENTITY_WITH_ID_RE = /@([A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*(?:[ ][A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*){0,9})\s*\[id:([a-f0-9-]{36})\]/g
+  for (const m of finalText.matchAll(ENTITY_WITH_ID_RE)) {
+    const name = m[1].trim()
+    const id   = m[2]
+    if (id && name && !entityRefsMap.has(id)) entityRefsMap.set(id, { id, name })
+  }
+  const entityRefs = Array.from(entityRefsMap.values())
+
+  return { content: finalText, actions, entityRefs }
 }

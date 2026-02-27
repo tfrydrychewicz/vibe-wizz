@@ -36,6 +36,8 @@ interface TipTapNode {
   type: string
   attrs?: Record<string, unknown>
   content?: (TipTapNode | TipTapTextNode)[]
+  text?: string
+  marks?: TipTapMark[]
 }
 
 interface TipTapDoc {
@@ -44,13 +46,27 @@ interface TipTapDoc {
 }
 
 /**
- * Parse inline markdown into TipTap text nodes with marks.
- * Priority: ***___ bold+italic > **__ bold > *_ italic > `code`
+ * Context passed to the Markdown parser so it can resolve @EntityName and [[NoteTitle]]
+ * tokens into interactive TipTap mention / noteLink nodes.
+ *
+ * Both callbacks are optional — omitting them (or returning null) causes the token to be
+ * emitted as plain text, so existing callers without DB access are unaffected.
  */
-function parseInlineMarkdown(text: string): TipTapTextNode[] {
-  const nodes: TipTapTextNode[] = []
-  // Groups: [1]=***  [2]=___  [3]=**  [4]=__  [5]=*  [6]=_  [7]=`code`
-  const pattern = /\*\*\*(.+?)\*\*\*|___(.+?)___|\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`/g
+export interface ParseContext {
+  resolveEntity?: (name: string) => { id: string; label: string } | null
+  resolveNote?:   (title: string) => { id: string; label: string } | null
+}
+
+// Groups: [1]=***bold+italic  [2]=___bold+italic  [3]=**bold  [4]=__bold
+//         [5]=*italic  [6]=_italic  [7]=`code`
+//         [8]=[[note title]] [id:uuid]  (title + UUID — ID embedded, multi-word OK)
+//         [9]=[[note title]]            (title only — resolved via ctx)
+//         [10]=@entity name [id:uuid]   (name + UUID — ID embedded, multi-word OK)
+//         [11]=@entity name             (single-word name — resolved via ctx)
+function parseInlineMarkdown(text: string, ctx?: ParseContext): TipTapNode[] {
+  const nodes: TipTapNode[] = []
+  const pattern =
+    /\*\*\*(.+?)\*\*\*|___(.+?)___|\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`|\[\[([^\]]{1,200})\]\]\s*\[id:([a-f0-9-]{36})\]|\[\[([^\]]{1,200})\]\]|@([A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*(?:[ ][A-Za-z\u00C0-\u04FF][A-Za-z\u00C0-\u04FF0-9]*){0,9})\s*\[id:([a-f0-9-]{36})\]|@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g
   let lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -67,6 +83,34 @@ function parseInlineMarkdown(text: string): TipTapTextNode[] {
       nodes.push({ type: 'text', text: (match[5] ?? match[6])!, marks: [{ type: 'italic' }] })
     } else if (match[7] !== undefined) {
       nodes.push({ type: 'text', text: match[7], marks: [{ type: 'code' }] })
+    } else if (match[8] !== undefined) {
+      // [[Note Title]] [id:uuid] — ID embedded directly, no DB lookup needed
+      const title = match[8].trim()
+      const id    = match[9]!
+      nodes.push({ type: 'noteLink', attrs: { id, label: title } })
+    } else if (match[10] !== undefined) {
+      // [[Note Title]] — try to resolve via ctx
+      const title = match[10].trim()
+      const resolved = ctx?.resolveNote?.(title)
+      if (resolved) {
+        nodes.push({ type: 'noteLink', attrs: { id: resolved.id, label: resolved.label } })
+      } else {
+        nodes.push({ type: 'text', text: `[[${title}]]` })
+      }
+    } else if (match[11] !== undefined) {
+      // @EntityName [id:uuid] — ID embedded directly, no DB lookup needed (multi-word OK)
+      const name = match[11].trim()
+      const id   = match[12]!
+      nodes.push({ type: 'mention', attrs: { id, label: name } })
+    } else if (match[13] !== undefined) {
+      // @Entity Name (single-word, no UUID) — trim trailing punctuation then try to resolve
+      const raw = match[13].replace(/[.,!?;:'")\]]+$/, '').trim()
+      const resolved = ctx?.resolveEntity?.(raw)
+      if (resolved) {
+        nodes.push({ type: 'mention', attrs: { id: resolved.id, label: resolved.label } })
+      } else {
+        nodes.push({ type: 'text', text: `@${raw}` })
+      }
     }
 
     lastIndex = match.index + match[0].length
@@ -81,15 +125,15 @@ function parseInlineMarkdown(text: string): TipTapTextNode[] {
   return nodes.length > 0 ? nodes : [{ type: 'text', text }]
 }
 
-function paragraph(text: string): TipTapNode {
-  return { type: 'paragraph', content: parseInlineMarkdown(text) }
+function paragraph(text: string, ctx?: ParseContext): TipTapNode {
+  return { type: 'paragraph', content: parseInlineMarkdown(text, ctx) }
 }
 
-function heading(level: number, text: string): TipTapNode {
+function heading(level: number, text: string, ctx?: ParseContext): TipTapNode {
   return {
     type: 'heading',
     attrs: { level },
-    content: parseInlineMarkdown(text),
+    content: parseInlineMarkdown(text, ctx),
   }
 }
 
@@ -107,7 +151,7 @@ function buildParagraphNodes(text: string): TipTapNode[] {
  * Handles headings, horizontal rules, blockquotes, fenced code blocks,
  * task lists, bullet lists, and plain paragraphs.
  */
-export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
+export function parseMarkdownToTipTap(markdown: string, ctx?: ParseContext): TipTapNode[] {
   const nodes: TipTapNode[] = []
   const lines = markdown.split('\n')
   let i = 0
@@ -123,7 +167,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
     // Headings: # through ######
     const headingMatch = line.match(/^(#{1,6})\s+(.+)$/)
     if (headingMatch) {
-      nodes.push(heading(headingMatch[1].length, headingMatch[2]))
+      nodes.push(heading(headingMatch[1].length, headingMatch[2], ctx))
       i++
       continue
     }
@@ -169,7 +213,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
       }
       nodes.push({
         type: 'blockquote',
-        content: quoteLines.map((l) => ({ type: 'paragraph', content: parseInlineMarkdown(l) })),
+        content: quoteLines.map((l) => ({ type: 'paragraph', content: parseInlineMarkdown(l, ctx) })),
       })
       continue
     }
@@ -184,7 +228,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
           taskItems.push({
             type: 'taskItem',
             attrs: { checked: taskMatch[1].toLowerCase() === 'x' },
-            content: [{ type: 'paragraph', content: parseInlineMarkdown(taskMatch[2]) }],
+            content: [{ type: 'paragraph', content: parseInlineMarkdown(taskMatch[2], ctx) }],
           })
           i++
         } else if (!tl) {
@@ -206,7 +250,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
         if (bl.startsWith('- ') || bl.startsWith('* ')) {
           items.push({
             type: 'listItem',
-            content: [{ type: 'paragraph', content: parseInlineMarkdown(bl.slice(2)) }],
+            content: [{ type: 'paragraph', content: parseInlineMarkdown(bl.slice(2), ctx) }],
           })
           i++
         } else if (!bl) {
@@ -262,7 +306,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
           const makeCell = (text: string, isHeader: boolean): TipTapNode => ({
             type: isHeader ? 'tableHeader' : 'tableCell',
             attrs: { colspan: 1, rowspan: 1, colwidth: null },
-            content: [{ type: 'paragraph', content: text ? parseInlineMarkdown(text) : [] }],
+            content: [{ type: 'paragraph', content: text ? parseInlineMarkdown(text, ctx) : [] }],
           })
 
           nodes.push({
@@ -281,7 +325,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
       // No separator follows — treat as plain paragraph text and advance.
       // Without this, the paragraph handler below breaks immediately on the
       // '|' guard without advancing i, causing an infinite loop.
-      nodes.push(paragraph(line))
+      nodes.push(paragraph(line, ctx))
       i++
       continue
     }
@@ -301,7 +345,7 @@ export function parseMarkdownToTipTap(markdown: string): TipTapNode[] {
       paraLines.push(pl)
       i++
     }
-    if (paraLines.length > 0) nodes.push(paragraph(paraLines.join(' ')))
+    if (paraLines.length > 0) nodes.push(paragraph(paraLines.join(' '), ctx))
   }
 
   return nodes
@@ -432,6 +476,29 @@ Write only the note content, no preamble.`
 
 // ── Note update ────────────────────────────────────────────────────────────────
 
+/**
+ * Build a ParseContext backed by the live SQLite DB so that @EntityName and
+ * [[NoteTitle]] tokens in AI-generated Markdown are resolved to interactive
+ * TipTap nodes.  Returns null if the DB is unavailable.
+ */
+function buildParseContext(): ParseContext {
+  const db = getDatabase()
+  return {
+    resolveEntity: (name: string) => {
+      const row = db
+        .prepare(`SELECT id, name FROM entities WHERE name = ? AND trashed_at IS NULL LIMIT 1`)
+        .get(name) as { id: string; name: string } | undefined
+      return row ? { id: row.id, label: row.name } : null
+    },
+    resolveNote: (title: string) => {
+      const row = db
+        .prepare(`SELECT id, title FROM notes WHERE title = ? AND archived_at IS NULL LIMIT 1`)
+        .get(title) as { id: string; title: string } | undefined
+      return row ? { id: row.id, label: row.title } : null
+    },
+  }
+}
+
 function updateNoteWithTranscript(noteId: string, mergedContent: string, rawTranscript: string): void {
   const db = getDatabase()
   const note = db.prepare('SELECT body, body_plain FROM notes WHERE id = ?').get(noteId) as
@@ -443,8 +510,9 @@ function updateNoteWithTranscript(noteId: string, mergedContent: string, rawTran
   }
 
   if (mergedContent) {
-    // Replace note body with the AI-merged content
-    const contentNodes = parseMarkdownToTipTap(mergedContent)
+    // Replace note body with the AI-merged content; resolve @mention / [[link]] tokens
+    const ctx = buildParseContext()
+    const contentNodes = parseMarkdownToTipTap(mergedContent, ctx)
     const doc: TipTapDoc = { type: 'doc', content: contentNodes }
     db.prepare(
       `UPDATE notes SET body = ?, body_plain = ?, source = 'transcript', updated_at = ? WHERE id = ?`,
