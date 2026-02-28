@@ -94,7 +94,9 @@ const isListActive = computed(
 
 const editor = useEditor({
   extensions: [
-    StarterKit,
+    StarterKit.configure({
+      dropcursor: { color: '#5b8def', width: 2 },
+    }),
     Placeholder.configure({ placeholder: 'Define your template content…' }),
     TextStyle,
     Color,

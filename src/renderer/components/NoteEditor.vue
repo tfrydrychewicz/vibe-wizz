@@ -740,7 +740,9 @@ function insertImageFromFile(ed: CoreEditor, file: File, pos?: number): void {
 
 const editor = useEditor({
   extensions: [
-    StarterKit,
+    StarterKit.configure({
+      dropcursor: { color: '#5b8def', width: 2 },
+    }),
     Placeholder.configure({ placeholder: 'Start writing…' }),
     TextStyle,
     Color,
