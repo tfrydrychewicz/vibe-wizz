@@ -5,6 +5,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
+import { getCurrentDateString } from '../utils/date'
 
 let _client: Anthropic | null = null
 let _currentKey = ''
@@ -38,7 +39,7 @@ export async function summarizeNote(title: string, bodyPlain: string, model = DE
     messages: [
       {
         role: 'user',
-        content: `Summarize the following note in 2-4 sentences for semantic search indexing. Capture the main topics, decisions, and key information. Be factual and specific.
+        content: `Today is ${getCurrentDateString()}.\n\nSummarize the following note in 2-4 sentences for semantic search indexing. Capture the main topics, decisions, and key information. Be factual and specific.
 
 Note title: ${title}
 

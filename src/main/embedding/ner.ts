@@ -5,6 +5,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
+import { getCurrentDateString } from '../utils/date'
 
 // Default: Haiku — fast and cheap for fire-and-forget background NER
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
@@ -51,7 +52,7 @@ export async function detectEntityMentions(
     messages: [
       {
         role: 'user',
-        content: `Analyze the following note and identify which known entities are mentioned or clearly referenced in it (by name, pronoun, or unambiguous implication).
+        content: `Today is ${getCurrentDateString()}.\n\nAnalyze the following note and identify which known entities are mentioned or clearly referenced in it (by name, pronoun, or unambiguous implication).
 
 Known entities (JSON, one per line):
 ${entityList}

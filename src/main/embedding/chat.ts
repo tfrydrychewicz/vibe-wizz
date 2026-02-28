@@ -11,6 +11,7 @@ import { getDatabase } from '../db/index'
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
 import { scheduleEmbedding } from './pipeline'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
+import { getCurrentDateString } from '../utils/date'
 
 let _client: Anthropic | null = null
 let _currentKey = ''
@@ -590,6 +591,7 @@ export async function generateInlineContent(
       : noteBodyPlain
 
   let systemPrompt =
+    `Today is ${getCurrentDateString()}.\n\n` +
     'You are an inline writing assistant embedded in a personal knowledge base editor. ' +
     'Your job is to produce content that fits seamlessly into the note at the cursor position. ' +
     'Always respond in the same language as the user prompt and note content. ' +
@@ -713,6 +715,7 @@ export async function sendChatMessage(
     'You are Wizz, an AI assistant built into an engineering manager\'s personal knowledge base. ' +
     'You help the user find information from their notes, understand patterns across meetings, ' +
     'and think through problems using their accumulated context.\n\n' +
+    `Today is ${getCurrentDateString()}.\n\n` +
     'Always reply in the same language the user writes in.\n\n' +
     'Be concise and actionable. When you don\'t have relevant context, say so rather than guessing.\n\n' +
     'You have tools available to create, update, and delete calendar events and action items, and to create notes. ' +

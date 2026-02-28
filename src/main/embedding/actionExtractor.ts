@@ -5,6 +5,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
+import { getCurrentDateString } from '../utils/date'
 
 // Default: Haiku — fast and cheap for fire-and-forget background extraction
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
@@ -49,7 +50,7 @@ export async function extractActionItems(
     messages: [
       {
         role: 'user',
-        content: `Extract action items from the following note. An action item is a concrete task, commitment, or follow-up that someone needs to do.
+        content: `Today is ${getCurrentDateString()}.\n\nExtract action items from the following note. An action item is a concrete task, commitment, or follow-up that someone needs to do.
 
 Note title: ${noteTitle}
 
