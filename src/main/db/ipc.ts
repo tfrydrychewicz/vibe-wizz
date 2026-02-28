@@ -660,16 +660,44 @@ export function registerDbIpcHandlers(): void {
     return db.prepare(sql).all(...params)
   })
 
-  /** entities:list — returns all non-trashed entities of a given type, sorted by name. */
-  ipcMain.handle('entities:list', (_event, { type_id }: { type_id: string }) => {
-    const db = getDatabase()
-    return db
-      .prepare(
-        `SELECT id, name, type_id, updated_at, created_at
-         FROM entities WHERE type_id = ? AND trashed_at IS NULL ORDER BY name COLLATE NOCASE`
-      )
-      .all(type_id) as Pick<EntityRow, 'id' | 'name' | 'type_id' | 'updated_at' | 'created_at'>[]
-  })
+  /** entities:list — returns all non-trashed entities of a given type with optional sort. */
+  ipcMain.handle(
+    'entities:list',
+    (
+      _event,
+      {
+        type_id,
+        sortField,
+        sortDir,
+        includeFields,
+      }: {
+        type_id: string
+        sortField?: string
+        sortDir?: 'asc' | 'desc'
+        includeFields?: boolean
+      }
+    ) => {
+      const db = getDatabase()
+      const BUILTIN_COLS: Record<string, string> = {
+        name: 'name COLLATE NOCASE',
+        created_at: 'created_at',
+        updated_at: 'updated_at',
+      }
+      const field = sortField ?? 'name'
+      const dir = sortDir === 'desc' ? 'DESC' : 'ASC'
+      const orderExpr =
+        BUILTIN_COLS[field] ??
+        `JSON_EXTRACT(fields, '$.${field.replace(/[^a-zA-Z0-9_]/g, '')}') COLLATE NOCASE`
+      const cols = includeFields
+        ? 'id, name, type_id, updated_at, created_at, fields'
+        : 'id, name, type_id, updated_at, created_at'
+      return db
+        .prepare(
+          `SELECT ${cols} FROM entities WHERE type_id = ? AND trashed_at IS NULL ORDER BY ${orderExpr} ${dir}`
+        )
+        .all(type_id)
+    }
+  )
 
   /** entities:create — creates a new entity with a given type and name. */
   ipcMain.handle(
