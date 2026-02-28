@@ -8,6 +8,7 @@ import { useInputMention } from '../composables/useInputMention'
 import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
 import AttachmentBar from './AttachmentBar.vue'
+import { MODELS, DEFAULT_CHAT_MODEL, type ChatModelId } from '../constants/models'
 
 const emit = defineEmits<{
   close: []
@@ -17,18 +18,11 @@ const emit = defineEmits<{
   'note-created': []
 }>()
 
-const MODELS = [
-  { id: 'claude-opus-4-6',          label: 'Opus 4.6' },
-  { id: 'claude-sonnet-4-6',        label: 'Sonnet 4.6' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
-] as const
-type ModelId = typeof MODELS[number]['id']
-
 const inputText = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const selectedModel = ref<ModelId>('claude-sonnet-4-6')
+const selectedModel = ref<ChatModelId>(DEFAULT_CHAT_MODEL)
 
 // ── File attachment (shared composable) ──────────────────────────────────────
 const {

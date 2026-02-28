@@ -21,6 +21,13 @@ const DEFAULT_CHAT_MODEL = 'claude-sonnet-4-6'
 // Haiku: fast and cheap for keyword extraction (query expansion)
 const KEYWORD_MODEL = 'claude-haiku-4-5-20251001'
 
+// Anthropic built-in web search tool — executed server-side, no client implementation needed
+const WEB_SEARCH_TOOL: Anthropic.Messages.WebSearchTool20260209 = {
+  type: 'web_search_20260209',
+  name: 'web_search',
+  max_uses: 5,
+}
+
 export const AVAILABLE_MODELS = [
   { id: 'claude-opus-4-6',          label: 'Opus 4.6' },
   { id: 'claude-sonnet-4-6',        label: 'Sonnet 4.6' },
@@ -420,6 +427,10 @@ export function setChatAnthropicKey(apiKey: string): void {
  * conversation history so follow-up questions ("and when was that?") resolve
  * to the right topic ("Bifrost", "meeting") based on prior context.
  *
+ * Also classifies whether the question needs real-time web information:
+ * needsWebSearch = true for current events, latest releases, prices, weather, etc.
+ * needsWebSearch = false for personal notes, meetings, tasks, history.
+ *
  * Returns base-form keywords in any language without stop-word lists.
  * Falls back to splitting the raw query on whitespace if the API call fails.
  */
@@ -427,8 +438,9 @@ export async function extractSearchKeywords(
   question: string,
   recentHistory?: { role: 'user' | 'assistant'; content: string }[],
   model = KEYWORD_MODEL,
-): Promise<string[]> {
-  if (!_client) return question.split(/\s+/).filter((w) => w.length >= 3)
+): Promise<{ keywords: string[]; needsWebSearch: boolean }> {
+  const fallbackKeywords = question.split(/\s+/).filter((w) => w.length >= 3)
+  if (!_client) return { keywords: fallbackKeywords, needsWebSearch: false }
 
   // Build a short conversation snippet (last 4 messages) so Haiku can resolve
   // pronouns and follow-ups like "a kiedy to bylo?" → keywords from prior topic
@@ -444,31 +456,44 @@ export async function extractSearchKeywords(
   try {
     const response = await _client.messages.create({
       model: model,
-      max_tokens: 60,
+      max_tokens: 80,
       messages: [
         {
           role: 'user',
           content:
             `${contextBlock}` +
-            'Based on the conversation above and the latest question, extract 3-6 search keywords ' +
-            'that would help locate relevant notes in a personal knowledge base. ' +
-            'Return ONLY the keywords in their base/dictionary form, space-separated, no punctuation, no explanation. ' +
-            'Preserve proper nouns exactly as written.\n\n' +
-            `Latest question: ${question}\n\nKeywords:`,
+            'Based on the conversation above and the latest question, do two things:\n' +
+            '1. Extract 3-6 search keywords in their base/dictionary form, space-separated, no punctuation.\n' +
+            '   Preserve proper nouns exactly. Always respond in the same language as the question.\n' +
+            '2. Decide if the question needs REAL-TIME web information (current events, latest software releases,\n' +
+            '   live prices, today\'s weather, breaking news, etc.) that cannot come from a personal note archive.\n' +
+            '   WEB_SEARCH: YES only for real-time/current info. WEB_SEARCH: NO for personal notes, meetings,\n' +
+            '   tasks, people, projects, or any historical/archived information.\n\n' +
+            'Output format (exactly two lines, nothing else):\n' +
+            '<keywords on this line>\n' +
+            'WEB_SEARCH: YES|NO\n\n' +
+            `Latest question: ${question}`,
         },
       ],
     })
 
     const block = response.content[0]
-    if (block.type !== 'text') return question.split(/\s+/).filter((w) => w.length >= 3)
+    if (block.type !== 'text') return { keywords: fallbackKeywords, needsWebSearch: false }
 
-    return block.text
+    const lines = block.text.trim().split(/\n+/)
+    const webSearchLine = lines.find((l) => l.trim().toUpperCase().startsWith('WEB_SEARCH:'))
+    const needsWebSearch = webSearchLine?.trim().toUpperCase().includes('YES') ?? false
+
+    const keywordLine = lines.find((l) => !l.trim().toUpperCase().startsWith('WEB_SEARCH:')) ?? ''
+    const keywords = keywordLine
       .trim()
       .split(/\s+/)
       .map((w) => w.replace(/[,;.]/g, ''))
       .filter((w) => w.length >= 2)
+
+    return { keywords: keywords.length > 0 ? keywords : fallbackKeywords, needsWebSearch }
   } catch {
-    return question.split(/\s+/).filter((w) => w.length >= 3)
+    return { keywords: fallbackKeywords, needsWebSearch: false }
   }
 }
 
@@ -579,6 +604,7 @@ export async function generateInlineContent(
   richEntities?: RichEntityContext[],
   images?: { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[],
   files?: AttachedFilePayload[],
+  useWebSearch = false,
 ): Promise<string> {
   if (!_client) throw new Error('Anthropic client not initialized')
 
@@ -665,15 +691,46 @@ export async function generateInlineContent(
         ]
       : userText
 
-  const response = await _client.messages.create({
-    model,
-    max_tokens: 1500,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userContent }],
-  })
+  // When web search is not needed, use a simple single-turn call (no tool loop overhead)
+  if (!useWebSearch) {
+    const response = await _client.messages.create({
+      model,
+      max_tokens: 1500,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userContent }],
+    })
+    const block = response.content[0]
+    return block.type === 'text' ? block.text.trim() : ''
+  }
 
-  const block = response.content[0]
-  return block.type === 'text' ? block.text.trim() : ''
+  // Web search enabled: run a tool-use loop (max 5 iterations).
+  // The web search tool is server-side — Anthropic executes it and embeds both
+  // ServerToolUseBlock + WebSearchToolResultBlock in the assistant turn.
+  // We just push the assistant turn and continue; no client-side tool execution needed.
+  const loopMessages: Anthropic.MessageParam[] = [{ role: 'user', content: userContent }]
+  const inlineTools: Anthropic.Messages.ToolUnion[] = [WEB_SEARCH_TOOL]
+  const MAX_INLINE_ITERATIONS = 5
+
+  for (let i = 0; i < MAX_INLINE_ITERATIONS; i++) {
+    const response = await _client.messages.create({
+      model,
+      max_tokens: 1500,
+      system: systemPrompt,
+      tools: inlineTools,
+      messages: loopMessages,
+    })
+
+    if (response.stop_reason !== 'tool_use') {
+      const block = response.content.find((b) => b.type === 'text')
+      return block?.type === 'text' ? block.text.trim() : ''
+    }
+
+    // Append assistant turn (contains server_tool_use + web_search_tool_result blocks)
+    // No user tool_result turn needed — results are already embedded in the assistant content
+    loopMessages.push({ role: 'assistant', content: response.content })
+  }
+
+  return ''
 }
 
 /**
@@ -708,6 +765,7 @@ export async function sendChatMessage(
   pinnedNotes: EntityLinkedNote[] = [],
   richEntities: RichEntityContext[] = [],
   entityLinkedNotes: EntityLinkedNote[] = [],
+  useWebSearch = false,
 ): Promise<{ content: string; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[] }> {
   if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
 
@@ -840,6 +898,10 @@ export async function sendChatMessage(
     return { role: m.role as 'user' | 'assistant', content: m.content }
   })
 
+  const tools: Anthropic.Messages.ToolUnion[] = useWebSearch
+    ? [...WIZZ_TOOLS, WEB_SEARCH_TOOL]
+    : WIZZ_TOOLS
+
   const actions: ExecutedAction[] = []
   let finalText = ''
 
@@ -848,7 +910,7 @@ export async function sendChatMessage(
       model,
       max_tokens: 4000,
       system: systemPrompt,
-      tools: WIZZ_TOOLS,
+      tools,
       messages: loopMessages,
     })
 
@@ -859,10 +921,11 @@ export async function sendChatMessage(
       break
     }
 
-    // Append assistant turn (may include text + tool_use blocks)
+    // Append assistant turn (may include text + tool_use + server_tool_use + web_search_tool_result blocks)
     loopMessages.push({ role: 'assistant', content: response.content })
 
-    // Execute each tool call and collect results
+    // Execute custom tool_use blocks; skip server_tool_use (web search handled server-side,
+    // results are already embedded in the assistant content above)
     const toolResults: Anthropic.ToolResultBlockParam[] = []
     for (const block of response.content) {
       if (block.type !== 'tool_use') continue
@@ -886,7 +949,13 @@ export async function sendChatMessage(
       })
     }
 
-    loopMessages.push({ role: 'user', content: toolResults })
+    // Only add a user turn when there are custom tool results to report.
+    // For server-tool-only turns (web search), results are already in the assistant content —
+    // the next loop iteration calls the API with the assistant turn as the last message,
+    // letting Claude read the search results and produce the final answer.
+    if (toolResults.length > 0) {
+      loopMessages.push({ role: 'user', content: toolResults })
+    }
   }
 
   // Scan final response for {{entity:uuid:Name}} tokens — ID is embedded directly.

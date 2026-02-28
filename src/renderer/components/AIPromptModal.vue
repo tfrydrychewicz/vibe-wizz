@@ -5,6 +5,7 @@ import { useInputMention } from '../composables/useInputMention'
 import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT, type AttachedFile } from '../composables/useFileAttachment'
 import AttachmentBar from './AttachmentBar.vue'
+import { MODELS, DEFAULT_CHAT_MODEL, type ChatModelId } from '../constants/models'
 
 export interface AIPromptSubmit {
   prompt: string
@@ -12,6 +13,7 @@ export interface AIPromptSubmit {
   mentionedNoteIds: string[]
   images: { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[]
   files: { name: string; content: string; mimeType: AttachedFile['mimeType'] }[]
+  model: ChatModelId
 }
 
 const props = defineProps<{
@@ -28,6 +30,7 @@ const emit = defineEmits<{
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const promptText = ref('')
+const selectedModel = ref<ChatModelId>(DEFAULT_CHAT_MODEL)
 
 // ── Composables ────────────────────────────────────────────────────────────────
 const {
@@ -83,6 +86,7 @@ function doSubmit(): void {
     mentionedNoteIds: noteLink.mentionedNotes.value.map((n) => n.id),
     images: attachedImages.value.map(({ dataUrl, mimeType }) => ({ dataUrl, mimeType })),
     files: attachedFiles.value.map(({ name, content, mimeType }) => ({ name, content, mimeType })),
+    model: selectedModel.value,
   })
 }
 
@@ -217,6 +221,9 @@ const hasContext = () =>
           </button>
           <span class="ai-modal-hint">Enter ↵ · Shift+Enter newline · Esc cancel</span>
         </div>
+        <select v-model="selectedModel" class="ai-modal-model-select" :disabled="loading" title="Claude model">
+          <option v-for="m in MODELS" :key="m.id" :value="m.id">{{ m.label }}</option>
+        </select>
         <button
           class="ai-modal-submit"
           :disabled="loading || (!promptText.trim() && attachedImages.length === 0 && attachedFiles.length === 0)"
@@ -471,6 +478,32 @@ const hasContext = () =>
 .ai-modal-hint {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+
+.ai-modal-model-select {
+  appearance: none;
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 6px;
+  height: 22px;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.ai-modal-model-select:hover:not(:disabled),
+.ai-modal-model-select:focus:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.ai-modal-model-select:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .ai-modal-submit {

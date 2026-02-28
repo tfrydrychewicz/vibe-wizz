@@ -1170,6 +1170,7 @@ export function registerDbIpcHandlers(): void {
         mentionedNoteIds,
         images,
         files,
+        model,
       }: {
         prompt: string
         noteBodyPlain: string
@@ -1178,6 +1179,7 @@ export function registerDbIpcHandlers(): void {
         mentionedNoteIds?: string[]
         images?: { dataUrl: string; mimeType: string }[]
         files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
+        model?: ChatModelId
       },
     ): Promise<{ content: object[] } | { error: string }> => {
       const db = getDatabase()
@@ -1200,14 +1202,14 @@ export function registerDbIpcHandlers(): void {
 
       setChatAnthropicKey(apiKey)
 
-      // FTS5 keyword search on the prompt for knowledge base context (top 5 notes)
+      // FTS5 keyword search on the prompt for knowledge base context (top 5 notes).
+      // extractSearchKeywords also classifies whether web search is needed.
       const contextNotes: { title: string; excerpt: string }[] = []
+      let inlineNeedsWebSearch = false
       if (prompt.trim()) {
         try {
-          const keywords = prompt
-            .split(/\s+/)
-            .filter((w) => w.length >= 3)
-            .slice(0, 8)
+          const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(prompt, undefined, bgModel)
+          inlineNeedsWebSearch = webSearch
           if (keywords.length > 0) {
             const ftsQuery = keywords
               .map((w) => w.replace(/["\(\)\^\*\+\-]/g, ''))
@@ -1296,10 +1298,11 @@ export function registerDbIpcHandlers(): void {
           noteBodyPlain,
           selectedText,
           contextNotes,
-          bgModel,
+          model ?? bgModel,
           richEntities.length > 0 ? richEntities : undefined,
           images && images.length > 0 ? images as { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[] : undefined,
           files && files.length > 0 ? files : undefined,
+          inlineNeedsWebSearch,
         )
         if (!markdown) {
           return { error: 'AI returned empty content. Please try a different prompt.' }
@@ -1748,9 +1751,12 @@ export function registerDbIpcHandlers(): void {
       //         inflected forms and non-ASCII characters that FTS5 may tokenize differently.
       const contextNotes: { id: string; title: string; excerpt: string }[] = []
       const seen = new Set<string>()
+      let needsWebSearch = false
       if (query.trim()) {
         // Pass prior messages so Haiku can resolve follow-ups ("a kiedy to bylo?" → "Bifrost")
-        const keywords = await extractSearchKeywords(query, messages.slice(0, -1), chatBgModel)
+        // Also classifies whether web search is needed for this question
+        const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(query, messages.slice(0, -1), chatBgModel)
+        needsWebSearch = webSearch
 
         if (keywords.length > 0) {
           function addNote(row: { id: string; title: string; body_plain: string }): void {
@@ -2006,7 +2012,7 @@ export function registerDbIpcHandlers(): void {
       let executedActions: ExecutedAction[] = []
       let entityRefs: { id: string; name: string }[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes, needsWebSearch)
         content = result.content
         executedActions = result.actions
         entityRefs = result.entityRefs
