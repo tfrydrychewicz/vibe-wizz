@@ -157,9 +157,20 @@ const followupAssigneeEntityTypeId = ref('')
 // ── Debug settings ────────────────────────────────────────────────────────────
 const saveDebugAudio = ref(false)
 const debugAudioFolder = ref('')
+const reembedding = ref(false)
 
 function openDebugAudioFolder(): void {
   window.api.invoke('debug:open-audio-folder')
+}
+
+async function reembedAll(): Promise<void> {
+  if (reembedding.value) return
+  reembedding.value = true
+  try {
+    await window.api.invoke('debug:reembed-all')
+  } finally {
+    reembedding.value = false
+  }
 }
 
 // ── Calendar settings ─────────────────────────────────────────────────────────
@@ -819,6 +830,18 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                 <span class="debug-folder-path">{{ debugAudioFolder }}</span>
                 <button class="open-folder-btn" @click="openDebugAudioFolder">Open</button>
               </div>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label">Embeddings</label>
+              <p class="field-hint">
+                Force L1 chunk embeddings, L2 note summaries, and L3 cluster generation for all
+                notes. Useful after changing API keys or to recover from a corrupted embedding
+                state. This may take several minutes depending on note count.
+              </p>
+              <button class="open-folder-btn" :disabled="reembedding" @click="reembedAll">
+                {{ reembedding ? 'Re-embedding…' : 'Re-embed all notes' }}
+              </button>
             </div>
           </template>
 

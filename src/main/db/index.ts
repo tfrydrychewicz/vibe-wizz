@@ -48,13 +48,23 @@ export function initDatabase(): Database.Database {
 /**
  * Loads the sqlite-vec extension into the database.
  * The extension ships as a platform-specific .dylib/.so/.dll binary.
- * In dev mode, sqlite-vec resolves its own path via __dirname.
- * In packaged mode, both sqlite-vec and the platform package are in app.asar.unpacked
- * so __dirname resolves to the real filesystem path — sqliteVec.load() works the same way.
+ *
+ * In dev, sqlite-vec resolves its own path via __dirname which points to the real
+ * node_modules directory — no remapping needed.
+ *
+ * In a packaged Electron app, sqlite-vec's __dirname resolves to the VIRTUAL ASAR path
+ * (app.asar/node_modules/sqlite-vec/) even though the file is physically in
+ * app.asar.unpacked. Electron patches fs.statSync so the existence check inside
+ * getLoadablePath() passes, but native dlopen() bypasses Electron's ASAR intercept and
+ * sees app.asar as a regular file (ENOTDIR). We must remap to the real unpacked path.
  */
 function loadSqliteVec(db: Database.Database): boolean {
   try {
-    sqliteVec.load(db)
+    const rawPath = sqliteVec.getLoadablePath()
+    // Remap virtual ASAR path → real unpacked path so dlopen() gets a real filesystem path.
+    // In dev rawPath contains no 'app.asar' segment, so this replace is a no-op.
+    const loadablePath = rawPath.replace(/app\.asar([/\\])/, 'app.asar.unpacked$1')
+    db.loadExtension(loadablePath)
     return true
   } catch (err) {
     console.warn('[DB] sqlite-vec failed to load — semantic search disabled:', err)

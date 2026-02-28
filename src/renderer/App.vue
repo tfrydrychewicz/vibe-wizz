@@ -88,6 +88,10 @@ const showCommandPalette = ref(false)
 // Quit-time embedding flush overlay
 const quitEmbeddingsCount = ref(0)
 
+// Debug re-embed overlay
+const reembedActive = ref(false)
+const reembedNoteCount = ref(0)
+
 // Templates (for "New note from template" dropdown in NoteList)
 type TemplateRef = { id: string; name: string; icon: string }
 const noteTemplates = ref<TemplateRef[]>([])
@@ -414,6 +418,16 @@ onMounted(() => {
   unsubQuitEmbeddings = window.api.on('app:quit-embeddings-start', (...args: unknown[]) => {
     const { count } = args[0] as { count: number }
     quitEmbeddingsCount.value = count
+  })
+
+  window.api.on('app:reembed-start', (...args: unknown[]) => {
+    const { count } = args[0] as { count: number }
+    reembedNoteCount.value = count
+    reembedActive.value = true
+  })
+
+  window.api.on('app:reembed-done', () => {
+    reembedActive.value = false
   })
 })
 
@@ -742,13 +756,20 @@ onBeforeUnmount(() => {
       @note-created="noteListRef?.refresh()"
     />
 
-    <!-- Quit-time embedding flush overlay -->
+    <!-- Quit-time / debug re-embed overlay -->
     <Transition name="quit-overlay">
-      <div v-if="quitEmbeddingsCount > 0" class="quit-overlay">
+      <div v-if="quitEmbeddingsCount > 0 || reembedActive" class="quit-overlay">
         <div class="quit-overlay-card">
           <Loader2 :size="28" class="quit-spinner" />
-          <p class="quit-title">Saving {{ quitEmbeddingsCount }} note{{ quitEmbeddingsCount === 1 ? '' : 's' }}…</p>
-          <p class="quit-subtitle">Regenerating embeddings before closing</p>
+          <p class="quit-title">
+            {{ reembedActive
+              ? `Re-embedding ${reembedNoteCount} note${reembedNoteCount === 1 ? '' : 's'}…`
+              : `Saving ${quitEmbeddingsCount} note${quitEmbeddingsCount === 1 ? '' : 's'}…`
+            }}
+          </p>
+          <p class="quit-subtitle">
+            {{ reembedActive ? 'Running L1/L2/L3 embedding pipeline' : 'Regenerating embeddings before closing' }}
+          </p>
         </div>
       </div>
     </Transition>

@@ -95,6 +95,9 @@ app.on('before-quit', async (event) => {
     ).c
     if (dirtyCount > 0) {
       pushToRenderer('app:quit-embeddings-start', { count: dirtyCount })
+      // Yield one tick so the renderer can process the IPC event and paint the overlay
+      // before processDirtyNotes() (which may resolve in ~0ms) triggers app.quit().
+      await new Promise<void>((r) => setTimeout(r, 100))
     }
     await Promise.race([
       processDirtyNotes(),

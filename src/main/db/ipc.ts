@@ -1,7 +1,8 @@
 import { ipcMain } from 'electron'
 import { randomUUID } from 'crypto'
 import { getDatabase, isVecLoaded } from './index'
-import { scheduleNer, scheduleEmbeddingOnly } from '../embedding/pipeline'
+import { scheduleNer, scheduleEmbeddingOnly, processAllNotes } from '../embedding/pipeline'
+import { runClusterBatchNow } from '../embedding/scheduler'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
@@ -2458,5 +2459,26 @@ export function registerDbIpcHandlers(): void {
       }
     }
     return { source: APPS_SCRIPT_SOURCE, instructions: APPS_SCRIPT_INSTRUCTIONS }
+  })
+
+  /** debug:reembed-all — force L1+L2 for every note, then run L3 cluster batch.
+   *  Fire-and-forget: pushes app:reembed-start (with note count) then app:reembed-done. */
+  ipcMain.handle('debug:reembed-all', async () => {
+    const db = getDatabase()
+    const { cnt } = db
+      .prepare(`SELECT COUNT(*) AS cnt FROM notes WHERE archived_at IS NULL`)
+      .get() as { cnt: number }
+
+    pushToRenderer('app:reembed-start', { count: cnt })
+    // Yield so the renderer can paint the overlay before we start CPU-heavy work
+    await new Promise<void>((r) => setTimeout(r, 100))
+
+    try {
+      await processAllNotes()
+      await runClusterBatchNow()
+    } finally {
+      pushToRenderer('app:reembed-done', {})
+    }
+    return { ok: true }
   })
 }

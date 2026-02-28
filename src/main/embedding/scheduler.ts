@@ -29,6 +29,63 @@ export function scheduleNightlyClusterBatch(): void {
   })
 }
 
+/**
+ * Debug: run the L3 cluster batch immediately, bypassing the 23h time check.
+ * Respects the _isRunning mutex so it is safe to call concurrently.
+ */
+export async function runClusterBatchNow(): Promise<void> {
+  if (_isRunning) {
+    console.log('[Cluster] runClusterBatchNow skipped — batch already in progress')
+    return
+  }
+  if (!isVecLoaded()) return
+
+  const db = getDatabase()
+
+  const openaiKey =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('openai_api_key') as { value: string } | undefined)
+      ?.value ?? ''
+  const anthropicKey =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)
+      ?.value ?? ''
+  const backgroundModel =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
+      ?.value || 'claude-haiku-4-5-20251001'
+
+  if (!openaiKey || !anthropicKey) {
+    console.log('[Cluster] runClusterBatchNow skipped — API keys not configured')
+    return
+  }
+
+  const { cnt } = db
+    .prepare('SELECT COUNT(*) AS cnt FROM note_chunks WHERE layer = 2')
+    .get() as { cnt: number }
+
+  if (cnt < MIN_L2_COUNT) {
+    console.log(`[Cluster] runClusterBatchNow skipped — only ${cnt} L2 summaries (need ${MIN_L2_COUNT})`)
+    return
+  }
+
+  _isRunning = true
+  console.log('[Cluster] Debug batch starting...')
+
+  try {
+    await runL3Clustering(db, openaiKey, anthropicKey, backgroundModel)
+
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run('cluster_last_run', new Date().toISOString())
+
+    console.log('[Cluster] Debug batch complete')
+    pushToRenderer('cluster:complete', {})
+  } catch (err) {
+    console.error('[Cluster] Debug batch failed:', err)
+  } finally {
+    _isRunning = false
+  }
+}
+
 async function runBatchIfDue(): Promise<void> {
   if (_isRunning) return
   if (!isVecLoaded()) return

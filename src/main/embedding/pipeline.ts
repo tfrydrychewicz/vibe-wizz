@@ -54,10 +54,34 @@ export async function processDirtyNotes(): Promise<void> {
 
   if (!dirty.length) return
 
-  console.log(`[Embedding] ${dirty.length} dirty note(s) queued for startup re-embedding`)
+  console.log(`[Embedding] ${dirty.length} dirty note(s) queued for re-embedding`)
   for (const { id } of dirty) {
     await runEmbeddingPipeline(id)
   }
+}
+
+/**
+ * Debug: force-reembed ALL non-archived notes (no LIMIT cap).
+ * Marks every note dirty first so the pipeline always re-runs L1+L2.
+ * Returns the count of notes queued.
+ */
+export async function processAllNotes(): Promise<number> {
+  const db = getDatabase()
+
+  // Mark every non-archived note as dirty so embeddings are always regenerated
+  db.prepare(`UPDATE notes SET embedding_dirty = 1 WHERE archived_at IS NULL`).run()
+
+  const notes = db
+    .prepare(`SELECT id FROM notes WHERE archived_at IS NULL ORDER BY updated_at DESC`)
+    .all() as { id: string }[]
+
+  if (!notes.length) return 0
+
+  console.log(`[Embedding] Debug re-embed: queuing ${notes.length} note(s)`)
+  for (const { id } of notes) {
+    await runEmbeddingPipeline(id)
+  }
+  return notes.length
 }
 
 /** Full pipeline: NER + L1+L2 concurrently. */
@@ -103,7 +127,14 @@ async function runEmbeddingPipeline(noteId: string): Promise<void> {
     .get('openai_api_key') as { value: string } | undefined
   const openaiKey = openaiSetting?.value ?? ''
 
-  if (!isVecLoaded() || !openaiKey) return
+  if (!isVecLoaded() || !openaiKey) {
+    if (!isVecLoaded()) {
+      console.warn('[Embedding] sqlite-vec not loaded — skipping L1/L2 pipeline for note', noteId)
+    } else {
+      console.warn('[Embedding] OpenAI key not configured — skipping L1/L2 pipeline for note', noteId)
+    }
+    return
+  }
 
   const anthropicSetting = db
     .prepare('SELECT value FROM settings WHERE key = ?')
