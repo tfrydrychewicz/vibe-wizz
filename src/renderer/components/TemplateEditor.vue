@@ -12,6 +12,7 @@ import { Subscript } from '@tiptap/extension-subscript'
 import { TextAlign } from '@tiptap/extension-text-align'
 import { TaskList } from '@tiptap/extension-task-list'
 import { TaskItem } from '@tiptap/extension-task-item'
+import { Image as TiptapImage } from '@tiptap/extension-image'
 import { Table } from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
@@ -102,6 +103,7 @@ const editor = useEditor({
     Superscript,
     Subscript,
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
+    TiptapImage.configure({ allowBase64: true, HTMLAttributes: { class: 'editor-image' } }),
     TaskList,
     TaskItem.configure({ nested: true }),
     Table.configure({ resizable: false }),
@@ -697,6 +699,16 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.04);
   font-weight: 600;
   text-align: left;
+}
+
+/* ── Inline images ───────────────────────────────────────────────────────── */
+.template-body :deep(.editor-image) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  display: block;
+  margin: 8px 0;
+  cursor: default;
 }
 
 .template-body :deep(.tiptap table .selectedCell::after) {

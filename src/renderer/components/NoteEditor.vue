@@ -12,6 +12,7 @@ import { BubbleMenu } from '@tiptap/vue-3/menus'
 import Mention from '@tiptap/extension-mention'
 import StarterKit from '@tiptap/starter-kit'
 import { Extension } from '@tiptap/core'
+import type { Editor as CoreEditor } from '@tiptap/core'
 import Suggestion from '@tiptap/suggestion'
 import MentionList from './MentionList.vue'
 import MentionChip from './MentionChip.vue'
@@ -45,6 +46,8 @@ import { Subscript } from '@tiptap/extension-subscript'
 import { TextAlign } from '@tiptap/extension-text-align'
 import { Link } from '@tiptap/extension-link'
 import { Image as TiptapImage } from '@tiptap/extension-image'
+import { FileHandler } from '@tiptap/extension-file-handler'
+import { MAX_FILE_SIZE } from '../composables/useFileAttachment'
 import { TaskList } from '@tiptap/extension-task-list'
 import { TaskItem } from '@tiptap/extension-task-item'
 import ActionTaskItem from './ActionTaskItem.vue'
@@ -717,6 +720,24 @@ const AISpaceExtension = Extension.create({
   },
 })
 
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+
+function insertImageFromFile(ed: CoreEditor, file: File, pos?: number): void {
+  if (!ed) return
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) return
+  if (file.size > MAX_FILE_SIZE) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const src = reader.result as string
+    if (pos !== undefined) {
+      ed.chain().insertContentAt(pos, { type: 'image', attrs: { src } }).run()
+    } else {
+      ed.chain().setImage({ src }).run()
+    }
+  }
+  reader.readAsDataURL(file)
+}
+
 const editor = useEditor({
   extensions: [
     StarterKit,
@@ -729,7 +750,16 @@ const editor = useEditor({
     Subscript,
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
     Link.configure({ openOnClick: false }),
-    TiptapImage,
+    TiptapImage.configure({ allowBase64: true, HTMLAttributes: { class: 'editor-image' } }),
+    FileHandler.configure({
+      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+      onPaste(currentEditor, files) {
+        files.forEach((file) => insertImageFromFile(currentEditor, file))
+      },
+      onDrop(currentEditor, files, pos) {
+        files.forEach((file) => insertImageFromFile(currentEditor, file, pos))
+      },
+    }),
     TaskList,
     TaskItem.extend({
       addAttributes() {
@@ -2069,6 +2099,23 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.03em;
+}
+
+/* ── Inline images ───────────────────────────────────────────────────────── */
+.note-body :deep(.editor-image) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  display: block;
+  margin: 8px 0;
+  cursor: default;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color 0.1s;
+}
+
+.note-body :deep(.editor-image.ProseMirror-selectednode) {
+  outline-color: #5b8def;
 }
 
 /* ── AI Line Placeholder hint ────────────────────────────────────────────── */
