@@ -13,6 +13,7 @@ import { startCalendarSyncScheduler } from './calendar/sync/scheduler'
 const isDev = process.env['NODE_ENV'] === 'development'
 
 let mainWindow: BrowserWindow | null = null
+let isQuitting = false
 
 ipcMain.handle('window:toggle-maximize', () => {
   const win = mainWindow
@@ -73,10 +74,27 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', async (event) => {
+  if (isQuitting) return  // 2nd call after our app.quit() — let Electron proceed
+  event.preventDefault()
+  isQuitting = true
+
   stopMicMonitor()
   destroyMeetingWindow()
+
+  // Flush dirty L1/L2 embeddings before closing — max 5 seconds,
+  // then fall back to startup recovery for any remainder
+  try {
+    await Promise.race([
+      processDirtyNotes(),
+      new Promise<void>((r) => setTimeout(r, 5000)),
+    ])
+  } catch {
+    // ignore — startup recovery handles any remaining dirty notes
+  }
+
   closeDatabase()
+  app.quit()
 })
 
 app.on('window-all-closed', () => {
