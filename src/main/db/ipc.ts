@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { randomUUID } from 'crypto'
 import { getDatabase, isVecLoaded } from './index'
-import { scheduleEmbedding } from '../embedding/pipeline'
+import { scheduleNer, scheduleEmbeddingOnly } from '../embedding/pipeline'
 import { setOpenAIKey, embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
@@ -513,12 +513,32 @@ export function registerDbIpcHandlers(): void {
         insertRelation.run(id, targetId)
       }
 
-      // Fire-and-forget: generate embeddings in the background (never blocks the save)
-      scheduleEmbedding(id)
+      // NER runs on every save to keep entity decoration hints current.
+      scheduleNer(id)
+
+      // Mark note as needing L1/L2 re-embedding. Actual embedding is deferred
+      // to when the note loses focus (notes:trigger-embedding IPC) or app startup.
+      db.prepare('UPDATE notes SET embedding_dirty = 1 WHERE id = ?').run(id)
 
       return { ok: true }
     }
   )
+
+  /**
+   * notes:trigger-embedding — trigger deferred L1+L2 embedding for a note.
+   * Called by the renderer when a note loses focus (note switch or unmount).
+   * No-op if the note's embeddings are already current (embedding_dirty = 0).
+   */
+  ipcMain.handle('notes:trigger-embedding', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    const row = db
+      .prepare('SELECT embedding_dirty FROM notes WHERE id = ?')
+      .get(id) as { embedding_dirty: number } | undefined
+    if (row?.embedding_dirty === 1) {
+      scheduleEmbeddingOnly(id)
+    }
+    return { ok: true }
+  })
 
   /**
    * notes:get-auto-detections — returns NER-detected entities for a note.

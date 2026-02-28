@@ -1,13 +1,10 @@
 /**
  * Embedding pipeline orchestrator.
- * Called fire-and-forget after every notes:update save.
  *
- * Flow:
- *   1. Skip early if neither OpenAI nor Anthropic API keys are configured
- *   2. NER and L1+L2 run concurrently (Promise.all) — independent DB tables and API clients
- *   3. (NER) If Anthropic key: detect entity mentions; pushes note:ner-complete when done
- *   4. (L1) If sqlite-vec loaded and OpenAI key: chunk and embed note body
- *   5. (L2) If sqlite-vec loaded, OpenAI and Anthropic keys: generate + embed note summary
+ * Three separate pipelines:
+ *  - runNerPipeline:       NER entity detection only — runs on every note save
+ *  - runEmbeddingPipeline: L1 chunk embeddings + L2 note summary — deferred to focus loss
+ *  - runPipeline:          NER + L1+L2 concurrently — used by postProcessor.ts after transcription
  *
  * Errors are caught and logged — pipeline failures never surface to the user.
  */
@@ -19,21 +16,94 @@ import { setAnthropicKey, summarizeNote } from './summarizer'
 import { detectEntityMentions, type NerDetection } from './ner'
 import { pushToRenderer } from '../push'
 
-/** Fire-and-forget entry point. Call after notes:update without await. */
+/** Fire-and-forget: full pipeline (NER + L1+L2). Used by postProcessor.ts after transcription. */
 export function scheduleEmbedding(noteId: string): void {
   runPipeline(noteId).catch((err) => {
     console.error('[Embedding] Pipeline error for note', noteId, ':', err)
   })
 }
 
+/** Fire-and-forget: NER only. Called from notes:update on every save. */
+export function scheduleNer(noteId: string): void {
+  runNerPipeline(noteId).catch((err) => {
+    console.error('[NER] Pipeline error for note', noteId, ':', err)
+  })
+}
+
+/** Fire-and-forget: L1+L2 embeddings only. Called when a note loses focus. */
+export function scheduleEmbeddingOnly(noteId: string): void {
+  runEmbeddingPipeline(noteId).catch((err) => {
+    console.error('[Embedding] L1/L2 pipeline error for note', noteId, ':', err)
+  })
+}
+
+/**
+ * Startup recovery: sequentially re-embed all notes with embedding_dirty = 1.
+ * Called once at app startup after initDatabase().
+ * Sequential to avoid flooding the OpenAI API.
+ */
+export async function processDirtyNotes(): Promise<void> {
+  const db = getDatabase()
+  const dirty = db
+    .prepare(
+      `SELECT id FROM notes
+       WHERE embedding_dirty = 1 AND archived_at IS NULL
+       ORDER BY updated_at DESC LIMIT 50`
+    )
+    .all() as { id: string }[]
+
+  if (!dirty.length) return
+
+  console.log(`[Embedding] ${dirty.length} dirty note(s) queued for startup re-embedding`)
+  for (const { id } of dirty) {
+    await runEmbeddingPipeline(id)
+  }
+}
+
+/** Full pipeline: NER + L1+L2 concurrently. */
 async function runPipeline(noteId: string): Promise<void> {
+  await Promise.all([runNerPipeline(noteId), runEmbeddingPipeline(noteId)])
+}
+
+/** NER entity detection only. */
+async function runNerPipeline(noteId: string): Promise<void> {
   const db = getDatabase()
 
-  // Read API keys at runtime so key changes take effect without restart
+  const anthropicSetting = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('anthropic_api_key') as { value: string } | undefined
+  const anthropicKey = anthropicSetting?.value ?? ''
+
+  if (!anthropicKey) return
+
+  const bgModelSetting = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('model_background') as { value: string } | undefined
+  const backgroundModel = bgModelSetting?.value || 'claude-haiku-4-5-20251001'
+
+  const note = db
+    .prepare('SELECT title, body_plain FROM notes WHERE id = ?')
+    .get(noteId) as { title: string; body_plain: string } | undefined
+
+  if (!note?.body_plain.trim()) return
+
+  await runNer(noteId, note.title, note.body_plain, anthropicKey, db, backgroundModel)
+  pushToRenderer('note:ner-complete', { noteId })
+}
+
+/**
+ * L1 chunk embeddings + L2 note summary.
+ * Clears embedding_dirty = 0 on successful completion.
+ */
+async function runEmbeddingPipeline(noteId: string): Promise<void> {
+  const db = getDatabase()
+
   const openaiSetting = db
     .prepare('SELECT value FROM settings WHERE key = ?')
     .get('openai_api_key') as { value: string } | undefined
   const openaiKey = openaiSetting?.value ?? ''
+
+  if (!isVecLoaded() || !openaiKey) return
 
   const anthropicSetting = db
     .prepare('SELECT value FROM settings WHERE key = ?')
@@ -45,42 +115,29 @@ async function runPipeline(noteId: string): Promise<void> {
     .get('model_background') as { value: string } | undefined
   const backgroundModel = bgModelSetting?.value || 'claude-haiku-4-5-20251001'
 
-  if (!openaiKey && !anthropicKey) return
-
-  // Load current note content
   const note = db
     .prepare('SELECT title, body_plain FROM notes WHERE id = ?')
     .get(noteId) as { title: string; body_plain: string } | undefined
 
-  // NER and L1+L2 are independent — run them concurrently.
-  await Promise.all([
-    // --- NER: entity detection (Anthropic only) ---
-    (async () => {
-      if (!anthropicKey || !note?.body_plain.trim()) return
-      await runNer(noteId, note.title, note.body_plain, anthropicKey, db, backgroundModel)
-      pushToRenderer('note:ner-complete', { noteId })
-    })(),
+  setOpenAIKey(openaiKey)
 
-    // --- L1 + L2: chunk embeddings and note summary (sqlite-vec + OpenAI) ---
-    (async () => {
-      if (!isVecLoaded() || !openaiKey) return
-      setOpenAIKey(openaiKey)
+  // Always clear stale L1 chunks first (even if the note is now empty or deleted)
+  deleteL1Chunks(db, noteId)
 
-      // Always clear stale L1 chunks first (even if the note is now empty or deleted)
-      deleteL1Chunks(db, noteId)
+  if (!note?.body_plain.trim()) {
+    deleteL2Summary(db, noteId)
+    db.prepare('UPDATE notes SET embedding_dirty = 0 WHERE id = ?').run(noteId)
+    return
+  }
 
-      if (!note?.body_plain.trim()) {
-        deleteL2Summary(db, noteId)
-        return
-      }
+  await runL1Chunks(noteId, note.title, note.body_plain, db)
+  if (anthropicKey) {
+    setAnthropicKey(anthropicKey)
+    await runL2Summary(noteId, note.title, note.body_plain, db, backgroundModel)
+  }
 
-      await runL1Chunks(noteId, note.title, note.body_plain, db)
-      if (anthropicKey) {
-        setAnthropicKey(anthropicKey)
-        await runL2Summary(noteId, note.title, note.body_plain, db, backgroundModel)
-      }
-    })(),
-  ])
+  // Clear the dirty flag on successful completion
+  db.prepare('UPDATE notes SET embedding_dirty = 0 WHERE id = ?').run(noteId)
 }
 
 async function runL1Chunks(

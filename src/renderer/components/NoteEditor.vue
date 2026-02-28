@@ -1308,6 +1308,10 @@ watch(
         })
       }
     }
+    // Trigger deferred L1/L2 embedding for the note we're leaving
+    if (oldId) {
+      void window.api.invoke('notes:trigger-embedding', { id: oldId })
+    }
     showRelatedPanel.value = relatedPanelState.get(newId) ?? false
     await loadNote(newId)
     // Reconnect to an ongoing transcription session when returning to this note
@@ -1351,6 +1355,8 @@ onBeforeUnmount(() => {
     clearTimeout(saveTimer)
     flushSave()
   }
+  // Trigger deferred L1/L2 embedding — covers pane close, view switch, and app quit
+  void window.api.invoke('notes:trigger-embedding', { id: props.noteId })
   editor.value?.destroy()
 })
 </script>

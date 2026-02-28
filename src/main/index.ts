@@ -7,6 +7,7 @@ import { startMicMonitor, stopMicMonitor, getMicStatus } from './mic/monitor'
 import { createMeetingWindow, destroyMeetingWindow } from './mic/meetingWindow'
 import { registerTranscriptionIpcHandlers } from './transcription/session'
 import { scheduleNightlyClusterBatch } from './embedding/scheduler'
+import { processDirtyNotes } from './embedding/pipeline'
 import { startCalendarSyncScheduler } from './calendar/sync/scheduler'
 
 const isDev = process.env['NODE_ENV'] === 'development'
@@ -57,6 +58,7 @@ ipcMain.handle('mic:status', () => ({ isActive: getMicStatus() }))
 
 app.whenReady().then(() => {
   initDatabase()
+  processDirtyNotes().catch(console.error)
   registerDbIpcHandlers()
   registerTranscriptionIpcHandlers()
   createWindow()

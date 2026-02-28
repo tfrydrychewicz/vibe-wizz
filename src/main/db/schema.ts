@@ -69,9 +69,10 @@ CREATE TABLE IF NOT EXISTS notes (
   source      TEXT NOT NULL DEFAULT 'manual'
               CHECK(source IN ('manual','transcript','daily_brief','import')),
   language    TEXT NOT NULL DEFAULT 'en',
-  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  archived_at TEXT
+  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  archived_at     TEXT,
+  embedding_dirty INTEGER NOT NULL DEFAULT 0
 );
 
 -- ─────────────────────────────────────────────
