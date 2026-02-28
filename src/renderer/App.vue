@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { Plus, Pencil, X } from 'lucide-vue-next'
+import { Plus, Pencil, X, Loader2 } from 'lucide-vue-next'
 import NoteEditor from './components/NoteEditor.vue'
 import NoteList from './components/NoteList.vue'
 import EntityList from './components/EntityList.vue'
@@ -84,6 +84,9 @@ const showChat = ref(false)
 
 // Command palette
 const showCommandPalette = ref(false)
+
+// Quit-time embedding flush overlay
+const quitEmbeddingsCount = ref(0)
 
 // Templates (for "New note from template" dropdown in NoteList)
 type TemplateRef = { id: string; name: string; icon: string }
@@ -394,6 +397,7 @@ function onGlobalKeydown(e: KeyboardEvent): void {
 }
 
 let unsubTranscriptionOpenNote: (() => void) | null = null
+let unsubQuitEmbeddings: (() => void) | null = null
 
 onMounted(() => {
   loadEntityTypes()
@@ -406,11 +410,17 @@ onMounted(() => {
     activeView.value = 'notes'
     openContent('note', noteId, 'Meeting Note', 'default', undefined, 'file-text')
   })
+
+  unsubQuitEmbeddings = window.api.on('app:quit-embeddings-start', (...args: unknown[]) => {
+    const { count } = args[0] as { count: number }
+    quitEmbeddingsCount.value = count
+  })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   unsubTranscriptionOpenNote?.()
+  unsubQuitEmbeddings?.()
 })
 </script>
 
@@ -731,6 +741,17 @@ onBeforeUnmount(() => {
       @open-view="onChatOpenView"
       @note-created="noteListRef?.refresh()"
     />
+
+    <!-- Quit-time embedding flush overlay -->
+    <Transition name="quit-overlay">
+      <div v-if="quitEmbeddingsCount > 0" class="quit-overlay">
+        <div class="quit-overlay-card">
+          <Loader2 :size="28" class="quit-spinner" />
+          <p class="quit-title">Saving {{ quitEmbeddingsCount }} note{{ quitEmbeddingsCount === 1 ? '' : 's' }}…</p>
+          <p class="quit-subtitle">Regenerating embeddings before closing</p>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -920,5 +941,62 @@ onBeforeUnmount(() => {
   opacity: 1 !important;
   background: rgba(255, 255, 255, 0.1);
   color: var(--color-text);
+}
+
+/* Quit-time embedding flush overlay */
+.quit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  backdrop-filter: blur(4px);
+}
+
+.quit-overlay-card {
+  background: var(--color-bg-elevated, #2a2a2a);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 32px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 260px;
+}
+
+.quit-spinner {
+  color: var(--color-accent, #7c6af7);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.quit-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.quit-subtitle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.quit-overlay-enter-active,
+.quit-overlay-leave-active {
+  transition: opacity 0.15s ease;
+}
+
+.quit-overlay-enter-from,
+.quit-overlay-leave-to {
+  opacity: 0;
 }
 </style>

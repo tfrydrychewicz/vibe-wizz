@@ -1,8 +1,8 @@
 import { app, BrowserWindow, shell, ipcMain } from 'electron'
 import { join } from 'path'
-import { initDatabase, closeDatabase } from './db/index'
+import { initDatabase, closeDatabase, getDatabase } from './db/index'
 import { registerDbIpcHandlers } from './db/ipc'
-import { setMainWindow } from './push'
+import { setMainWindow, pushToRenderer } from './push'
 import { startMicMonitor, stopMicMonitor, getMicStatus } from './mic/monitor'
 import { createMeetingWindow, destroyMeetingWindow } from './mic/meetingWindow'
 import { registerTranscriptionIpcHandlers } from './transcription/session'
@@ -85,6 +85,17 @@ app.on('before-quit', async (event) => {
   // Flush dirty L1/L2 embeddings before closing — max 5 seconds,
   // then fall back to startup recovery for any remainder
   try {
+    const db = getDatabase()
+    const dirtyCount = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM notes WHERE embedding_dirty = 1 AND archived_at IS NULL`
+        )
+        .get() as { c: number }
+    ).c
+    if (dirtyCount > 0) {
+      pushToRenderer('app:quit-embeddings-start', { count: dirtyCount })
+    }
     await Promise.race([
       processDirtyNotes(),
       new Promise<void>((r) => setTimeout(r, 5000)),
@@ -94,7 +105,7 @@ app.on('before-quit', async (event) => {
   }
 
   closeDatabase()
-  app.quit()
+  app.exit()
 })
 
 app.on('window-all-closed', () => {
