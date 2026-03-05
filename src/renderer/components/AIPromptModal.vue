@@ -5,7 +5,6 @@ import { useInputMention } from '../composables/useInputMention'
 import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT, type AttachedFile } from '../composables/useFileAttachment'
 import AttachmentBar from './AttachmentBar.vue'
-import { MODELS, DEFAULT_CHAT_MODEL, type ChatModelId } from '../constants/models'
 
 export interface AIPromptSubmit {
   prompt: string
@@ -13,7 +12,7 @@ export interface AIPromptSubmit {
   mentionedNoteIds: string[]
   images: { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[]
   files: { name: string; content: string; mimeType: AttachedFile['mimeType'] }[]
-  model: ChatModelId
+  model: string
 }
 
 const props = defineProps<{
@@ -30,7 +29,8 @@ const emit = defineEmits<{
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const promptText = ref('')
-const selectedModel = ref<ChatModelId>(DEFAULT_CHAT_MODEL)
+const selectedModel = ref('')
+const chatModels = ref<{ id: string; label: string }[]>([])
 
 // ── Composables ────────────────────────────────────────────────────────────────
 const {
@@ -48,8 +48,23 @@ const {
 const mention = useInputMention(textarea, promptText)
 const noteLink = useInputNoteLink(textarea, promptText)
 
-onMounted(() => {
+onMounted(async () => {
   nextTick(() => textarea.value?.focus())
+  try {
+    interface ProviderRow { id: string; label: string; models: { id: string; label: string; capabilities: string[]; enabled: boolean }[] }
+    const providers = await window.api.invoke('ai-providers:list') as ProviderRow[]
+    const models: { id: string; label: string }[] = []
+    for (const p of providers) {
+      for (const m of p.models) {
+        if (m.enabled && m.capabilities.includes('chat')) {
+          models.push({ id: m.id, label: `${m.label} (${p.label})` })
+        }
+      }
+    }
+    chatModels.value = models
+  } catch {
+    // leave empty — IPC will use default chain
+  }
 })
 
 function openFilePicker(): void {
@@ -221,8 +236,9 @@ const hasContext = () =>
           </button>
           <span class="ai-modal-hint">Enter ↵ · Shift+Enter newline · Esc cancel</span>
         </div>
-        <select v-model="selectedModel" class="ai-modal-model-select" :disabled="loading" title="Claude model">
-          <option v-for="m in MODELS" :key="m.id" :value="m.id">{{ m.label }}</option>
+        <select v-if="chatModels.length > 0" v-model="selectedModel" class="ai-modal-model-select" :disabled="loading" title="Model">
+          <option value="">Default</option>
+          <option v-for="m in chatModels" :key="m.id" :value="m.id">{{ m.label }}</option>
         </select>
         <button
           class="ai-modal-submit"

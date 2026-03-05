@@ -2,14 +2,13 @@
  * Daily Brief generator.
  *
  * Gathers today's calendar events, open action items, and recent notes,
- * then calls Claude Sonnet to produce a structured daily briefing in Markdown.
+ * then calls the configured AI model to produce a structured daily briefing in Markdown.
  * The result is persisted in the `daily_briefs` table.
  */
 
-import Anthropic from '@anthropic-ai/sdk'
+import { callWithFallback } from '../ai/modelRouter'
 import { getDatabase } from '../db/index'
 
-const DEFAULT_MODEL = 'claude-sonnet-4-6'
 const MAX_NOTES_CHARS = 5000
 
 type CalendarRow = {
@@ -56,13 +55,10 @@ function formatTime(iso: string): string {
 
 /**
  * Generate a Daily Brief markdown string for the given ISO date (YYYY-MM-DD).
- * Returns an empty string if the API key is missing or Claude fails.
+ * Returns an empty string if no AI model is configured or the call fails.
  */
-export async function generateDailyBrief(date: string, apiKey: string, model = DEFAULT_MODEL): Promise<string> {
-  if (!apiKey) return ''
-
+export async function generateDailyBrief(date: string): Promise<string> {
   const db = getDatabase()
-  const client = new Anthropic({ apiKey })
 
   // ── Calendar events for today ────────────────────────────────────────────────
   const dayStart = `${date}T00:00:00`
@@ -139,7 +135,6 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
     let attendees: { name?: string; email?: string }[] = []
     try { attendees = JSON.parse(event.attendees) as { name?: string; email?: string }[] } catch { continue }
 
-    // Consider it a 1:1 if there's exactly 1 attendee or title contains "1:1" / "1-1"
     const is1on1 =
       attendees.length === 1 ||
       (attendees.length === 2 && /1[:\-]1/i.test(event.title))
@@ -168,12 +163,11 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
   }
 
   // ── Build context sections ───────────────────────────────────────────────────
-  const today = new Date(`${date}T12:00:00`) // noon to avoid DST edge cases
+  const today = new Date(`${date}T12:00:00`)
   const dayOfWeek = today.toLocaleDateString('en', { weekday: 'long' })
   const monthDay = today.toLocaleDateString('en', { month: 'long', day: 'numeric', year: 'numeric' })
   const todayStr = `${dayOfWeek}, ${monthDay}`
 
-  // Calendar section
   const calendarLines =
     todayEvents.length > 0
       ? todayEvents
@@ -193,10 +187,8 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
           .join('\n')
       : 'No meetings scheduled today.'
 
-  // Action items section — categorised by urgency
   const overdueItems = actionItems.filter((a) => a.due_date && a.due_date < date)
   const dueTodayItems = actionItems.filter((a) => a.due_date === date)
-  // Due this week (after today but within 7 days)
   const weekEnd = new Date(today)
   weekEnd.setDate(weekEnd.getDate() + 7)
   const weekEndStr = weekEnd.toISOString().slice(0, 10)
@@ -236,7 +228,6 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
   }
   const actionLines = actionSections.length > 0 ? actionSections.join('\n\n') : 'No open action items.'
 
-  // Recent notes section — truncated to stay within context budget
   let notesLines = ''
   if (recentNotes.length > 0) {
     let total = 0
@@ -253,7 +244,6 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
 
   const histLines = historicalContext.join('\n\n')
 
-  // Stale follow-up formatted lines (uses today, so computed here)
   function daysSince(isoStr: string): number {
     return Math.floor((today.getTime() - new Date(isoStr).getTime()) / 86_400_000)
   }
@@ -277,7 +267,6 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
       .join('\n')
   }
 
-  // ── Prompt ───────────────────────────────────────────────────────────────────
   const prompt =
     `You are generating a Daily Brief for an engineering manager. Today is ${todayStr}.\n\n` +
     `Generate a concise, actionable daily brief in Markdown. Follow this structure (skip any section that has no relevant content):\n\n` +
@@ -312,13 +301,17 @@ export async function generateDailyBrief(date: string, apiKey: string, model = D
     `- These tokens render as interactive chips in the UI — do not rewrite them as plain text.`
 
   try {
-    const response = await client.messages.create({
-      model: model,
-      max_tokens: 1500,
-      messages: [{ role: 'user', content: prompt }],
+    return await callWithFallback('daily_brief', db, async (model) => {
+      const result = await model.adapter.chat(
+        {
+          model: model.modelId,
+          maxTokens: 1500,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        model.apiKey,
+      )
+      return result.text.trim()
     })
-    const block = response.content[0]
-    return block.type === 'text' ? block.text.trim() : ''
   } catch (err) {
     console.error('[DailyBrief] Generation failed:', err)
     return ''

@@ -1058,6 +1058,7 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Query expansion + re-ranking
 
 ### Phase 5 — Polish & Portability
+- [x] Multi-Provider AI — provider abstraction layer (`src/main/ai/`): `featureSlots.ts` (11 slots), `modelRouter.ts` (`resolveChain` + `callWithFallback`), provider adapters (Anthropic, OpenAI, Gemini); DB tables `ai_providers`/`ai_models`/`ai_feature_models` (migration `0007`); Settings: **LLM Providers** sub-tab (`AIProviderCard.vue`, live model fetch, custom checkboxes, grouped by capability), **AI Features** sub-tab (`FeatureChainEditor.vue`, drag-reorderable chain per slot); all embedding/chat files refactored from hardcoded models to `callWithFallback`; chat sidebar model picker with "Default" option; fallback warning in chat; old `openai_api_key`/`anthropic_api_key` UI entries removed
 - [x] Table support in editor — `@tiptap/extension-table*`; toolbar insert button; right-click context menu (`TableContextMenu.vue`) for add/delete row/col, delete table, merge/split cells; CellSelection preserved on right-click via `mousedown` guard; GFM table parsing in `postProcessor.ts` so AI-generated notes render tables correctly; system prompts updated with GFM table syntax
 - [x] AI inline generation — Space on empty line + selection bubble menu (see §1 Editor above); `AIPromptModal.vue`, `AILinePlaceholder.ts` extension, `notes:ai-inline` IPC, `generateInlineContent()` in `chat.ts`
 - [ ] Import (Markdown, Notion, CSV)

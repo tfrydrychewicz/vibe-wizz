@@ -2,53 +2,28 @@
  * L3 cluster summary pipeline.
  *
  * Reads all L2 per-note summaries, re-embeds them, runs K-means++ clustering,
- * generates a Claude Haiku theme summary per cluster, and persists the results
+ * generates an AI theme summary per cluster, and persists the results
  * as layer=3 rows in note_chunks + cluster_embeddings.
  *
  * Called once per nightly batch via scheduler.ts.
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import Database from 'better-sqlite3'
-import { setOpenAIKey, embedTexts } from './embedder'
+import { embedTexts } from './embedder'
 import { kmeansPP, cosineDist } from './kmeans'
-
-let _client: Anthropic | null = null
-let _currentKey = ''
-
-const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
-
-/** Update (or clear) the Anthropic client when the API key changes. */
-export function setAnthropicKey(apiKey: string): void {
-  if (apiKey === _currentKey) return
-  _client = apiKey ? new Anthropic({ apiKey }) : null
-  _currentKey = apiKey
-}
+import { callWithFallback } from '../ai/modelRouter'
 
 /**
  * Build L3 cluster summaries from all L2 note summaries.
  *
  * Flow:
  *  1. Read all layer=2 rows from note_chunks (note_id + chunk_text)
- *  2. Re-embed all L2 summaries via OpenAI (batched)
+ *  2. Re-embed all L2 summaries via the embedding model
  *  3. Run K-means++ (K = sqrt(N/2), clamped 2–20)
- *  4. For each cluster: pick top-5 reps, call Claude Haiku, embed summary
+ *  4. For each cluster: pick top-5 reps, call AI model, embed summary
  *  5. Delete all existing layer=3 data, then insert new clusters
  */
-export async function runL3Clustering(
-  db: Database.Database,
-  openaiKey: string,
-  anthropicKey: string,
-  model = DEFAULT_MODEL
-): Promise<void> {
-  setOpenAIKey(openaiKey)
-  setAnthropicKey(anthropicKey)
-
-  if (!_client) {
-    console.warn('[Cluster] Anthropic client not initialized — skipping L3 batch')
-    return
-  }
-
+export async function runL3Clustering(db: Database.Database): Promise<void> {
   // ── 1. Read all L2 summaries ──────────────────────────────────────────────
   const l2Rows = db
     .prepare('SELECT id, note_id, chunk_text FROM note_chunks WHERE layer = 2')
@@ -67,11 +42,10 @@ export async function runL3Clustering(
   try {
     embedResults = await embedTexts(l2Rows.map((r) => r.chunk_text))
   } catch (err) {
-    console.error('[Cluster] OpenAI embedding error during L3 batch:', err)
+    console.error('[Cluster] Embedding error during L3 batch:', err)
     return
   }
 
-  // Build parallel arrays of embeddings + metadata
   const points: Float32Array[] = embedResults.map(
     (r) => new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4)
   )
@@ -93,7 +67,6 @@ export async function runL3Clustering(
   }[] = []
 
   for (let c = 0; c < K; c++) {
-    // Collect all members of this cluster
     const memberIndices: number[] = []
     for (let i = 0; i < N; i++) {
       if (assignments[i] === c) memberIndices.push(i)
@@ -102,7 +75,6 @@ export async function runL3Clustering(
 
     const memberNoteIds = memberIndices.map((i) => noteIds[i])
 
-    // Select top-5 representatives (closest to centroid)
     const ranked = memberIndices
       .map((i) => ({ i, dist: cosineDist(points[i], centroids[c]) }))
       .sort((a, b) => a.dist - b.dist)
@@ -110,28 +82,26 @@ export async function runL3Clustering(
 
     const repSummaries = ranked.map(({ i }) => summaryTexts[i])
 
-    // Generate cluster theme via Claude Haiku
     let clusterSummary: string
     try {
-      clusterSummary = await generateClusterSummary(repSummaries, model)
+      clusterSummary = await generateClusterSummary(repSummaries, db)
     } catch (err) {
-      console.error(`[Cluster] Claude error for cluster ${c}:`, err)
+      console.error(`[Cluster] AI error for cluster ${c}:`, err)
       continue
     }
 
-    // Embed the cluster summary
     let clusterEmbedResults: Awaited<ReturnType<typeof embedTexts>>
     try {
       clusterEmbedResults = await embedTexts([clusterSummary])
     } catch (err) {
-      console.error(`[Cluster] OpenAI embedding error for cluster ${c}:`, err)
+      console.error(`[Cluster] Embedding error for cluster ${c}:`, err)
       continue
     }
 
     const clusterEmbedding = clusterEmbedResults[0].embedding
 
     clusterChunks.push({
-      noteId: noteIds[ranked[0].i], // anchor to most representative note
+      noteId: noteIds[ranked[0].i],
       summaryText: clusterSummary,
       memberNoteIds,
       embedding: clusterEmbedding,
@@ -158,7 +128,6 @@ export async function runL3Clustering(
   }
   db.prepare('DELETE FROM note_chunks WHERE layer = 3').run()
 
-  // Insert new cluster rows
   const insertChunk = db.prepare(
     `INSERT INTO note_chunks (note_id, chunk_text, chunk_context, layer, position)
      VALUES (?, ?, ?, 3, ?)`
@@ -171,7 +140,7 @@ export async function runL3Clustering(
       const result = insertChunk.run(
         noteId,
         summaryText,
-        JSON.stringify(memberNoteIds), // chunk_context stores all member note IDs for search boost
+        JSON.stringify(memberNoteIds),
         i
       )
       const rowid = BigInt(result.lastInsertRowid)
@@ -182,30 +151,30 @@ export async function runL3Clustering(
   console.log(`[Cluster] Stored ${clusterChunks.length} L3 cluster(s) covering ${N} notes`)
 }
 
-/** Call Claude Haiku to generate a 2–4 sentence theme description for a cluster. */
-async function generateClusterSummary(repSummaries: string[], model: string): Promise<string> {
-  if (!_client) throw new Error('Anthropic client not initialized')
-
+/** Generate a 2–4 sentence theme description for a cluster via AI. */
+async function generateClusterSummary(repSummaries: string[], db: Database.Database): Promise<string> {
   const notesBlock = repSummaries
     .map((s, i) => `Note ${i + 1}: ${s}`)
     .join('\n\n')
 
-  const response = await _client.messages.create({
-    model: model,
-    max_tokens: 200,
-    messages: [
+  return callWithFallback('cluster_summary', db, async (model) => {
+    const result = await model.adapter.chat(
       {
-        role: 'user',
-        content: `The following are summaries of related notes. In 2-4 sentences, describe the shared theme or topic of this cluster of notes. Be specific and factual. Write in the same language as the summaries.
-
-${notesBlock}
-
-Cluster theme:`,
+        model: model.modelId,
+        maxTokens: 200,
+        messages: [
+          {
+            role: 'user',
+            content:
+              'The following are summaries of related notes. In 2-4 sentences, describe the shared theme ' +
+              'or topic of this cluster of notes. Be specific and factual. Write in the same language as the summaries.\n\n' +
+              `${notesBlock}\n\nCluster theme:`,
+          },
+        ],
       },
-    ],
+      model.apiKey,
+    )
+    if (!result.text.trim()) throw new Error('Empty response from model')
+    return result.text.trim()
   })
-
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
-  return block.text.trim()
 }

@@ -36,10 +36,12 @@ export interface ChatMessage {
   entityRefs?: { id: string; name: string }[]
   actions?: ExecutedAction[]
   error?: boolean
+  warning?: string
 }
 
 export const messages = ref<ChatMessage[]>([])
 export const isLoading = ref(false)
+export const selectedModelId = ref<string>('')
 
 export function clearMessages(): void {
   messages.value = []

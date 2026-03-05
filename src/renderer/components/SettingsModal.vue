@@ -2,6 +2,10 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { X, Eye, EyeOff, BrainCircuit, CalendarDays, Bug, Plus, RefreshCw, Pencil, Trash2, AlertCircle, Loader2 } from 'lucide-vue-next'
 import CalendarSourceModal from './CalendarSourceModal.vue'
+import AIProviderCard from './AIProviderCard.vue'
+import FeatureChainEditor from './FeatureChainEditor.vue'
+
+const providerCardRefs = new Map<string, InstanceType<typeof AIProviderCard>>()
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -26,14 +30,81 @@ const aiTabs: { id: AiTab; label: string }[] = [
   { id: 'llm', label: 'LLM Providers' },
   { id: 'transcription', label: 'Transcription' },
   { id: 'followup', label: 'Follow-up Intelligence' },
-  { id: 'models', label: 'Models' },
+  { id: 'models', label: 'AI Features' },
 ]
 
-const availableModels = [
-  { id: 'claude-opus-4-6', label: 'Opus 4.6' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
-] as const
+// ── AI Providers ──────────────────────────────────────────────────────────────
+interface ProviderModel {
+  id: string
+  label: string
+  capabilities: string[]
+  enabled: boolean
+}
+
+interface ProviderRow {
+  id: string
+  label: string
+  apiKey: string
+  enabled: boolean
+  models: ProviderModel[]
+}
+
+interface FeatureChainModel {
+  position: number
+  modelId: string
+  modelLabel: string
+  providerId: string
+  providerLabel: string
+  enabled: boolean
+}
+
+interface FeatureChain {
+  featureSlot: string
+  label: string
+  description: string
+  capability: string
+  models: FeatureChainModel[]
+}
+
+const PROVIDER_OPTIONS = [
+  { id: 'anthropic', label: 'Anthropic' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'gemini', label: 'Google Gemini' },
+]
+
+const providers = ref<ProviderRow[]>([])
+const featureChains = ref<FeatureChain[]>([])
+const showAddProvider = ref(false)
+
+const allEnabledModels = computed(() =>
+  providers.value.flatMap((p) =>
+    p.models
+      .filter((m) => m.enabled)
+      .map((m) => ({
+        id: m.id,
+        label: m.label,
+        providerId: p.id,
+        providerLabel: p.label,
+        capability: m.capabilities.includes('embedding') ? 'embedding' as const : 'chat' as const,
+      })),
+  ),
+)
+
+function addProvider(id: string): void {
+  if (providers.value.some((p) => p.id === id)) return
+  const opt = PROVIDER_OPTIONS.find((o) => o.id === id)!
+  providers.value.push({ id, label: opt.label, apiKey: '', enabled: true, models: [] })
+  showAddProvider.value = false
+}
+
+async function onProviderDeleted(id: string): Promise<void> {
+  providers.value = providers.value.filter((p) => p.id !== id)
+  featureChains.value = await window.api.invoke('ai-feature-models:list') as FeatureChain[]
+}
+
+async function onChainChange({ featureSlot, modelIds }: { featureSlot: string; modelIds: string[] }): Promise<void> {
+  await window.api.invoke('ai-feature-models:save', { featureSlot, modelIds })
+}
 
 const calendarTabs: { id: CalendarTab; label: string }[] = [
   { id: 'general', label: 'General' },
@@ -132,10 +203,6 @@ async function deleteSource(id: string): Promise<void> {
 }
 
 // ── AI settings ───────────────────────────────────────────────────────────────
-const apiKey = ref('')
-const showKey = ref(false)
-const anthropicKey = ref('')
-const showAnthropicKey = ref(false)
 const elevenLabsKey = ref('')
 const showElevenLabsKey = ref(false)
 const elevenLabsDiarize = ref(false)
@@ -144,11 +211,6 @@ const showDeepgramKey = ref(false)
 const transcriptionModel = ref<'elevenlabs' | 'deepgram' | 'macos'>('macos')
 const transcriptionLanguage = ref('multi')
 const systemAudioCapture = ref(false)
-
-// ── Model selection settings ──────────────────────────────────────────────────
-const modelChat = ref('claude-sonnet-4-6')
-const modelDailyBrief = ref('claude-sonnet-4-6')
-const modelBackground = ref('claude-haiku-4-5-20251001')
 
 // ── Follow-up intelligence settings ──────────────────────────────────────────
 const followupStalenessDays = ref(7)
@@ -225,9 +287,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [openai, anthropic, elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder, followupDays, followupTypeId, mChat, mDailyBrief, mBackground, sources] = await Promise.all([
-    window.api.invoke('settings:get', { key: 'openai_api_key' }) as Promise<string | null>,
-    window.api.invoke('settings:get', { key: 'anthropic_api_key' }) as Promise<string | null>,
+  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes] = await Promise.all([
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'deepgram_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'transcription_model' }) as Promise<string | null>,
@@ -244,13 +304,10 @@ onMounted(async () => {
     window.api.invoke('debug:get-audio-folder') as Promise<string>,
     window.api.invoke('settings:get', { key: 'followup_staleness_days' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'followup_assignee_entity_type_id' }) as Promise<string | null>,
-    window.api.invoke('settings:get', { key: 'model_chat' }) as Promise<string | null>,
-    window.api.invoke('settings:get', { key: 'model_daily_brief' }) as Promise<string | null>,
-    window.api.invoke('settings:get', { key: 'model_background' }) as Promise<string | null>,
     window.api.invoke('calendar-sources:list') as Promise<CalendarSource[]>,
+    window.api.invoke('ai-providers:list') as Promise<ProviderRow[]>,
+    window.api.invoke('ai-feature-models:list') as Promise<FeatureChain[]>,
   ])
-  apiKey.value = openai ?? ''
-  anthropicKey.value = anthropic ?? ''
   elevenLabsKey.value = elevenlabs ?? ''
   deepgramKey.value = deepgram ?? ''
   transcriptionModel.value = (transcModel as 'elevenlabs' | 'deepgram' | 'macos' | null) ?? 'macos'
@@ -265,10 +322,9 @@ onMounted(async () => {
   debugAudioFolder.value = folder ?? ''
   followupStalenessDays.value = parseInt(followupDays ?? '7', 10)
   followupAssigneeEntityTypeId.value = followupTypeId ?? ''
-  modelChat.value = mChat ?? 'claude-sonnet-4-6'
-  modelDailyBrief.value = mDailyBrief ?? 'claude-sonnet-4-6'
-  modelBackground.value = mBackground ?? 'claude-haiku-4-5-20251001'
   calendarSources.value = sources ?? []
+  providers.value = providersRes ?? []
+  featureChains.value = chainsRes ?? []
   await nextTick()
   attendeeNameField.value = attNameField ?? ''
   attendeeEmailField.value = attEmailField ?? ''
@@ -299,9 +355,20 @@ onUnmounted(() => {
 
 async function save(): Promise<void> {
   saving.value = true
+
+  // Save all provider cards
+  await Promise.all(
+    providers.value.map(async (p) => {
+      const card = providerCardRefs.get(p.id)
+      if (!card) return
+      const data = card.getData()
+      await window.api.invoke('ai-providers:save', { id: p.id, ...data })
+    })
+  )
+  providers.value = await window.api.invoke('ai-providers:list') as ProviderRow[]
+  featureChains.value = await window.api.invoke('ai-feature-models:list') as FeatureChain[]
+
   await Promise.all([
-    window.api.invoke('settings:set', { key: 'openai_api_key', value: apiKey.value.trim() }),
-    window.api.invoke('settings:set', { key: 'anthropic_api_key', value: anthropicKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'elevenlabs_api_key', value: elevenLabsKey.value.trim() }),
     window.api.invoke('settings:set', { key: 'elevenlabs_diarize', value: elevenLabsDiarize.value ? 'true' : 'false' }),
     window.api.invoke('settings:set', { key: 'system_audio_capture', value: systemAudioCapture.value ? 'true' : 'false' }),
@@ -316,9 +383,6 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'save_debug_audio', value: saveDebugAudio.value ? 'true' : 'false' }),
     window.api.invoke('settings:set', { key: 'followup_staleness_days', value: String(followupStalenessDays.value) }),
     window.api.invoke('settings:set', { key: 'followup_assignee_entity_type_id', value: followupAssigneeEntityTypeId.value }),
-    window.api.invoke('settings:set', { key: 'model_chat', value: modelChat.value }),
-    window.api.invoke('settings:set', { key: 'model_daily_brief', value: modelDailyBrief.value }),
-    window.api.invoke('settings:set', { key: 'model_background', value: modelBackground.value }),
   ])
   saving.value = false
   savedFeedback.value = true
@@ -377,51 +441,44 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 
             <!-- LLM Providers tab -->
             <template v-if="selectedAiTab === 'llm'">
-              <div class="field-group">
-                <label class="field-label" for="openai-key">OpenAI API Key</label>
-                <p class="field-hint">
-                  Used for generating semantic search embeddings (text-embedding-3-small).
-                  Stored locally on your device only.
-                </p>
-                <div class="key-row">
-                  <input
-                    id="openai-key"
-                    v-model="apiKey"
-                    :type="showKey ? 'text' : 'password'"
-                    class="modal-input key-input"
-                    placeholder="sk-..."
-                    autocomplete="off"
-                    spellcheck="false"
-                  />
-                  <button class="toggle-btn" :title="showKey ? 'Hide' : 'Show'" @click="showKey = !showKey">
-                    <EyeOff v-if="showKey" :size="14" />
-                    <Eye v-else :size="14" />
-                  </button>
-                </div>
+              <AIProviderCard
+                v-for="p in providers"
+                :key="p.id"
+                :ref="(el) => { if (el) providerCardRefs.set(p.id, el as InstanceType<typeof AIProviderCard>) }"
+                :providerId="p.id"
+                :providerLabel="p.label"
+                :apiKey="p.apiKey"
+                :models="p.models"
+                @deleted="onProviderDeleted(p.id)"
+              />
+
+              <div v-if="providers.length === 0 && !showAddProvider" class="providers-empty">
+                <p>No AI providers configured.</p>
+                <p>Add Anthropic, OpenAI, or Google Gemini to enable AI features.</p>
               </div>
 
-              <div class="field-group">
-                <label class="field-label" for="anthropic-key">Anthropic API Key</label>
-                <p class="field-hint">
-                  Used for note summaries, NER entity detection, action item extraction, and AI chat via Claude.
-                  Stored locally on your device only.
-                </p>
-                <div class="key-row">
-                  <input
-                    id="anthropic-key"
-                    v-model="anthropicKey"
-                    :type="showAnthropicKey ? 'text' : 'password'"
-                    class="modal-input key-input"
-                    placeholder="sk-ant-..."
-                    autocomplete="off"
-                    spellcheck="false"
-                  />
-                  <button class="toggle-btn" :title="showAnthropicKey ? 'Hide' : 'Show'" @click="showAnthropicKey = !showAnthropicKey">
-                    <EyeOff v-if="showAnthropicKey" :size="14" />
-                    <Eye v-else :size="14" />
-                  </button>
+              <template v-if="showAddProvider">
+                <div class="add-provider-picker">
+                  <span class="field-label" style="margin-bottom: 8px; display: block;">Choose a provider</span>
+                  <div class="provider-option-chips">
+                    <button
+                      v-for="opt in PROVIDER_OPTIONS.filter(o => !providers.some(p => p.id === o.id))"
+                      :key="opt.id"
+                      class="provider-chip"
+                      @click="addProvider(opt.id)"
+                    >{{ opt.label }}</button>
+                    <span
+                      v-if="PROVIDER_OPTIONS.every(o => providers.some(p => p.id === o.id))"
+                      class="field-hint"
+                    >All providers added.</span>
+                  </div>
+                  <button class="cancel-add-provider-btn" @click="showAddProvider = false">Cancel</button>
                 </div>
-              </div>
+              </template>
+              <button v-else class="add-provider-btn" @click="showAddProvider = true">
+                <Plus :size="13" />
+                Add Provider
+              </button>
             </template>
 
             <!-- Transcription tab -->
@@ -593,59 +650,26 @@ function onBackdropKeydown(e: KeyboardEvent): void {
               </div>
             </template>
 
-            <!-- Models tab -->
+            <!-- AI Features tab -->
             <template v-else-if="selectedAiTab === 'models'">
-              <div class="field-group">
-                <label class="field-label">Chat Model</label>
-                <p class="field-hint">Model used for the Ask Wizz chat sidebar.</p>
-                <div class="model-picker">
-                  <button
-                    v-for="m in availableModels"
-                    :key="m.id"
-                    class="model-btn"
-                    :class="{ active: modelChat === m.id }"
-                    @click="modelChat = m.id"
-                  >{{ m.label }}</button>
-                </div>
-              </div>
-
-              <div class="field-group">
-                <label class="field-label">Daily Brief Model</label>
-                <p class="field-hint">Model used to generate the Today view Daily Brief.</p>
-                <div class="model-picker">
-                  <button
-                    v-for="m in availableModels"
-                    :key="m.id"
-                    class="model-btn"
-                    :class="{ active: modelDailyBrief === m.id }"
-                    @click="modelDailyBrief = m.id"
-                  >{{ m.label }}</button>
-                </div>
-              </div>
-
-              <div class="field-group">
-                <label class="field-label">Background Tasks Model</label>
-                <p class="field-hint">
-                  Model used for NER entity detection, action item extraction, note summarization,
-                  cluster theme generation, transcription post-processing, and semantic search helpers.
+              <div v-if="allEnabledModels.length === 0" class="chains-empty">
+                <p>
+                  Configure providers in the <strong>LLM Providers</strong> tab first,
+                  then return here to assign models to each AI feature.
                 </p>
-                <div class="model-picker">
-                  <button
-                    v-for="m in availableModels"
-                    :key="m.id"
-                    class="model-btn"
-                    :class="{ active: modelBackground === m.id }"
-                    @click="modelBackground = m.id"
-                  >{{ m.label }}</button>
-                </div>
               </div>
-
-              <div class="field-group">
-                <label class="field-label">Embedding Model</label>
-                <p class="field-hint">Used for semantic search vector embeddings. Fixed — cannot be changed.</p>
-                <div class="model-picker" style="opacity: 0.5; pointer-events: none;">
-                  <button class="model-btn active">text-embedding-3-small</button>
-                </div>
+              <div v-else class="feature-chains">
+                <FeatureChainEditor
+                  v-for="chain in featureChains"
+                  :key="chain.featureSlot"
+                  :featureSlot="chain.featureSlot"
+                  :label="chain.label"
+                  :description="chain.description"
+                  :capability="(chain.capability as 'chat' | 'embedding')"
+                  :modelIds="chain.models.map(m => m.modelId)"
+                  :availableModels="allEnabledModels"
+                  @change="onChainChange"
+                />
               </div>
             </template>
           </template>
@@ -1498,5 +1522,95 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ── LLM Providers tab ────────────────────────────────────────────────────── */
+.providers-empty {
+  padding: 24px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.providers-empty p {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.add-provider-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+  margin-top: 4px;
+}
+.add-provider-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+.add-provider-picker {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--color-surface) 80%, var(--color-bg));
+}
+
+.provider-option-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.provider-chip {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.provider-chip:hover {
+  background: var(--color-hover);
+  border-color: var(--color-text-muted);
+}
+
+.cancel-add-provider-btn {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.cancel-add-provider-btn:hover { color: var(--color-text); }
+
+/* ── AI Features tab ──────────────────────────────────────────────────────── */
+.chains-empty {
+  padding: 24px 0 8px;
+}
+.chains-empty p {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.feature-chains {
+  display: flex;
+  flex-direction: column;
 }
 </style>

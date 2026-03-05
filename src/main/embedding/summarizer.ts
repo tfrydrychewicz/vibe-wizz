@@ -1,57 +1,44 @@
 /**
  * Claude-based note summarizer.
  * Generates a 2-4 sentence summary of a note for L2 embedding storage.
- * Lazy singleton — instantiated on first use, replaced when the API key changes.
+ * Routes through the model router (no hardcoded model or API key).
  */
 
-import Anthropic from '@anthropic-ai/sdk'
+import { callWithFallback } from '../ai/modelRouter'
+import { getDatabase } from '../db/index'
 import { getCurrentDateString } from '../utils/date'
-
-let _client: Anthropic | null = null
-let _currentKey = ''
-
-// Default: Haiku — fast and cheap for fire-and-forget background summarization
-const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 
 // Truncate body_plain to keep API calls fast and within token limits
 const MAX_BODY_CHARS = 6000
 
-/** Update (or clear) the Anthropic client when the API key changes. */
-export function setAnthropicKey(apiKey: string): void {
-  if (apiKey === _currentKey) return
-  _client = apiKey ? new Anthropic({ apiKey }) : null
-  _currentKey = apiKey
-}
-
 /**
- * Generate a retrieval-focused summary of a note using Claude Haiku.
+ * Generate a retrieval-focused summary of a note.
  * The summary is stored as a layer=2 chunk and embedded for semantic search.
  * Throws on API error — callers should handle and treat as a non-fatal pipeline failure.
  */
-export async function summarizeNote(title: string, bodyPlain: string, model = DEFAULT_MODEL): Promise<string> {
-  if (!_client) throw new Error('Anthropic client not initialized — set the API key first')
-
+export async function summarizeNote(title: string, bodyPlain: string): Promise<string> {
+  const db = getDatabase()
   const truncated = bodyPlain.length > MAX_BODY_CHARS ? bodyPlain.slice(0, MAX_BODY_CHARS) + '…' : bodyPlain
 
-  const response = await _client.messages.create({
-    model: model,
-    max_tokens: 300,
-    messages: [
+  return callWithFallback('note_summary', db, async (model) => {
+    const result = await model.adapter.chat(
       {
-        role: 'user',
-        content: `Today is ${getCurrentDateString()}.\n\nSummarize the following note in 2-4 sentences for semantic search indexing. Capture the main topics, decisions, and key information. Be factual and specific.
-
-Note title: ${title}
-
-Note content:
-${truncated}
-
-Summary:`,
+        model: model.modelId,
+        maxTokens: 300,
+        messages: [
+          {
+            role: 'user',
+            content:
+              `Today is ${getCurrentDateString()}.\n\n` +
+              'Summarize the following note in 2-4 sentences for semantic search indexing. ' +
+              'Capture the main topics, decisions, and key information. Be factual and specific.\n\n' +
+              `Note title: ${title}\n\nNote content:\n${truncated}\n\nSummary:`,
+          },
+        ],
       },
-    ],
+      model.apiKey,
+    )
+    if (!result.text.trim()) throw new Error('Empty response from model')
+    return result.text.trim()
   })
-
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type from Claude')
-  return block.text.trim()
 }

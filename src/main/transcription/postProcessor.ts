@@ -11,14 +11,13 @@
  */
 
 import { randomUUID } from 'crypto'
-import Anthropic from '@anthropic-ai/sdk'
 import { getDatabase } from '../db/index'
 import { scheduleEmbedding } from '../embedding/pipeline'
 import { pushToRenderer } from '../push'
 import { UUID_RE_STR } from '../utils/tokenFormat'
 import { getCurrentDateString } from '../utils/date'
+import { callWithFallback } from '../ai/modelRouter'
 
-const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 const MAX_TRANSCRIPT_CHARS = 8000
 const MAX_NOTE_CHARS = 4000
 
@@ -398,16 +397,15 @@ export function parseMarkdownToTipTap(markdown: string, ctx?: ParseContext): Tip
 async function matchSpeakersToAttendees(
   transcript: string,
   attendeeNames: string[],
-  apiKey: string,
-  model: string,
 ): Promise<Record<string, string>> {
-  if (!apiKey || attendeeNames.length < 2) return {}
+  if (attendeeNames.length < 2) return {}
 
   // Collect all distinct speaker IDs that appear in the transcript
   const speakerIds = new Set<string>()
   for (const m of transcript.matchAll(/\[Speaker (\d+)\]:/g)) speakerIds.add(m[1])
   if (speakerIds.size < 2) return {}
 
+  const db = getDatabase()
   const prompt = `You are analyzing a meeting transcript with numbered speaker labels.
 
 Meeting attendees:
@@ -421,18 +419,22 @@ Reply ONLY with a JSON object like {"0": "Alice Smith", "1": "Bob Jones"}.
 Only include speakers you can identify with reasonable confidence. If unsure, reply with {}.
 No explanation, only JSON.`
 
-  const client = new Anthropic({ apiKey })
   try {
-    const response = await client.messages.create({
-      model: model,
-      max_tokens: 200,
-      messages: [{ role: 'user', content: prompt }],
+    return await callWithFallback('meeting_summary', db, async (model) => {
+      const result = await model.adapter.chat(
+        {
+          model: model.modelId,
+          maxTokens: 200,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        model.apiKey,
+      )
+      const block = result.rawBlocks.find((b) => b.type === 'text')
+      if (!block || block.type !== 'text') return {}
+      const jsonMatch = block.text.trim().match(/\{[\s\S]*\}/)
+      if (!jsonMatch) return {}
+      return JSON.parse(jsonMatch[0]) as Record<string, string>
     })
-    const block = response.content[0]
-    if (block.type !== 'text') return {}
-    const jsonMatch = block.text.trim().match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return {}
-    return JSON.parse(jsonMatch[0]) as Record<string, string>
   } catch {
     return {}
   }
@@ -451,11 +453,10 @@ function applySpeakerNames(transcript: string, speakerMap: Record<string, string
 async function generateMergedNote(
   rawTranscript: string,
   noteBodyPlain: string,
-  apiKey: string,
-  model: string,
 ): Promise<string> {
-  if (!rawTranscript.trim() || !apiKey) return ''
+  if (!rawTranscript.trim()) return ''
 
+  const db = getDatabase()
   const truncatedTranscript =
     rawTranscript.length > MAX_TRANSCRIPT_CHARS
       ? rawTranscript.slice(0, MAX_TRANSCRIPT_CHARS) + '…'
@@ -495,15 +496,18 @@ ${truncatedTranscript}
 
 Write only the note content, no preamble.`
 
-  const client = new Anthropic({ apiKey })
   try {
-    const response = await client.messages.create({
-      model: model,
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
+    return await callWithFallback('meeting_summary', db, async (model) => {
+      const result = await model.adapter.chat(
+        {
+          model: model.modelId,
+          maxTokens: 1024,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        model.apiKey,
+      )
+      return result.text.trim()
     })
-    const block = response.content[0]
-    return block.type === 'text' ? block.text.trim() : ''
   } catch (err) {
     console.error('[Transcription] Merge generation failed:', err)
     return ''
@@ -579,11 +583,9 @@ function updateNoteWithTranscript(noteId: string, mergedContent: string, rawTran
 export async function processTranscript(
   noteId: string,
   rawTranscript: string,
-  anthropicKey: string,
   startedAt?: string,
   endedAt?: string,
   attendeeNames?: string[],
-  model = DEFAULT_MODEL,
 ): Promise<void> {
   if (!rawTranscript.trim()) {
     // Still push completion so the editor knows recording stopped
@@ -604,7 +606,7 @@ export async function processTranscript(
   // If the transcript has speaker labels and attendees are known, resolve Speaker N → name
   let labeledTranscript = rawTranscript
   if (attendeeNames && attendeeNames.length >= 2 && rawTranscript.includes('[Speaker ')) {
-    const speakerMap = await matchSpeakersToAttendees(rawTranscript, attendeeNames, anthropicKey, model)
+    const speakerMap = await matchSpeakersToAttendees(rawTranscript, attendeeNames)
     if (Object.keys(speakerMap).length > 0) {
       labeledTranscript = applySpeakerNames(rawTranscript, speakerMap)
       console.log('[Transcription] Speaker map resolved:', speakerMap)
@@ -621,7 +623,7 @@ export async function processTranscript(
   }
 
   // Generate merged note (transcript + user's existing notes, graceful on failure)
-  const mergedContent = await generateMergedNote(labeledTranscript, noteBodyPlain, anthropicKey, model)
+  const mergedContent = await generateMergedNote(labeledTranscript, noteBodyPlain)
 
   // Store merged content as the session summary for the history panel
   if (startedAt && mergedContent) {

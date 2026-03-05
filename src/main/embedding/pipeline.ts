@@ -11,8 +11,8 @@
 
 import { getDatabase, isVecLoaded } from '../db/index'
 import { chunkText } from './chunker'
-import { setOpenAIKey, embedTexts } from './embedder'
-import { setAnthropicKey, summarizeNote } from './summarizer'
+import { embedTexts } from './embedder'
+import { summarizeNote } from './summarizer'
 import { detectEntityMentions, type NerDetection } from './ner'
 import { pushToRenderer } from '../push'
 
@@ -93,25 +93,19 @@ async function runPipeline(noteId: string): Promise<void> {
 async function runNerPipeline(noteId: string): Promise<void> {
   const db = getDatabase()
 
-  const anthropicSetting = db
-    .prepare('SELECT value FROM settings WHERE key = ?')
-    .get('anthropic_api_key') as { value: string } | undefined
-  const anthropicKey = anthropicSetting?.value ?? ''
-
-  if (!anthropicKey) return
-
-  const bgModelSetting = db
-    .prepare('SELECT value FROM settings WHERE key = ?')
-    .get('model_background') as { value: string } | undefined
-  const backgroundModel = bgModelSetting?.value || 'claude-haiku-4-5-20251001'
-
   const note = db
     .prepare('SELECT title, body_plain FROM notes WHERE id = ?')
     .get(noteId) as { title: string; body_plain: string } | undefined
 
   if (!note?.body_plain.trim()) return
 
-  await runNer(noteId, note.title, note.body_plain, anthropicKey, db, backgroundModel)
+  try {
+    await runNer(noteId, note.title, note.body_plain, db)
+  } catch (err) {
+    // No AI model configured for NER — skip silently
+    console.warn('[NER] Skipped (no model configured):', err instanceof Error ? err.message : err)
+    return
+  }
   pushToRenderer('note:ner-complete', { noteId })
 }
 
@@ -122,35 +116,14 @@ async function runNerPipeline(noteId: string): Promise<void> {
 async function runEmbeddingPipeline(noteId: string): Promise<void> {
   const db = getDatabase()
 
-  const openaiSetting = db
-    .prepare('SELECT value FROM settings WHERE key = ?')
-    .get('openai_api_key') as { value: string } | undefined
-  const openaiKey = openaiSetting?.value ?? ''
-
-  if (!isVecLoaded() || !openaiKey) {
-    if (!isVecLoaded()) {
-      console.warn('[Embedding] sqlite-vec not loaded — skipping L1/L2 pipeline for note', noteId)
-    } else {
-      console.warn('[Embedding] OpenAI key not configured — skipping L1/L2 pipeline for note', noteId)
-    }
+  if (!isVecLoaded()) {
+    console.warn('[Embedding] sqlite-vec not loaded — skipping L1/L2 pipeline for note', noteId)
     return
   }
-
-  const anthropicSetting = db
-    .prepare('SELECT value FROM settings WHERE key = ?')
-    .get('anthropic_api_key') as { value: string } | undefined
-  const anthropicKey = anthropicSetting?.value ?? ''
-
-  const bgModelSetting = db
-    .prepare('SELECT value FROM settings WHERE key = ?')
-    .get('model_background') as { value: string } | undefined
-  const backgroundModel = bgModelSetting?.value || 'claude-haiku-4-5-20251001'
 
   const note = db
     .prepare('SELECT title, body_plain FROM notes WHERE id = ?')
     .get(noteId) as { title: string; body_plain: string } | undefined
-
-  setOpenAIKey(openaiKey)
 
   // Always clear stale L1 chunks first (even if the note is now empty or deleted)
   deleteL1Chunks(db, noteId)
@@ -161,10 +134,18 @@ async function runEmbeddingPipeline(noteId: string): Promise<void> {
     return
   }
 
-  await runL1Chunks(noteId, note.title, note.body_plain, db)
-  if (anthropicKey) {
-    setAnthropicKey(anthropicKey)
-    await runL2Summary(noteId, note.title, note.body_plain, db, backgroundModel)
+  try {
+    await runL1Chunks(noteId, note.title, note.body_plain, db)
+  } catch (err) {
+    console.warn('[Embedding] L1 skipped (no embedding model configured):', err instanceof Error ? err.message : err)
+    return
+  }
+
+  try {
+    await runL2Summary(noteId, note.title, note.body_plain, db)
+  } catch (err) {
+    // L2 summary is optional — log and continue
+    console.warn('[Embedding] L2 summary skipped:', err instanceof Error ? err.message : err)
   }
 
   // Clear the dirty flag on successful completion
@@ -223,14 +204,13 @@ async function runL2Summary(
   title: string,
   bodyPlain: string,
   db: ReturnType<typeof getDatabase>,
-  model: string
 ): Promise<void> {
   // Delete any existing L2 summary for this note first
   deleteL2Summary(db, noteId)
 
   let summary: string
   try {
-    summary = await summarizeNote(title, bodyPlain, model)
+    summary = await summarizeNote(title, bodyPlain)
   } catch (err) {
     console.error('[Embedding] Claude API error (L2 summary):', err)
     return
@@ -268,9 +248,7 @@ async function runNer(
   noteId: string,
   title: string,
   bodyPlain: string,
-  anthropicKey: string,
   db: ReturnType<typeof getDatabase>,
-  model: string
 ): Promise<void> {
   // Get all non-trashed entities to scan for
   const entities = db
@@ -292,7 +270,7 @@ async function runNer(
 
   let detected: NerDetection[]
   try {
-    detected = await detectEntityMentions(title, bodyPlain, candidates, anthropicKey, model)
+    detected = await detectEntityMentions(title, bodyPlain, candidates)
   } catch (err) {
     console.error('[NER] Claude API error:', err)
     return

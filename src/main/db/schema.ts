@@ -269,4 +269,32 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL DEFAULT ''
 );
 
+-- ─────────────────────────────────────────────
+-- AI provider & model configuration
+-- ─────────────────────────────────────────────
+
+-- One row per registered AI vendor (Anthropic, OpenAI, Google Gemini, …)
+CREATE TABLE IF NOT EXISTS ai_providers (
+  id        TEXT PRIMARY KEY,          -- e.g. 'anthropic', 'openai', 'gemini'
+  api_key   TEXT NOT NULL DEFAULT '',
+  enabled   INTEGER NOT NULL DEFAULT 1 -- 0 = disabled (key removed but rows preserved)
+);
+
+-- Models the user has selected/enabled per provider
+CREATE TABLE IF NOT EXISTS ai_models (
+  id           TEXT PRIMARY KEY,        -- provider model ID, e.g. 'claude-sonnet-4-6'
+  provider_id  TEXT NOT NULL REFERENCES ai_providers(id) ON DELETE CASCADE,
+  label        TEXT NOT NULL,           -- human-readable, e.g. 'Claude Sonnet 4.6'
+  capabilities TEXT NOT NULL DEFAULT '["chat"]', -- JSON array: ['chat'] | ['embedding'] | ['chat','embedding']
+  enabled      INTEGER NOT NULL DEFAULT 1
+);
+
+-- Per-feature ordered fallback chain (position 0 = primary model)
+CREATE TABLE IF NOT EXISTS ai_feature_models (
+  feature_slot TEXT NOT NULL,           -- e.g. 'chat', 'note_summary', 'embedding'
+  position     INTEGER NOT NULL,        -- 0 = primary, 1 = first fallback, …
+  model_id     TEXT NOT NULL REFERENCES ai_models(id) ON DELETE CASCADE,
+  PRIMARY KEY (feature_slot, position)
+);
+
 `

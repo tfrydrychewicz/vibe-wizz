@@ -18,7 +18,6 @@
 import { spawn, ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { getDatabase } from '../db/index'
 import { pushToRenderer } from '../push'
 import { processTranscript } from './postProcessor'
 
@@ -154,12 +153,7 @@ export async function stopSwiftTranscriber(startedAt?: string, endedAt?: string)
 
   if (!noteId) return
 
-  const db = getDatabase()
-  const anthRow = db
-    .prepare('SELECT value FROM settings WHERE key = ?')
-    .get('anthropic_api_key') as { value: string } | undefined
-
-  processTranscript(noteId, captured.text, anthRow?.value ?? '', startedAt, endedAt).catch((err) => {
+  processTranscript(noteId, captured.text, startedAt, endedAt).catch((err) => {
     console.error('[SwiftTranscriber] Post-processing error:', err)
     pushToRenderer('transcription:error', { message: 'Post-processing failed' })
   })

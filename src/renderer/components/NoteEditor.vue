@@ -1139,7 +1139,7 @@ async function onAIPromptSubmit(payload: import('./AIPromptModal.vue').AIPromptS
       })(),
       images: payload.images.length > 0 ? payload.images : undefined,
       files: payload.files.length > 0 ? payload.files : undefined,
-      model: payload.model,
+      overrideModelId: payload.model || undefined,
     })) as { content: object[] } | { error: string }
 
     if ('error' in result) {

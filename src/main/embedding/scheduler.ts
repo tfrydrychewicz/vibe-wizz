@@ -7,7 +7,6 @@
  *
  * Guards:
  *  - sqlite-vec must be loaded
- *  - Both openai_api_key and anthropic_api_key must be configured
  *  - At least 5 L2 note summaries must exist
  *  - Skipped if a run is already in progress (singleton mutex)
  *  - Skipped if last run was < 23h ago
@@ -42,21 +41,6 @@ export async function runClusterBatchNow(): Promise<void> {
 
   const db = getDatabase()
 
-  const openaiKey =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('openai_api_key') as { value: string } | undefined)
-      ?.value ?? ''
-  const anthropicKey =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)
-      ?.value ?? ''
-  const backgroundModel =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
-      ?.value || 'claude-haiku-4-5-20251001'
-
-  if (!openaiKey || !anthropicKey) {
-    console.log('[Cluster] runClusterBatchNow skipped — API keys not configured')
-    return
-  }
-
   const { cnt } = db
     .prepare('SELECT COUNT(*) AS cnt FROM note_chunks WHERE layer = 2')
     .get() as { cnt: number }
@@ -70,7 +54,7 @@ export async function runClusterBatchNow(): Promise<void> {
   console.log('[Cluster] Debug batch starting...')
 
   try {
-    await runL3Clustering(db, openaiKey, anthropicKey, backgroundModel)
+    await runL3Clustering(db)
 
     db.prepare(
       `INSERT INTO settings (key, value) VALUES (?, ?)
@@ -91,23 +75,6 @@ async function runBatchIfDue(): Promise<void> {
   if (!isVecLoaded()) return
 
   const db = getDatabase()
-
-  // Read API keys
-  const openaiKey =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('openai_api_key') as { value: string } | undefined)
-      ?.value ?? ''
-  const anthropicKey =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)
-      ?.value ?? ''
-
-  const backgroundModel =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
-      ?.value || 'claude-haiku-4-5-20251001'
-
-  if (!openaiKey || !anthropicKey) {
-    console.log('[Cluster] Batch skipped — API keys not configured')
-    return
-  }
 
   // Check last run timestamp
   const lastRunRow = db
@@ -136,7 +103,7 @@ async function runBatchIfDue(): Promise<void> {
   console.log('[Cluster] Starting nightly batch...')
 
   try {
-    await runL3Clustering(db, openaiKey, anthropicKey, backgroundModel)
+    await runL3Clustering(db)
 
     // Persist last-run timestamp
     db.prepare(

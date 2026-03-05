@@ -240,11 +240,9 @@ async function retryWithBatch(
   noteId: string,
   elevenLabsKey: string,
   language: string,
-  anthropicKey: string,
   startedAt: string | undefined,
   endedAt: string,
   attendeeNames: string[],
-  backgroundModel: string,
 ): Promise<void> {
   pushToRenderer('transcription:retrying', { noteId })
   let batchTranscript = ''
@@ -261,7 +259,7 @@ async function retryWithBatch(
     // Recovery file intentionally kept for startup recovery
   }
   const transcript = batchTranscript || partialTranscript
-  await processTranscript(noteId, transcript, anthropicKey, startedAt, endedAt, attendeeNames, backgroundModel)
+  await processTranscript(noteId, transcript, startedAt, endedAt, attendeeNames)
   if (batchTranscript) recorder.cleanup()
 }
 
@@ -289,11 +287,6 @@ function handleUnexpectedClose(code: number): void {
   cleanupSession()   // sets isTranscribing=false, ws=null, etc.
 
   const db = getDatabase()
-  const anthKey =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)?.value ?? ''
-  const backgroundModel =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
-      ?.value || 'claude-haiku-4-5-20251001'
   const language =
     (db.prepare('SELECT value FROM settings WHERE key = ?').get('transcription_language') as { value: string } | undefined)?.value || 'multi'
   const elKey =
@@ -310,11 +303,9 @@ function handleUnexpectedClose(code: number): void {
       noteId,
       elKey,
       language,
-      anthKey,
       startedAt ?? undefined,
       endedAt,
       attendeeNames,
-      backgroundModel,
     ).catch((err) => {
       console.error('[Transcription] Post-processing error after unexpected close:', err)
       pushToRenderer('transcription:error', { message: 'Post-processing failed' })
@@ -325,7 +316,7 @@ function handleUnexpectedClose(code: number): void {
       message: `Transcription service disconnected (code ${code}). Saving partial transcript.`,
     })
     if (!partialText.trim()) return
-    processTranscript(noteId, partialText, anthKey, startedAt ?? undefined, endedAt, attendeeNames, backgroundModel).catch(
+    processTranscript(noteId, partialText, startedAt ?? undefined, endedAt, attendeeNames).catch(
       (err) => {
         console.error('[Transcription] Post-processing error after unexpected close:', err)
         pushToRenderer('transcription:error', { message: 'Post-processing failed' })
@@ -704,16 +695,11 @@ async function stopSession(): Promise<void> {
       (db.prepare('SELECT value FROM settings WHERE key = ?').get('elevenlabs_api_key') as { value: string } | undefined)?.value ?? ''
     const language =
       (db.prepare('SELECT value FROM settings WHERE key = ?').get('transcription_language') as { value: string } | undefined)?.value || 'multi'
-    const anthKey =
-      (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)?.value ?? ''
-    const backgroundModel =
-      (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
-        ?.value || 'claude-haiku-4-5-20251001'
     const attendeeNames = readAttendeeNames(eventId)
 
     stopElevenLabsBatch(chunks, elKey, language)
       .then((labeled) =>
-        processTranscript(noteId, labeled, anthKey, startedAt ?? undefined, endedAt, attendeeNames, backgroundModel),
+        processTranscript(noteId, labeled, startedAt ?? undefined, endedAt, attendeeNames),
       )
       .then(() => { recovery?.cleanup() })
       .catch((err) => {
@@ -747,22 +733,14 @@ async function stopSession(): Promise<void> {
   activeRecovery = null
   cleanupSession()
 
-  const db = getDatabase()
-  const anthKey =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)?.value ?? ''
-  const backgroundModel =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
-      ?.value || 'claude-haiku-4-5-20251001'
   const attendeeNames = readAttendeeNames(eventId)
 
   processTranscript(
     noteId,
     labeledTranscript || finalTranscript,
-    anthKey,
     startedAt ?? undefined,
     endedAt,
     attendeeNames,
-    backgroundModel,
   )
     .then(() => { recovery?.cleanup() })
     .catch((err) => {
@@ -987,15 +965,7 @@ export function registerTranscriptionIpcHandlers(): void {
   ipcMain.handle(
     'transcription:process',
     (_event, { noteId, transcript }: { noteId: string; transcript: string }) => {
-      const db = getDatabase()
-      const anthRow = db
-        .prepare('SELECT value FROM settings WHERE key = ?')
-        .get('anthropic_api_key') as { value: string } | undefined
-      const bgModelRow = db
-        .prepare('SELECT value FROM settings WHERE key = ?')
-        .get('model_background') as { value: string } | undefined
-      const bgModel = bgModelRow?.value || 'claude-haiku-4-5-20251001'
-      processTranscript(noteId, transcript, anthRow?.value ?? '', undefined, undefined, undefined, bgModel).catch((err) => {
+      processTranscript(noteId, transcript).catch((err) => {
         console.error('[Transcription] Post-processing error:', err)
         pushToRenderer('transcription:error', { message: 'Post-processing failed' })
       })
@@ -1032,13 +1002,8 @@ export function registerTranscriptionIpcHandlers(): void {
       const db = getDatabase()
       const elKey =
         (db.prepare('SELECT value FROM settings WHERE key = ?').get('elevenlabs_api_key') as { value: string } | undefined)?.value ?? ''
-      const anthKey =
-        (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)?.value ?? ''
       const language =
         (db.prepare('SELECT value FROM settings WHERE key = ?').get('transcription_language') as { value: string } | undefined)?.value || 'multi'
-      const backgroundModel =
-        (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
-          ?.value || 'claude-haiku-4-5-20251001'
 
       if (!elKey) {
         return { ok: false, error: 'ElevenLabs API key not configured. Add it in Settings → AI.' }
@@ -1056,11 +1021,9 @@ export function registerTranscriptionIpcHandlers(): void {
         await processTranscript(
           meta.noteId,
           transcript,
-          anthKey,
           meta.startedAt,
           new Date().toISOString(),
           [],
-          backgroundModel,
         )
         // Clean up both files on success
         try { rmSync(meta.filePath, { force: true }) } catch { /* ignore */ }

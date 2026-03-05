@@ -2,13 +2,12 @@
 import { ref, nextTick, watch, onMounted } from 'vue'
 import { marked } from 'marked'
 import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText } from 'lucide-vue-next'
-import { messages, isLoading, clearMessages, type ChatMessage, type ExecutedAction, type AttachedImage, type AttachedFile } from '../stores/chatStore'
+import { messages, isLoading, clearMessages, selectedModelId, type ChatMessage, type ExecutedAction, type AttachedImage, type AttachedFile } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
 import { useInputMention } from '../composables/useInputMention'
 import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
 import AttachmentBar from './AttachmentBar.vue'
-import { MODELS, DEFAULT_CHAT_MODEL, type ChatModelId } from '../constants/models'
 
 const emit = defineEmits<{
   close: []
@@ -22,7 +21,7 @@ const inputText = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const selectedModel = ref<ChatModelId>(DEFAULT_CHAT_MODEL)
+const chatModels = ref<{ id: string; label: string }[]>([])
 
 // ── File attachment (shared composable) ──────────────────────────────────────
 const {
@@ -65,11 +64,28 @@ const {
 // Configure marked: no GFM tables/extensions needed beyond basic, keep it safe
 marked.setOptions({ breaks: true })
 
-onMounted(() => {
+onMounted(async () => {
   nextTick(() => {
     textareaRef.value?.focus()
     messagesEndRef.value?.scrollIntoView({ behavior: 'instant' })
   })
+
+  // Load enabled chat-capable models from all configured providers
+  try {
+    interface ProviderRow { id: string; label: string; models: { id: string; label: string; capabilities: string[]; enabled: boolean }[] }
+    const providers = await window.api.invoke('ai-providers:list') as ProviderRow[]
+    const models: { id: string; label: string }[] = []
+    for (const p of providers) {
+      for (const m of p.models) {
+        if (m.enabled && m.capabilities.includes('chat')) {
+          models.push({ id: m.id, label: `${m.label} (${p.label})` })
+        }
+      }
+    }
+    chatModels.value = models
+  } catch {
+    // leave chatModels empty — send() will use server-side default chain
+  }
 })
 
 function scrollToBottom(): void {
@@ -137,14 +153,14 @@ async function send(): Promise<void> {
       searchQuery: text,
       images: imagesToSend,
       files: filesToSend.length > 0 ? filesToSend : undefined,
-      model: selectedModel.value,
+      overrideModelId: selectedModelId.value || undefined,
       mentionedEntityIds: mentionedEntities.value.length > 0
         ? mentionedEntities.value.map((e) => e.id)
         : undefined,
       mentionedNoteIds: mentionedNotes.value.length > 0
         ? mentionedNotes.value.map((n) => n.id)
         : undefined,
-    })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[] }
+    })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[]; warning?: string }
 
     messages.value.push({
       role: 'assistant',
@@ -152,6 +168,7 @@ async function send(): Promise<void> {
       references: result.references,
       entityRefs: result.entityRefs,
       actions: result.actions,
+      warning: result.warning,
     })
     if (result.actions?.some((a) => a.type === 'created_note')) {
       emit('note-created')
@@ -390,8 +407,14 @@ function renderMessage(
     <div class="chat-header">
       <span class="chat-header-icon"><MessageSquare :size="14" /></span>
       <span class="chat-header-title">Ask Wizz</span>
-      <select v-model="selectedModel" class="chat-model-select" title="Claude model">
-        <option v-for="m in MODELS" :key="m.id" :value="m.id">{{ m.label }}</option>
+      <select
+        v-if="chatModels.length > 0"
+        v-model="selectedModelId"
+        class="chat-model-select"
+        title="Model"
+      >
+        <option value="">Default</option>
+        <option v-for="m in chatModels" :key="m.id" :value="m.id">{{ m.label }}</option>
       </select>
       <button
         v-if="messages.length > 0"
@@ -447,6 +470,11 @@ function renderMessage(
           v-html="renderMessage(msg.content, msg.references ?? [], msg.entityRefs)"
           @click="onBubbleClick($event, msg)"
         />
+
+        <!-- Fallback warning (shown when a secondary model was used) -->
+        <div v-if="msg.role === 'assistant' && msg.warning" class="chat-fallback-warning">
+          {{ msg.warning }}
+        </div>
 
         <!-- Action cards (shown for assistant messages that executed tools) -->
         <template v-if="msg.role === 'assistant' && msg.actions && msg.actions.length > 0">
@@ -1262,5 +1290,15 @@ function renderMessage(
   font-size: 10.5px;
   color: var(--color-text-muted);
   font-weight: 400;
+}
+
+/* ── Fallback warning ── */
+
+.chat-fallback-warning {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  font-style: italic;
+  padding: 2px 4px;
+  opacity: 0.75;
 }
 </style>

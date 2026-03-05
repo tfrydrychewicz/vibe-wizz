@@ -3,10 +3,10 @@ import { randomUUID } from 'crypto'
 import { getDatabase, isVecLoaded } from './index'
 import { scheduleNer, scheduleEmbeddingOnly, processAllNotes } from '../embedding/pipeline'
 import { runClusterBatchNow } from '../embedding/scheduler'
-import { setOpenAIKey, embedTexts } from '../embedding/embedder'
+import { embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { pushToRenderer } from '../push'
-import { setChatAnthropicKey, sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField, type ChatModelId } from '../embedding/chat'
+import { sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField } from '../embedding/chat'
 import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { parseQuery } from '../entity-query/parser'
@@ -20,6 +20,8 @@ import {
   type DeleteScope,
 } from '../calendar/recurrenceEngine'
 import { getProvider } from '../calendar/sync/registry'
+import { getAdapter, getProviderDef, PROVIDER_DEFS } from '../ai/registry'
+import { FEATURE_SLOTS } from '../ai/featureSlots'
 import { syncSourceNow } from '../calendar/sync/scheduler'
 import type { CalendarSource } from '../calendar/sync/provider'
 import { APPS_SCRIPT_SOURCE, APPS_SCRIPT_INSTRUCTIONS }                              from '../calendar/sync/providers/googleAppsScript'
@@ -1127,16 +1129,8 @@ export function registerDbIpcHandlers(): void {
    * Returns { heading: string, items: string[] } — heading and titles are in the note's language.
    */
   ipcMain.handle('notes:extract-actions', async (_event, { body_plain }: { body_plain: string }) => {
-    const db = getDatabase()
-    const setting = db
-      .prepare('SELECT value FROM settings WHERE key = ?')
-      .get('anthropic_api_key') as { value: string } | undefined
-    const apiKey = setting?.value ?? ''
-    if (!apiKey) return { heading: 'Action Items', items: [] }
-    const bgModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined
-    const bgModel = bgModelRow?.value || 'claude-haiku-4-5-20251001'
     try {
-      const extracted = await extractActionItems('', body_plain, apiKey, bgModel)
+      const extracted = await extractActionItems('', body_plain)
       return { heading: extracted.heading, items: extracted.items.map((e) => e.title) }
     } catch {
       return { heading: 'Action Items', items: [] }
@@ -1170,7 +1164,7 @@ export function registerDbIpcHandlers(): void {
         mentionedNoteIds,
         images,
         files,
-        model,
+        overrideModelId,
       }: {
         prompt: string
         noteBodyPlain: string
@@ -1179,28 +1173,10 @@ export function registerDbIpcHandlers(): void {
         mentionedNoteIds?: string[]
         images?: { dataUrl: string; mimeType: string }[]
         files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
-        model?: ChatModelId
+        overrideModelId?: string
       },
     ): Promise<{ content: object[] } | { error: string }> => {
       const db = getDatabase()
-
-      const setting = db
-        .prepare('SELECT value FROM settings WHERE key = ?')
-        .get('anthropic_api_key') as { value: string } | undefined
-      const apiKey = setting?.value ?? ''
-      if (!apiKey) {
-        return {
-          error:
-            'No Anthropic API key configured. Add your API key in Settings → AI to use inline generation.',
-        }
-      }
-
-      const bgModelRow = db
-        .prepare('SELECT value FROM settings WHERE key = ?')
-        .get('model_background') as { value: string } | undefined
-      const bgModel = bgModelRow?.value || 'claude-haiku-4-5-20251001'
-
-      setChatAnthropicKey(apiKey)
 
       // FTS5 keyword search on the prompt for knowledge base context (top 5 notes).
       // extractSearchKeywords also classifies whether web search is needed.
@@ -1208,7 +1184,7 @@ export function registerDbIpcHandlers(): void {
       let inlineNeedsWebSearch = false
       if (prompt.trim()) {
         try {
-          const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(prompt, undefined, bgModel)
+          const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(prompt)
           inlineNeedsWebSearch = webSearch
           if (keywords.length > 0) {
             const ftsQuery = keywords
@@ -1298,11 +1274,11 @@ export function registerDbIpcHandlers(): void {
           noteBodyPlain,
           selectedText,
           contextNotes,
-          model ?? bgModel,
           richEntities.length > 0 ? richEntities : undefined,
           images && images.length > 0 ? images as { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[] : undefined,
           files && files.length > 0 ? files : undefined,
           inlineNeedsWebSearch,
+          overrideModelId,
         )
         if (!markdown) {
           return { error: 'AI returned empty content. Please try a different prompt.' }
@@ -1441,12 +1417,6 @@ export function registerDbIpcHandlers(): void {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     ).run(key, value)
 
-    if (key === 'openai_api_key') {
-      import('../embedding/embedder')
-        .then(({ setOpenAIKey: sk }) => sk(value))
-        .catch(() => { /* embedder not yet loaded — pipeline will read key on next run */ })
-    }
-
     return { ok: true }
   })
 
@@ -1499,39 +1469,12 @@ export function registerDbIpcHandlers(): void {
         }
       }
 
-      // Read Anthropic key for query expansion + re-ranking (non-critical if absent)
-      let anthropicKey = ''
-      try {
-        const anthSetting = db
-          .prepare('SELECT value FROM settings WHERE key = ?')
-          .get('anthropic_api_key') as { value: string } | undefined
-        anthropicKey = anthSetting?.value ?? ''
-        if (anthropicKey) setChatAnthropicKey(anthropicKey)
-      } catch {
-        // no-op — expansion and re-ranking will be skipped
-      }
-
-      let searchBgModel = 'claude-haiku-4-5-20251001'
-      try {
-        const bgModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined
-        searchBgModel = bgModelRow?.value || 'claude-haiku-4-5-20251001'
-      } catch { /* no-op */ }
-
       if (isVecLoaded()) {
-        const setting = db
-          .prepare('SELECT value FROM settings WHERE key = ?')
-          .get('openai_api_key') as { value: string } | undefined
-        const apiKey = setting?.value ?? ''
-
-        if (apiKey) {
-          try {
-            setOpenAIKey(apiKey)
-
+        try {
             // Step 1: query expansion + embedding in parallel
+            // expandQueryConcepts falls back gracefully if no model is configured
             const [expandedTerms, [embed]] = await Promise.all([
-              anthropicKey
-                ? expandQueryConcepts(query, searchBgModel)
-                : Promise.resolve(rawFtsQuery.split(/\s+/).filter((w) => w.length >= 2)),
+              expandQueryConcepts(query),
               embedTexts([query]),
             ])
             const queryBuf = Buffer.from(embed.embedding.buffer)
@@ -1656,20 +1599,18 @@ export function registerDbIpcHandlers(): void {
               .sort((a, b) => b.score - a.score)
               .slice(0, 15)
 
-            // Step 4: Re-rank with Claude Haiku (if Anthropic key available)
-            const reranked =
-              anthropicKey && rrfSorted.length > 1
-                ? await reRankResults(query, rrfSorted, searchBgModel)
-                : rrfSorted
+            // Step 4: Re-rank with Claude Haiku (falls back gracefully if no model configured)
+            const reranked = rrfSorted.length > 1
+              ? await reRankResults(query, rrfSorted)
+              : rrfSorted
 
             return reranked.map(({ id, title, excerpt }) => ({ id, title, excerpt }))
           } catch (err) {
             console.error('[Search] Hybrid search error — falling back to FTS:', err)
           }
-        }
       }
 
-      // FTS-only fallback (no vec / no API key / error above)
+      // FTS-only fallback (vec not loaded / embedding error above)
       return runFts(rawFtsQuery, 15).map((r) => ({ ...r, excerpt: null }))
     }
   )
@@ -1698,43 +1639,20 @@ export function registerDbIpcHandlers(): void {
         searchQuery,
         images,
         files,
-        model,
         mentionedEntityIds,
         mentionedNoteIds,
+        overrideModelId,
       }: {
         messages: { role: 'user' | 'assistant'; content: string }[]
         searchQuery?: string
         images?: { dataUrl: string; mimeType: string }[]
         files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
-        model?: string
         mentionedEntityIds?: string[]
         mentionedNoteIds?: string[]
+        overrideModelId?: string
       },
-    ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[] }> => {
+    ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[]; warning?: string }> => {
       const db = getDatabase()
-
-      const setting = db
-        .prepare('SELECT value FROM settings WHERE key = ?')
-        .get('anthropic_api_key') as { value: string } | undefined
-      const apiKey = setting?.value ?? ''
-
-      if (!apiKey) {
-        return {
-          content:
-            'No Anthropic API key configured. Open **Settings** (bottom of the sidebar) and add your API key to enable AI chat.',
-          references: [],
-          actions: [],
-          entityRefs: [],
-        }
-      }
-
-      const chatModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_chat') as { value: string } | undefined
-      const chatModel = (model as ChatModelId | undefined) ?? (chatModelRow?.value as ChatModelId | undefined) ?? 'claude-sonnet-4-6'
-
-      const chatBgModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined
-      const chatBgModel = chatBgModelRow?.value || 'claude-haiku-4-5-20251001'
-
-      setChatAnthropicKey(apiKey)
 
       // Use the last user message as the search query if not explicitly provided
       const query =
@@ -1755,7 +1673,7 @@ export function registerDbIpcHandlers(): void {
       if (query.trim()) {
         // Pass prior messages so Haiku can resolve follow-ups ("a kiedy to bylo?" → "Bifrost")
         // Also classifies whether web search is needed for this question
-        const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(query, messages.slice(0, -1), chatBgModel)
+        const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(query, messages.slice(0, -1))
         needsWebSearch = webSearch
 
         if (keywords.length > 0) {
@@ -2011,15 +1929,22 @@ export function registerDbIpcHandlers(): void {
       let content: string
       let executedActions: ExecutedAction[] = []
       let entityRefs: { id: string; name: string }[] = []
+      let responseWarning: string | undefined
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, chatModel, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes, needsWebSearch)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes, needsWebSearch, overrideModelId)
         content = result.content
         executedActions = result.actions
         entityRefs = result.entityRefs
+        responseWarning = result.fallbackWarning
       } catch (err) {
         console.error('[Chat] Claude API error:', err)
+        const isNoModels =
+          (err instanceof Error && err.message.includes('No AI models configured')) ||
+          err instanceof AggregateError
         return {
-          content: 'Something went wrong calling the Claude API. Please check your API key and try again.',
+          content: isNoModels
+            ? 'No AI models available. Open **Settings → AI Providers** to add an API key.'
+            : 'Something went wrong calling the AI API. Please check your provider settings and try again.',
           references: [],
           actions: [],
           entityRefs: [],
@@ -2049,7 +1974,7 @@ export function registerDbIpcHandlers(): void {
       }
       entityRefs = Array.from(refsById.values())
 
-      return { content, references, actions: executedActions, entityRefs }
+      return { content, references, actions: executedActions, entityRefs, warning: responseWarning }
     },
   )
 
@@ -2281,15 +2206,6 @@ export function registerDbIpcHandlers(): void {
   ipcMain.handle('daily-briefs:generate', async (_event, { date }: { date: string }) => {
     const db = getDatabase()
 
-    const setting = db
-      .prepare('SELECT value FROM settings WHERE key = ?')
-      .get('anthropic_api_key') as { value: string } | undefined
-    const apiKey = setting?.value ?? ''
-
-    if (!apiKey) {
-      return { error: 'No Anthropic API key configured. Open Settings → AI to add one.' }
-    }
-
     // Gather snapshots at generation time (for provenance / future replay)
     const dayStart = `${date}T00:00:00`
     const dayEnd = `${date}T23:59:59`
@@ -2306,11 +2222,14 @@ export function registerDbIpcHandlers(): void {
       )
       .all()
 
-    const dailyBriefModelRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('model_daily_brief') as { value: string } | undefined
-    const dailyBriefModel = dailyBriefModelRow?.value || 'claude-sonnet-4-6'
-
     const { generateDailyBrief } = await import('../embedding/dailyBrief')
-    const content = await generateDailyBrief(date, apiKey, dailyBriefModel)
+    let content: string
+    try {
+      content = await generateDailyBrief(date)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { error: `Failed to generate daily brief: ${msg}` }
+    }
     const now = new Date().toISOString()
 
     db.prepare(
@@ -2466,6 +2385,179 @@ export function registerDbIpcHandlers(): void {
     }
     return { source: APPS_SCRIPT_SOURCE, instructions: APPS_SCRIPT_INSTRUCTIONS }
   })
+
+  // ── AI Providers ────────────────────────────────────────────────────────────
+
+  /** ai-providers:list — returns all registered providers with their enabled models. */
+  ipcMain.handle('ai-providers:list', () => {
+    const db = getDatabase()
+    const providers = db
+      .prepare(`SELECT id, api_key, enabled FROM ai_providers ORDER BY id`)
+      .all() as { id: string; api_key: string; enabled: number }[]
+
+    return providers.map((p) => {
+      const models = db
+        .prepare(
+          `SELECT id, label, capabilities, enabled FROM ai_models
+           WHERE provider_id = ? ORDER BY id`,
+        )
+        .all(p.id) as { id: string; label: string; capabilities: string; enabled: number }[]
+
+      const def = PROVIDER_DEFS.find((d) => d.id === p.id)
+      return {
+        id: p.id,
+        label: def?.label ?? p.id,
+        apiKey: p.api_key,
+        enabled: p.enabled === 1,
+        models: models.map((m) => ({
+          id: m.id,
+          label: m.label,
+          capabilities: (() => { try { return JSON.parse(m.capabilities) } catch { return ['chat'] } })(),
+          enabled: m.enabled === 1,
+        })),
+      }
+    })
+  })
+
+  /** ai-providers:save — upsert provider key + replace enabled model rows. */
+  ipcMain.handle(
+    'ai-providers:save',
+    (_e, args: { id: string; apiKey: string; enabledModelIds: string[]; models?: { id: string; label: string; capabilities: string[] }[] }) => {
+      const db = getDatabase()
+      try {
+        const def = getProviderDef(args.id)
+        // Use live-fetched models if provided, otherwise fall back to static popular list
+        const modelSource = (args.models && args.models.length > 0) ? args.models : def.popularModels
+
+        db.transaction(() => {
+          // Upsert provider row
+          db.prepare(
+            `INSERT INTO ai_providers (id, api_key, enabled) VALUES (?, ?, 1)
+             ON CONFLICT(id) DO UPDATE SET api_key = excluded.api_key, enabled = 1`,
+          ).run(args.id, args.apiKey)
+
+          // Upsert each model in the new list
+          const upsert = db.prepare(
+            `INSERT INTO ai_models (id, provider_id, label, capabilities, enabled)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               label = excluded.label,
+               capabilities = excluded.capabilities,
+               enabled = excluded.enabled`,
+          )
+          const newIds = new Set<string>()
+          for (const modelDef of modelSource) {
+            const enabled = args.enabledModelIds.includes(modelDef.id) ? 1 : 0
+            upsert.run(
+              modelDef.id,
+              args.id,
+              modelDef.label,
+              JSON.stringify(modelDef.capabilities),
+              enabled,
+            )
+            newIds.add(modelDef.id)
+          }
+
+          // Remove models no longer in the list, but only if they aren't
+          // referenced by ai_feature_models (to avoid cascading chain deletions)
+          const oldModels = db
+            .prepare(`SELECT id FROM ai_models WHERE provider_id = ?`)
+            .all(args.id) as { id: string }[]
+          const deleteStmt = db.prepare(
+            `DELETE FROM ai_models WHERE id = ?
+             AND id NOT IN (SELECT DISTINCT model_id FROM ai_feature_models)`,
+          )
+          for (const { id } of oldModels) {
+            if (!newIds.has(id)) deleteStmt.run(id)
+          }
+        })()
+
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: String(err) }
+      }
+    },
+  )
+
+  /** ai-providers:fetch-models — calls the provider's /models endpoint to validate
+   *  the key and return the curated list of available models. */
+  ipcMain.handle(
+    'ai-providers:fetch-models',
+    async (_e, args: { id: string; apiKey: string }) => {
+      const adapter = getAdapter(args.id)
+      return adapter.fetchModels(args.apiKey)
+    },
+  )
+
+  /** ai-providers:delete — hard-deletes the provider row (cascades to ai_models
+   *  and ai_feature_models via FK ON DELETE CASCADE). */
+  ipcMain.handle('ai-providers:delete', (_e, args: { id: string }) => {
+    const db = getDatabase()
+    db.prepare(`DELETE FROM ai_providers WHERE id = ?`).run(args.id)
+    return { ok: true }
+  })
+
+  // ── AI Feature Model Chains ─────────────────────────────────────────────────
+
+  /** ai-feature-models:list — returns the configured chain for every feature slot.
+   *  Slots with no rows in the DB are returned with an empty models array so the
+   *  UI can show the default placeholder. */
+  ipcMain.handle('ai-feature-models:list', () => {
+    const db = getDatabase()
+
+    return FEATURE_SLOTS.map((slot) => {
+      const rows = db
+        .prepare(
+          `SELECT fm.position, fm.model_id, m.label AS model_label,
+                  m.provider_id, m.enabled AS model_enabled
+           FROM ai_feature_models fm
+           JOIN ai_models m ON m.id = fm.model_id
+           WHERE fm.feature_slot = ?
+           ORDER BY fm.position ASC`,
+        )
+        .all(slot.id) as {
+          position: number
+          model_id: string
+          model_label: string
+          provider_id: string
+          model_enabled: number
+        }[]
+
+      return {
+        featureSlot: slot.id,
+        label: slot.label,
+        description: slot.description,
+        capability: slot.capability,
+        models: rows.map((r) => {
+          const provDef = PROVIDER_DEFS.find((p) => p.id === r.provider_id)
+          return {
+            position: r.position,
+            modelId: r.model_id,
+            modelLabel: r.model_label,
+            providerId: r.provider_id,
+            providerLabel: provDef?.label ?? r.provider_id,
+            enabled: r.model_enabled === 1,
+          }
+        }),
+      }
+    })
+  })
+
+  /** ai-feature-models:save — replaces the model chain for one feature slot. */
+  ipcMain.handle(
+    'ai-feature-models:save',
+    (_e, args: { featureSlot: string; modelIds: string[] }) => {
+      const db = getDatabase()
+      db.transaction(() => {
+        db.prepare(`DELETE FROM ai_feature_models WHERE feature_slot = ?`).run(args.featureSlot)
+        const insert = db.prepare(
+          `INSERT INTO ai_feature_models (feature_slot, position, model_id) VALUES (?, ?, ?)`,
+        )
+        args.modelIds.forEach((id, idx) => insert.run(args.featureSlot, idx, id))
+      })()
+      return { ok: true }
+    },
+  )
 
   /** debug:reembed-all — force L1+L2 for every note, then run L3 cluster batch.
    *  Fire-and-forget: pushes app:reembed-start (with note count) then app:reembed-done. */
