@@ -102,6 +102,15 @@ body {
   flex-shrink: 0;
 }
 
+/* ── Main column (banner + main area stacked vertically) ── */
+.main-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* ── Main area ── */
 .main-area {
   flex: 1;
@@ -914,6 +923,10 @@ body {
   background: #ef4444;
   animation: pulse-dot 1.2s ease-in-out infinite;
   flex-shrink: 0;
+}
+
+.transcript-recording-dot.retrying {
+  background: #f59e0b;
 }
 
 @keyframes pulse-dot {

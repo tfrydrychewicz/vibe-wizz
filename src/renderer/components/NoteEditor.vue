@@ -157,6 +157,8 @@ const isTranscribing = ref(false)
 const transcriptText = ref('')      // finalized partial transcripts accumulated
 const transcriptPartial = ref('')   // current non-final partial (shown while streaming)
 const transcriptionError = ref<string | null>(null)
+// Set when a realtime session failed and is being retried via batch
+const isRetryingTranscription = ref(false)
 
 // Audio capture objects live in activeAudio (module scope) so they persist
 // across NoteEditor unmounts — see transcriptionStore.ts.
@@ -383,6 +385,7 @@ const unsubTranscriptComplete = window.api.on('transcription:complete', (...args
   if (noteId === props.noteId) {
     transcriptText.value = ''
     transcriptPartial.value = ''
+    isRetryingTranscription.value = false
     activeTranscriptionNoteId.value = null
     activeAudio.format = null
     // Expand the incoming session when it loads; open the side panel
@@ -396,9 +399,17 @@ const unsubTranscriptError = window.api.on('transcription:error', (...args: unkn
   const { message } = args[0] as { message: string }
   transcriptionError.value = message
   isTranscribing.value = false
+  isRetryingTranscription.value = false
   if (activeTranscriptionNoteId.value === props.noteId) {
     activeTranscriptionNoteId.value = null
     activeAudio.format = null
+  }
+})
+
+const unsubTranscriptRetrying = window.api.on('transcription:retrying', (...args: unknown[]) => {
+  const { noteId } = args[0] as { noteId: string }
+  if (noteId === props.noteId) {
+    isRetryingTranscription.value = true
   }
 })
 
@@ -1349,6 +1360,7 @@ onBeforeUnmount(() => {
   unsubTranscriptPartial()
   unsubTranscriptComplete()
   unsubTranscriptError()
+  unsubTranscriptRetrying()
   // If transcription is active we intentionally do NOT stop it here.
   // Audio objects live in activeAudio (module scope) and keep streaming to the
   // main-process WebSocket while the user is on another note or view.
@@ -1712,12 +1724,14 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Live transcription status bar (only while recording is active) -->
-    <div v-if="isTranscribing" class="transcript-live-bar">
-      <span class="transcript-recording-dot" />
-      <span class="transcript-live-label">Recording</span>
-      <span v-if="lastTranscriptLine" class="transcript-live-text">{{ lastTranscriptLine }}</span>
-      <span v-else class="transcript-live-waiting">Listening…</span>
+    <!-- Live transcription status bar (while recording or retrying) -->
+    <div v-if="isTranscribing || isRetryingTranscription" class="transcript-live-bar">
+      <span class="transcript-recording-dot" :class="{ retrying: isRetryingTranscription }" />
+      <span class="transcript-live-label">{{ isRetryingTranscription ? 'Retrying with batch transcription…' : 'Recording' }}</span>
+      <template v-if="!isRetryingTranscription">
+        <span v-if="lastTranscriptLine" class="transcript-live-text">{{ lastTranscriptLine }}</span>
+        <span v-else class="transcript-live-waiting">Listening…</span>
+      </template>
     </div>
 
     <!-- Backlinks: notes that [[link]] to this note -->

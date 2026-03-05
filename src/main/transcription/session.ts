@@ -30,8 +30,9 @@
 
 import { ipcMain, app, shell } from 'electron'
 import WebSocket from 'ws'
-import { writeFileSync, mkdirSync } from 'fs'
+import { writeFileSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { getDatabase } from '../db/index'
 import { pushToRenderer } from '../push'
 import { processTranscript } from './postProcessor'
@@ -41,6 +42,14 @@ import {
   isSwiftTranscriberActive,
 } from './swiftTranscriber'
 import { startAudioCapture, stopAudioCapture } from './audioCapture'
+import {
+  RecoveryRecorder,
+  listOrphanedSessions,
+  deleteOrphanedSession,
+  cleanupExpiredSessions,
+  type RecoveryMeta,
+} from './recoveryRecorder'
+import { buildWavBuffer } from './wavUtils'
 
 // ── Session state ──────────────────────────────────────────────────────────────
 
@@ -68,6 +77,9 @@ let usingSystemAudio = false
 // and written to a WAV/WebM file in the debug-audio folder when the session ends.
 let collectDebugAudio = false
 let debugAudioChunks: Buffer[] = []
+// Recovery recorder — always-on parallel audio writer for crash/failure resilience.
+// Null for Swift (macOS) backend which handles audio internally.
+let activeRecovery: RecoveryRecorder | null = null
 
 /** Write accumulated audio chunks to a debug WAV or WebM file in userData/debug-audio/. */
 function saveDebugAudioFile(chunks: Buffer[], format: 'pcm' | 'webm'): void {
@@ -112,34 +124,6 @@ function buildSpeakerLabeledTranscript(): string {
 
 // ── ElevenLabs Batch helpers ───────────────────────────────────────────────────
 
-/** Build a minimal WAV container around raw PCM (16kHz, mono, Int16 LE). */
-function buildWavBuffer(pcmChunks: Buffer[]): Buffer {
-  const pcmData = Buffer.concat(pcmChunks)
-  const sampleRate = 16000
-  const numChannels = 1
-  const bitsPerSample = 16
-  const byteRate = sampleRate * numChannels * (bitsPerSample / 8)
-  const blockAlign = numChannels * (bitsPerSample / 8)
-  const dataSize = pcmData.length
-  const wav = Buffer.allocUnsafe(44 + dataSize)
-  let o = 0
-  wav.write('RIFF', o); o += 4
-  wav.writeUInt32LE(36 + dataSize, o); o += 4
-  wav.write('WAVE', o); o += 4
-  wav.write('fmt ', o); o += 4
-  wav.writeUInt32LE(16, o); o += 4
-  wav.writeUInt16LE(1, o); o += 2              // PCM
-  wav.writeUInt16LE(numChannels, o); o += 2
-  wav.writeUInt32LE(sampleRate, o); o += 4
-  wav.writeUInt32LE(byteRate, o); o += 4
-  wav.writeUInt16LE(blockAlign, o); o += 2
-  wav.writeUInt16LE(bitsPerSample, o); o += 2
-  wav.write('data', o); o += 4
-  wav.writeUInt32LE(dataSize, o); o += 4
-  pcmData.copy(wav, o)
-  return wav
-}
-
 interface ElevenLabsBatchWord {
   type: 'word' | 'spacing' | 'audio_event'
   text: string
@@ -154,26 +138,25 @@ interface ElevenLabsBatchResponse {
 }
 
 /**
- * POST a recorded PCM buffer to the ElevenLabs Scribe v2 Batch API with diarization.
- * Returns a speaker-labeled transcript (e.g. "[Speaker 0]: Hello\n[Speaker 1]: Hi")
- * or plain text if no diarization data is returned.
+ * POST an audio buffer to the ElevenLabs Scribe v2 Batch API.
+ * Accepts both WAV (PCM) and WebM/Opus buffers.
+ * Returns a speaker-labeled transcript or plain text.
  */
-async function stopElevenLabsBatch(
-  chunks: Buffer[],
+async function postToElevenLabsBatch(
+  audioBuf: Buffer,
+  contentType: 'audio/wav' | 'audio/webm',
   apiKey: string,
   language: string,
 ): Promise<string> {
-  if (chunks.length === 0) return ''
-
-  const wavBuffer = buildWavBuffer(chunks)
+  const fileName = contentType === 'audio/wav' ? 'recording.wav' : 'recording.webm'
   const formData = new FormData()
-  formData.append('file', new Blob([new Uint8Array(wavBuffer)], { type: 'audio/wav' }), 'recording.wav')
+  formData.append('file', new Blob([new Uint8Array(audioBuf)], { type: contentType }), fileName)
   formData.append('model_id', 'scribe_v2')
   formData.append('diarize', 'true')
   if (language !== 'multi') formData.append('language_code', language)
 
   console.log(
-    `[Transcription] ElevenLabs Batch: uploading ${(wavBuffer.length / 1024 / 1024).toFixed(1)} MB`,
+    `[Transcription] ElevenLabs Batch: uploading ${(audioBuf.length / 1024 / 1024).toFixed(1)} MB (${contentType})`,
   )
 
   const res = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
@@ -233,21 +216,65 @@ async function stopElevenLabsBatch(
   return labeled
 }
 
+/** Wrapper that builds a WAV from PCM chunks and POSTs to ElevenLabs batch. */
+async function stopElevenLabsBatch(
+  chunks: Buffer[],
+  apiKey: string,
+  language: string,
+): Promise<string> {
+  if (chunks.length === 0) return ''
+  const wavBuffer = buildWavBuffer(chunks)
+  return postToElevenLabsBatch(wavBuffer, 'audio/wav', apiKey, language)
+}
+
 // ── Unexpected WebSocket close handler ────────────────────────────────────────
+
+/**
+ * Attempt to retry transcription using the recovery recorder's saved audio via
+ * ElevenLabs batch API. Falls back to processing `partialTranscript` if batch fails.
+ * Cleans up the recovery file on success; keeps it for startup recovery on failure.
+ */
+async function retryWithBatch(
+  recorder: RecoveryRecorder,
+  partialTranscript: string,
+  noteId: string,
+  elevenLabsKey: string,
+  language: string,
+  anthropicKey: string,
+  startedAt: string | undefined,
+  endedAt: string,
+  attendeeNames: string[],
+  backgroundModel: string,
+): Promise<void> {
+  pushToRenderer('transcription:retrying', { noteId })
+  let batchTranscript = ''
+  try {
+    if (recorder.getFormat() === 'pcm') {
+      batchTranscript = await stopElevenLabsBatch(recorder.getChunks(), elevenLabsKey, language)
+    } else {
+      const webmBuf = Buffer.concat(recorder.getChunks())
+      batchTranscript = await postToElevenLabsBatch(webmBuf, 'audio/webm', elevenLabsKey, language)
+    }
+    console.log('[Transcription] Batch retry succeeded')
+  } catch (err) {
+    console.error('[Transcription] Batch retry failed, falling back to partial transcript:', err)
+    // Recovery file intentionally kept for startup recovery
+  }
+  const transcript = batchTranscript || partialTranscript
+  await processTranscript(noteId, transcript, anthropicKey, startedAt, endedAt, attendeeNames, backgroundModel)
+  if (batchTranscript) recorder.cleanup()
+}
 
 /**
  * Called when a cloud backend WebSocket closes while a session is still active
  * (i.e. not triggered by our own cleanupSession / stopSession call).
- * Saves whatever transcript was accumulated and kicks off post-processing so
- * the user doesn't lose their transcript.
+ * When an ElevenLabs key is available, transparently retries via batch using the
+ * recovery recorder's saved audio. Otherwise saves the partial transcript directly.
  */
 function handleUnexpectedClose(code: number): void {
   if (!isTranscribing) return   // graceful stop already cleaned up
 
   console.warn('[Transcription] WebSocket closed unexpectedly (code:', code, ')')
-  pushToRenderer('transcription:error', {
-    message: `Transcription service disconnected (code ${code}). Saving partial transcript.`,
-  })
 
   const noteId = sessionNoteId!
   const startedAt = sessionStartedAt
@@ -255,24 +282,56 @@ function handleUnexpectedClose(code: number): void {
   const finalText = accumulatedTranscript + (partialBuffer ? ' ' + partialBuffer : '')
   const labeledText = speakerSegments.length > 0 ? buildSpeakerLabeledTranscript() : ''
   const endedAt = new Date().toISOString()
+
+  // Capture recovery recorder before cleanupSession nulls the reference
+  const recovery = activeRecovery
+  activeRecovery = null
   cleanupSession()   // sets isTranscribing=false, ws=null, etc.
 
-  if (!finalText.trim()) return
   const db = getDatabase()
   const anthKey =
-    (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as
-      | { value: string }
-      | undefined)?.value ?? ''
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)?.value ?? ''
   const backgroundModel =
     (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
       ?.value || 'claude-haiku-4-5-20251001'
+  const language =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('transcription_language') as { value: string } | undefined)?.value || 'multi'
+  const elKey =
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get('elevenlabs_api_key') as { value: string } | undefined)?.value ?? ''
   const attendeeNames = readAttendeeNames(eventId)
-  processTranscript(noteId, labeledText || finalText, anthKey, startedAt ?? undefined, endedAt, attendeeNames, backgroundModel).catch(
-    (err) => {
+
+  const partialText = labeledText || finalText
+
+  if (recovery && elKey && recovery.getChunks().length > 0) {
+    // Retry with batch; user will see "Retrying with batch transcription…" status
+    retryWithBatch(
+      recovery,
+      partialText,
+      noteId,
+      elKey,
+      language,
+      anthKey,
+      startedAt ?? undefined,
+      endedAt,
+      attendeeNames,
+      backgroundModel,
+    ).catch((err) => {
       console.error('[Transcription] Post-processing error after unexpected close:', err)
       pushToRenderer('transcription:error', { message: 'Post-processing failed' })
-    },
-  )
+    })
+  } else {
+    // No recovery audio or no ElevenLabs key — process with whatever partial text we have
+    pushToRenderer('transcription:error', {
+      message: `Transcription service disconnected (code ${code}). Saving partial transcript.`,
+    })
+    if (!partialText.trim()) return
+    processTranscript(noteId, partialText, anthKey, startedAt ?? undefined, endedAt, attendeeNames, backgroundModel).catch(
+      (err) => {
+        console.error('[Transcription] Post-processing error after unexpected close:', err)
+        pushToRenderer('transcription:error', { message: 'Post-processing failed' })
+      },
+    )
+  }
 }
 
 // ── Deepgram connection ────────────────────────────────────────────────────────
@@ -566,6 +625,9 @@ function cleanupSession(): void {
   activeBackend = 'deepgram'
   speakerSegments = []
   batchAudioChunks = []
+  // Note: activeRecovery is intentionally NOT cleaned up here.
+  // It is cleaned up by the caller after successful transcription, or kept for startup recovery.
+  activeRecovery = null
 }
 
 /** Read attendee names from the calendar event linked to the session. */
@@ -603,6 +665,10 @@ async function startSession(
   speakerSegments = []
   batchAudioChunks = []
   activeBackend = backend
+  // Start recovery recorder (PCM for ElevenLabs paths, WebM for Deepgram)
+  const recoveryFormat = backend === 'deepgram' ? 'webm' : 'pcm'
+  activeRecovery = new RecoveryRecorder(randomUUID(), recoveryFormat, noteId, app.getPath('userData'))
+  activeRecovery.init()
   if (backend === 'elevenlabs') {
     await openElevenLabsSocket(apiKey, language)
     console.log('[Transcription] ElevenLabs Realtime session started for note', noteId)
@@ -629,6 +695,8 @@ async function stopSession(): Promise<void> {
   if (activeBackend === 'elevenlabs-batch') {
     const chunks = batchAudioChunks.slice()   // copy before cleanup clears array
     const endedAt = new Date().toISOString()
+    const recovery = activeRecovery
+    activeRecovery = null
     cleanupSession()
 
     const db = getDatabase()
@@ -647,6 +715,7 @@ async function stopSession(): Promise<void> {
       .then((labeled) =>
         processTranscript(noteId, labeled, anthKey, startedAt ?? undefined, endedAt, attendeeNames, backgroundModel),
       )
+      .then(() => { recovery?.cleanup() })
       .catch((err) => {
         console.error('[Transcription] ElevenLabs Batch error:', err)
         pushToRenderer('transcription:error', {
@@ -674,6 +743,8 @@ async function stopSession(): Promise<void> {
 
   const endedAt = new Date().toISOString()
   if (ws && ws.readyState === WebSocket.OPEN) ws.close()
+  const recovery = activeRecovery
+  activeRecovery = null
   cleanupSession()
 
   const db = getDatabase()
@@ -692,10 +763,12 @@ async function stopSession(): Promise<void> {
     endedAt,
     attendeeNames,
     backgroundModel,
-  ).catch((err) => {
-    console.error('[Transcription] Post-processing error:', err)
-    pushToRenderer('transcription:error', { message: 'Post-processing failed' })
-  })
+  )
+    .then(() => { recovery?.cleanup() })
+    .catch((err) => {
+      console.error('[Transcription] Post-processing error:', err)
+      pushToRenderer('transcription:error', { message: 'Post-processing failed' })
+    })
 }
 
 // ── IPC registration ───────────────────────────────────────────────────────────
@@ -773,6 +846,7 @@ export function registerTranscriptionIpcHandlers(): void {
             await startAudioCapture(
               (buf: Buffer) => {
                 if (!isTranscribing) return
+                activeRecovery?.push(buf)
                 if (collectDebugAudio) debugAudioChunks.push(buf)
                 if (activeBackend === 'elevenlabs-batch') {
                   batchAudioChunks.push(buf)
@@ -827,9 +901,13 @@ export function registerTranscriptionIpcHandlers(): void {
           batchAudioChunks = []
           activeBackend = 'deepgram'
           isTranscribing = true
+          // System audio Deepgram path uses PCM (from AudioCapture.app)
+          activeRecovery = new RecoveryRecorder(randomUUID(), 'pcm', noteId, app.getPath('userData'))
+          activeRecovery.init()
           await startAudioCapture(
             (buf: Buffer) => {
               if (!isTranscribing) return
+              activeRecovery?.push(buf)
               if (collectDebugAudio) debugAudioChunks.push(buf)
               if (!ws || ws.readyState !== WebSocket.OPEN) return
               try { ws.send(buf) } catch (e) {
@@ -877,6 +955,7 @@ export function registerTranscriptionIpcHandlers(): void {
   ipcMain.on('transcription:audio-chunk', (_event, chunk: ArrayBuffer) => {
     if (!isTranscribing || isSwiftTranscriberActive() || usingSystemAudio) return
     const buf = Buffer.from(chunk)
+    activeRecovery?.push(buf)
     if (collectDebugAudio) debugAudioChunks.push(buf)
     if (activeBackend === 'elevenlabs-batch') {
       batchAudioChunks.push(buf)
@@ -935,4 +1014,72 @@ export function registerTranscriptionIpcHandlers(): void {
   ipcMain.handle('debug:get-audio-folder', () => {
     return join(app.getPath('userData'), 'debug-audio')
   })
+
+  // ── Recovery IPC ──────────────────────────────────────────────────────────────
+
+  /** transcription:list-recovery — called by App.vue on mount to find orphaned sessions. */
+  ipcMain.handle('transcription:list-recovery', () => {
+    return listOrphanedSessions(app.getPath('userData'))
+  })
+
+  /**
+   * transcription:retry-recovery — process a saved recovery audio file via ElevenLabs batch.
+   * Used by the recovery banner when the user clicks "Process now".
+   */
+  ipcMain.handle(
+    'transcription:retry-recovery',
+    async (_event, meta: RecoveryMeta) => {
+      const db = getDatabase()
+      const elKey =
+        (db.prepare('SELECT value FROM settings WHERE key = ?').get('elevenlabs_api_key') as { value: string } | undefined)?.value ?? ''
+      const anthKey =
+        (db.prepare('SELECT value FROM settings WHERE key = ?').get('anthropic_api_key') as { value: string } | undefined)?.value ?? ''
+      const language =
+        (db.prepare('SELECT value FROM settings WHERE key = ?').get('transcription_language') as { value: string } | undefined)?.value || 'multi'
+      const backgroundModel =
+        (db.prepare('SELECT value FROM settings WHERE key = ?').get('model_background') as { value: string } | undefined)
+          ?.value || 'claude-haiku-4-5-20251001'
+
+      if (!elKey) {
+        return { ok: false, error: 'ElevenLabs API key not configured. Add it in Settings → AI.' }
+      }
+
+      try {
+        const audioBuf = readFileSync(meta.filePath)
+        let transcript: string
+        if (meta.format === 'pcm') {
+          // Raw PCM Int16 bytes — wrap in WAV
+          transcript = await stopElevenLabsBatch([audioBuf], elKey, language)
+        } else {
+          transcript = await postToElevenLabsBatch(audioBuf, 'audio/webm', elKey, language)
+        }
+        await processTranscript(
+          meta.noteId,
+          transcript,
+          anthKey,
+          meta.startedAt,
+          new Date().toISOString(),
+          [],
+          backgroundModel,
+        )
+        // Clean up both files on success
+        try { rmSync(meta.filePath, { force: true }) } catch { /* ignore */ }
+        try { rmSync(meta.metaPath, { force: true }) } catch { /* ignore */ }
+        return { ok: true }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        return { ok: false, error: msg }
+      }
+    },
+  )
+
+  /** transcription:discard-recovery — delete a recovery file without processing it. */
+  ipcMain.handle('transcription:discard-recovery', (_event, meta: RecoveryMeta) => {
+    try { rmSync(meta.filePath, { force: true }) } catch { /* ignore */ }
+    try { rmSync(meta.metaPath, { force: true }) } catch { /* ignore */ }
+    return { ok: true }
+  })
+
+  // Clean up recovery files older than 7 days on every startup
+  cleanupExpiredSessions(app.getPath('userData'))
 }

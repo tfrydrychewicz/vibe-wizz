@@ -18,6 +18,7 @@ import ChatSidebar from './components/ChatSidebar.vue'
 import CalendarView from './components/CalendarView.vue'
 import TodayView from './components/TodayView.vue'
 import CommandPalette from './components/CommandPalette.vue'
+import TranscriptionRecoveryBanner, { type RecoveryMeta } from './components/TranscriptionRecoveryBanner.vue'
 import {
   tabs,
   activeTabId,
@@ -91,6 +92,9 @@ const quitEmbeddingsCount = ref(0)
 // Debug re-embed overlay
 const reembedActive = ref(false)
 const reembedNoteCount = ref(0)
+
+// Transcription recovery sessions from previous crashed/failed sessions
+const recoverySessions = ref<RecoveryMeta[]>([])
 
 // Templates (for "New note from template" dropdown in NoteList)
 type TemplateRef = { id: string; name: string; icon: string }
@@ -400,6 +404,18 @@ function onGlobalKeydown(e: KeyboardEvent): void {
   }
 }
 
+async function onRecoveryRetry(session: RecoveryMeta) {
+  const result = await window.api.invoke('transcription:retry-recovery', session) as { ok: boolean; error?: string }
+  if (result.ok) {
+    recoverySessions.value = recoverySessions.value.filter((s) => s.filePath !== session.filePath)
+  }
+}
+
+async function onRecoveryDiscard(session: RecoveryMeta) {
+  await window.api.invoke('transcription:discard-recovery', session)
+  recoverySessions.value = recoverySessions.value.filter((s) => s.filePath !== session.filePath)
+}
+
 let unsubTranscriptionOpenNote: (() => void) | null = null
 let unsubQuitEmbeddings: (() => void) | null = null
 
@@ -429,6 +445,12 @@ onMounted(() => {
   window.api.on('app:reembed-done', () => {
     reembedActive.value = false
   })
+
+  // Check for orphaned recovery audio files from previous session
+  window.api.invoke('transcription:list-recovery').then((sessions: unknown) => {
+    const list = sessions as RecoveryMeta[]
+    if (list && list.length > 0) recoverySessions.value = list
+  }).catch(() => { /* ignore if handler not ready */ })
 })
 
 onBeforeUnmount(() => {
@@ -519,6 +541,13 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
+    <div class="main-column">
+    <TranscriptionRecoveryBanner
+      v-if="recoverySessions.length > 0"
+      :sessions="recoverySessions"
+      @retry="onRecoveryRetry"
+      @discard="onRecoveryDiscard"
+    />
     <main class="main-area">
 
       <!-- Notes + Entity views share the same two-column layout -->
@@ -713,6 +742,7 @@ onBeforeUnmount(() => {
         </div>
       </template>
     </main>
+    </div><!-- /.main-column -->
 
     <!-- Create entity type modal -->
     <EntityTypeModal
