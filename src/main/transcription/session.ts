@@ -28,7 +28,7 @@
  *   transcription:process     (invoke) — { noteId, transcript } → { ok }
  */
 
-import { ipcMain, app, shell } from 'electron'
+import { ipcMain, app, shell, powerSaveBlocker } from 'electron'
 import WebSocket from 'ws'
 import { writeFileSync, mkdirSync, readFileSync, rmSync } from 'fs'
 import { join } from 'path'
@@ -80,6 +80,8 @@ let debugAudioChunks: Buffer[] = []
 // Recovery recorder — always-on parallel audio writer for crash/failure resilience.
 // Null for Swift (macOS) backend which handles audio internally.
 let activeRecovery: RecoveryRecorder | null = null
+// Power save blocker ID — prevents macOS display sleep during active transcription.
+let powerSaveBlockerId: number | null = null
 
 /** Write accumulated audio chunks to a debug WAV or WebM file in userData/debug-audio/. */
 function saveDebugAudioFile(chunks: Buffer[], format: 'pcm' | 'webm'): void {
@@ -601,6 +603,10 @@ function openElevenLabsSocket(apiKey: string, language: string): Promise<void> {
 // ── Session lifecycle ──────────────────────────────────────────────────────────
 
 function cleanupSession(): void {
+  if (powerSaveBlockerId !== null && powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+    powerSaveBlocker.stop(powerSaveBlockerId)
+    powerSaveBlockerId = null
+  }
   if (usingSystemAudio) stopAudioCapture()
   // Save debug audio before resetting state (needs activeBackend + usingSystemAudio)
   if (collectDebugAudio && debugAudioChunks.length > 0) {
@@ -678,6 +684,9 @@ async function startSession(
     console.log('[Transcription] ElevenLabs Batch session started for note', noteId)
   }
   isTranscribing = true
+  if (powerSaveBlockerId === null) {
+    powerSaveBlockerId = powerSaveBlocker.start('prevent-display-sleep')
+  }
 }
 
 async function stopSession(): Promise<void> {
@@ -795,6 +804,9 @@ export function registerTranscriptionIpcHandlers(): void {
           sessionNoteId = noteId
           sessionEventId = eventId
           sessionStartedAt = new Date().toISOString()
+          if (powerSaveBlockerId === null) {
+            powerSaveBlockerId = powerSaveBlocker.start('prevent-display-sleep')
+          }
           await startSwiftTranscriber(noteId)
           console.log('[Transcription] Swift (macOS) started for note', noteId)
           return { ok: true, audioFormat: 'none' }
@@ -920,6 +932,10 @@ export function registerTranscriptionIpcHandlers(): void {
     if (isSwiftTranscriberActive()) {
       const endedAt = new Date().toISOString()
       await stopSwiftTranscriber(sessionStartedAt ?? undefined, endedAt)
+      if (powerSaveBlockerId !== null && powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+        powerSaveBlocker.stop(powerSaveBlockerId)
+        powerSaveBlockerId = null
+      }
       isTranscribing = false
       sessionNoteId = null
       sessionEventId = null
