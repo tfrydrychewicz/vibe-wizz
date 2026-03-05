@@ -226,7 +226,7 @@ The two are independent. A user can have both active simultaneously without conf
 ## 8. Implementation Checklist
 
 ### RecoveryRecorder module
-- [ ] Create `src/main/transcription/recoveryRecorder.ts` with `RecoveryRecorder` class
+- [] Create `src/main/transcription/recoveryRecorder.ts` with `RecoveryRecorder` class
   - [ ] Constructor: create `userData/transcription-recovery/` dir, set `filePath` + `metaPath`
   - [ ] `push(chunk)`: append to in-memory buffer; flush to disk when buffer > 2 MB
   - [ ] `flush()`: write WAV (PCM) or raw WebM to disk with correct header; write sidecar `.json`

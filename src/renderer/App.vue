@@ -95,6 +95,8 @@ const reembedNoteCount = ref(0)
 
 // Transcription recovery sessions from previous crashed/failed sessions
 const recoverySessions = ref<RecoveryMeta[]>([])
+const recoveryProcessingPaths = ref<Set<string>>(new Set())
+const recoveryError = ref<string | null>(null)
 
 // Templates (for "New note from template" dropdown in NoteList)
 type TemplateRef = { id: string; name: string; icon: string }
@@ -405,14 +407,26 @@ function onGlobalKeydown(e: KeyboardEvent): void {
 }
 
 async function onRecoveryRetry(session: RecoveryMeta) {
-  const result = await window.api.invoke('transcription:retry-recovery', session) as { ok: boolean; error?: string }
-  if (result.ok) {
-    recoverySessions.value = recoverySessions.value.filter((s) => s.filePath !== session.filePath)
+  recoveryError.value = null
+  recoveryProcessingPaths.value = new Set([...recoveryProcessingPaths.value, session.filePath])
+  try {
+    const result = await window.api.invoke('transcription:retry-recovery', { ...session }) as { ok: boolean; error?: string }
+    if (result.ok) {
+      recoverySessions.value = recoverySessions.value.filter((s) => s.filePath !== session.filePath)
+    } else {
+      recoveryError.value = result.error ?? 'Unknown error'
+    }
+  } catch (err) {
+    recoveryError.value = err instanceof Error ? err.message : 'Unknown error'
+  } finally {
+    const next = new Set(recoveryProcessingPaths.value)
+    next.delete(session.filePath)
+    recoveryProcessingPaths.value = next
   }
 }
 
 async function onRecoveryDiscard(session: RecoveryMeta) {
-  await window.api.invoke('transcription:discard-recovery', session)
+  await window.api.invoke('transcription:discard-recovery', { ...session })
   recoverySessions.value = recoverySessions.value.filter((s) => s.filePath !== session.filePath)
 }
 
@@ -545,8 +559,11 @@ onBeforeUnmount(() => {
     <TranscriptionRecoveryBanner
       v-if="recoverySessions.length > 0"
       :sessions="recoverySessions"
+      :processing-paths="recoveryProcessingPaths"
+      :error="recoveryError"
       @retry="onRecoveryRetry"
       @discard="onRecoveryDiscard"
+      @dismiss-error="recoveryError = null"
     />
     <main class="main-area">
 

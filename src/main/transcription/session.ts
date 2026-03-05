@@ -167,7 +167,14 @@ async function postToElevenLabsBatch(
 
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`ElevenLabs Batch API error (${res.status}): ${body}`)
+    let humanMsg: string
+    try {
+      const parsed = JSON.parse(body)
+      humanMsg = parsed?.detail?.message ?? parsed?.message ?? body
+    } catch {
+      humanMsg = body
+    }
+    throw new Error(humanMsg)
   }
 
   const data = (await res.json()) as ElevenLabsBatchResponse
