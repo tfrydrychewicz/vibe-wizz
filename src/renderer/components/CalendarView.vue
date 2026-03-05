@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ChevronLeft, ChevronRight, Calendar, Plus, RefreshCw, Cloud } from 'lucide-vue-next'
 import MeetingModal from './MeetingModal.vue'
 import SyncedEventPopup from './SyncedEventPopup.vue'
@@ -77,6 +77,18 @@ const hourHeight = computed(() =>
 
 let resizeObserver: ResizeObserver | null = null
 let _calSyncUnsub: (() => void) | null = null
+
+// ── Current time indicator ─────────────────────────────────────────────────
+const nowDate = ref(new Date())
+let nowInterval: ReturnType<typeof setInterval> | null = null
+
+const nowMinutes = computed(() => nowDate.value.getHours() * 60 + nowDate.value.getMinutes())
+const nowTopPx = computed(() => ((nowMinutes.value - HOUR_START * 60) / 60) * hourHeight.value)
+const nowVisible = computed(() =>
+  viewMode.value !== 'month' &&
+  nowMinutes.value >= HOUR_START * 60 &&
+  nowMinutes.value <= HOUR_END * 60
+)
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -240,11 +252,22 @@ onMounted(async () => {
   }
   // Reload events when a background sync completes for any source
   _calSyncUnsub = window.api.on('calendar-sync:complete', () => { void loadEvents() })
+
+  // Start the now-line ticker
+  nowInterval = setInterval(() => { nowDate.value = new Date() }, 60_000)
+
+  // Scroll to current time if today is visible
+  await nextTick()
+  if (nowVisible.value && columns.value.some(c => isToday(c)) && gridScrollRef.value) {
+    const scrollTarget = nowTopPx.value - gridScrollRef.value.clientHeight / 2
+    gridScrollRef.value.scrollTop = Math.max(0, scrollTarget)
+  }
 })
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   _calSyncUnsub?.()
+  if (nowInterval) clearInterval(nowInterval)
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
   window.removeEventListener('mousemove', onGlobalMouseMove)
@@ -808,6 +831,16 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
               class="hour-slot"
             />
 
+            <!-- Current time indicator -->
+            <div
+              v-if="isToday(col) && nowVisible"
+              class="now-indicator"
+              :style="{ top: `${nowTopPx}px` }"
+            >
+              <div class="now-dot" />
+              <div class="now-line" />
+            </div>
+
             <!-- Drag-to-create preview -->
             <div
               v-if="activeDrag && isSameDay(activeDrag.day, col)"
@@ -1237,6 +1270,31 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
   height: 2px;
   background: rgba(255, 255, 255, 0.45);
   border-radius: 1px;
+}
+
+.now-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  z-index: 2;
+  transform: translateY(-50%);
+}
+
+.now-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  flex-shrink: 0;
+}
+
+.now-line {
+  flex: 1;
+  height: 1px;
+  background: #ef4444;
 }
 
 .event-header-row {
