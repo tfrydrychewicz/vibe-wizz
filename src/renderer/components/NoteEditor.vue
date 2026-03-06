@@ -88,6 +88,8 @@ import {
   Mic, MicOff, ChevronDown as ChevronDownIcon,
   ScrollText, X, Sparkles, Table2,
 } from 'lucide-vue-next'
+import { useEntityChips } from '../composables/useEntityChips'
+import { renderEntityChip, escapeHtml } from '../utils/markdown'
 import {
   pendingAutoStartNoteId,
   activeTranscriptionNoteId,
@@ -137,15 +139,97 @@ type LinkedCalendarEvent = {
 }
 
 const linkedCalendarEvent = ref<LinkedCalendarEvent | null>(null)
+const meetingAttendeesEl = ref<HTMLElement | null>(null)
 
-const parsedAttendees = computed(() => {
+const { applyToElement: applyAttendeeChips } = useEntityChips()
+
+type AttendeeItem = { name: string; email?: string; entity_id?: string }
+
+const parsedAttendees = computed<AttendeeItem[]>(() => {
   if (!linkedCalendarEvent.value?.attendees) return []
   try {
-    return JSON.parse(linkedCalendarEvent.value.attendees) as Array<{ name: string; email: string }>
+    return JSON.parse(linkedCalendarEvent.value.attendees) as AttendeeItem[]
   } catch {
     return []
   }
 })
+
+// Enriched copy of parsedAttendees with entity_id resolved from email for synced events
+const resolvedAttendees = ref<AttendeeItem[]>([])
+
+const attendeesHtml = computed(() =>
+  resolvedAttendees.value
+    .map((a) => {
+      const label = a.name || a.email || ''
+      if (!label) return ''
+      if (a.entity_id) return renderEntityChip(a.entity_id, label)
+      return `<span class="meeting-context-chip">${escapeHtml(label)}</span>`
+    })
+    .join(''),
+)
+
+/** Resolve entity_id for attendees that have an email but no stored entity_id (synced events). */
+async function resolveAttendeeEntities(attendees: AttendeeItem[]): Promise<void> {
+  if (!attendees.length) { resolvedAttendees.value = []; return }
+
+  const [attTypeId, attEmailField, teamTypeId, teamEmailField] = await Promise.all([
+    window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_email_field' }) as Promise<string | null>,
+  ])
+
+  const enriched = await Promise.all(
+    attendees.map(async (a) => {
+      if (a.entity_id || !a.email) return a
+
+      // Try person entity match first
+      if (attTypeId?.trim() && attEmailField?.trim()) {
+        const entity = await (window.api.invoke('entities:find-by-email', {
+          email: a.email,
+          type_id: attTypeId.trim(),
+          email_field: attEmailField.trim(),
+        }) as Promise<{ id: string; name: string; type_id: string } | null>).catch(() => null)
+        if (entity) return { ...a, entity_id: entity.id, name: entity.name }
+      }
+
+      // Fallback: team entity match
+      if (teamTypeId?.trim() && teamEmailField?.trim()) {
+        const entity = await (window.api.invoke('entities:find-by-email', {
+          email: a.email,
+          type_id: teamTypeId.trim(),
+          email_field: teamEmailField.trim(),
+        }) as Promise<{ id: string; name: string; type_id: string } | null>).catch(() => null)
+        if (entity) return { ...a, entity_id: entity.id, name: entity.name }
+      }
+
+      return a
+    }),
+  )
+
+  resolvedAttendees.value = enriched
+}
+
+// Re-resolve entities whenever the calendar event's attendees change
+watch(parsedAttendees, (attendees) => { void resolveAttendeeEntities(attendees) }, { immediate: true })
+
+// Apply entity chip styling after the HTML re-renders (read ref AFTER nextTick)
+watch(attendeesHtml, async () => {
+  await nextTick()
+  if (meetingAttendeesEl.value) await applyAttendeeChips(meetingAttendeesEl.value)
+})
+
+async function onAttendeesClick(e: MouseEvent): Promise<void> {
+  const target = e.target as HTMLElement
+  const chip = target.closest('[data-entity-id]') as HTMLElement | null
+  if (!chip) return
+  const entityId = chip.dataset.entityId
+  if (!entityId) return
+  e.stopPropagation()
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  const result = await window.api.invoke('entities:get', { id: entityId }) as { entity: { type_id: string } } | null
+  if (result) emit('open-entity', { entityId, typeId: result.entity.type_id, mode })
+}
 
 function formatMeetingTime(ev: LinkedCalendarEvent): string {
   const start = new Date(ev.start_at)
@@ -1781,13 +1865,13 @@ onBeforeUnmount(() => {
       <div class="meeting-context-title">{{ linkedCalendarEvent.title }}</div>
       <div class="meeting-context-meta">
         <span class="meeting-context-time">{{ formatMeetingTime(linkedCalendarEvent) }}</span>
-        <div v-if="parsedAttendees.length" class="meeting-context-attendees">
-          <span
-            v-for="a in parsedAttendees"
-            :key="a.name || a.email"
-            class="meeting-context-chip"
-          >{{ a.name || a.email }}</span>
-        </div>
+        <div
+          v-if="parsedAttendees.length"
+          ref="meetingAttendeesEl"
+          class="meeting-context-attendees"
+          v-html="attendeesHtml"
+          @click="onAttendeesClick"
+        />
       </div>
       <div class="meeting-context-actions">
         <span v-if="transcriptionError" class="transcription-error-msg">{{ transcriptionError }}</span>

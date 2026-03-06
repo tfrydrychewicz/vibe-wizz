@@ -261,6 +261,7 @@ const attendeeEmailField = ref('')
 const teamEntityTypeId = ref('')
 const teamNameField = ref('')
 const teamEmailField = ref('')
+const teamMembersField = ref('')
 
 function entityFieldsFor(typeId: string): FieldDef[] {
   if (!typeId) return []
@@ -287,6 +288,7 @@ const nameFieldOptions = computed(() => nameOptionsFor(selectedEntityFields.valu
 const emailFieldOptions = computed(() => emailOptionsFor(selectedEntityFields.value))
 const teamNameFieldOptions = computed(() => nameOptionsFor(selectedTeamEntityFields.value))
 const teamEmailFieldOptions = computed(() => emailOptionsFor(selectedTeamEntityFields.value))
+const teamMembersFieldOptions = computed<FieldDef[]>(() => selectedTeamEntityFields.value)
 
 watch(attendeeEntityTypeId, () => {
   attendeeNameField.value = ''
@@ -296,6 +298,7 @@ watch(attendeeEntityTypeId, () => {
 watch(teamEntityTypeId, () => {
   teamNameField.value = ''
   teamEmailField.value = ''
+  teamMembersField.value = ''
 })
 
 // ── Load & Save ───────────────────────────────────────────────────────────────
@@ -303,7 +306,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, teamTypeId, teamNameFieldVal, teamEmailFieldVal, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes] = await Promise.all([
+  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, teamTypeId, teamNameFieldVal, teamEmailFieldVal, teamMembersFieldVal, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes] = await Promise.all([
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'deepgram_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'transcription_model' }) as Promise<string | null>,
@@ -318,6 +321,7 @@ onMounted(async () => {
     window.api.invoke('settings:get', { key: 'team_entity_type_id' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'team_name_field' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'team_email_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_members_field' }) as Promise<string | null>,
     window.api.invoke('entity-types:list') as Promise<EntityTypeRow[]>,
     window.api.invoke('settings:get', { key: 'save_debug_audio' }) as Promise<string | null>,
     window.api.invoke('debug:get-audio-folder') as Promise<string>,
@@ -350,6 +354,7 @@ onMounted(async () => {
   attendeeEmailField.value = attEmailField ?? ''
   teamNameField.value = teamNameFieldVal ?? ''
   teamEmailField.value = teamEmailFieldVal ?? ''
+  teamMembersField.value = teamMembersFieldVal ?? ''
 
   // Subscribe to background sync push events so the source list updates live
   _syncUnsubs.push(
@@ -405,6 +410,7 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'team_entity_type_id', value: teamEntityTypeId.value }),
     window.api.invoke('settings:set', { key: 'team_name_field', value: teamNameField.value }),
     window.api.invoke('settings:set', { key: 'team_email_field', value: teamEmailField.value }),
+    window.api.invoke('settings:set', { key: 'team_members_field', value: teamMembersField.value }),
     window.api.invoke('settings:set', { key: 'save_debug_audio', value: saveDebugAudio.value ? 'true' : 'false' }),
     window.api.invoke('settings:set', { key: 'followup_staleness_days', value: String(followupStalenessDays.value) }),
     window.api.invoke('settings:set', { key: 'followup_assignee_entity_type_id', value: followupAssigneeEntityTypeId.value }),
@@ -872,6 +878,14 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                       </select>
                     </div>
                   </div>
+                  <label class="field-label" style="margin-top: 8px;">Members Field</label>
+                  <select v-model="teamMembersField" class="modal-input modal-select">
+                    <option value="">None (don't expand team members)</option>
+                    <option v-for="f in teamMembersFieldOptions" :key="f.name" :value="f.name">{{ f.name }}</option>
+                  </select>
+                  <p class="field-hint">
+                    When a team appears as a meeting attendee, this field's members are used for speaker identification in transcription. Supports computed fields (WQL query results), entity reference lists (resolved to person names), text lists (one name per line), or comma-separated text.
+                  </p>
                 </template>
               </div>
             </template>

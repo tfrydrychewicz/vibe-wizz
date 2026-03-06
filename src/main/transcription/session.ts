@@ -36,6 +36,8 @@ import { randomUUID } from 'crypto'
 import { getDatabase } from '../db/index'
 import { pushToRenderer } from '../push'
 import { processTranscript } from './postProcessor'
+import { parseQuery } from '../entity-query/parser'
+import { evalQuery } from '../entity-query/evaluator'
 import {
   startSwiftTranscriber,
   stopSwiftTranscriber,
@@ -634,7 +636,78 @@ function cleanupSession(): void {
   activeRecovery = null
 }
 
-/** Read attendee names from the calendar event linked to the session. */
+/**
+ * Expand a team entity's members field into individual person names.
+ * Supports:
+ *   - computed fields (WQL query → entity name results)
+ *   - entity_ref_list (JSON UUID array → resolved entity names)
+ *   - text_list (JSON string array)
+ *   - plain text (comma- or newline-delimited)
+ */
+function expandTeamMemberNames(
+  entityId: string,
+  fieldsJson: string,
+  schemaJson: string,
+  membersField: string,
+): string[] {
+  const db = getDatabase()
+  try {
+    // Check field type from the entity type schema
+    let schemaDef: { fields?: { name: string; type: string; query?: string }[] } = {}
+    try { schemaDef = JSON.parse(schemaJson || '{}') } catch { /* ignore */ }
+    const fieldDef = (schemaDef.fields ?? []).find((f) => f.name === membersField)
+
+    // Computed field: evaluate WQL query and return entity names
+    if (fieldDef?.type === 'computed') {
+      if (!fieldDef.query) return []
+      try {
+        const ast = parseQuery(fieldDef.query)
+        const results = evalQuery(db, ast, entityId)
+        return results.map((r) => r.name).filter(Boolean)
+      } catch {
+        return []
+      }
+    }
+
+    // Stored field value
+    const fields = JSON.parse(fieldsJson) as Record<string, unknown>
+    const raw = fields[membersField]
+    if (raw == null || raw === '') return []
+
+    // JSON array
+    if (Array.isArray(raw)) {
+      if (raw.length === 0) return []
+      const firstItem = raw[0]
+      // Entity ref list: array of UUID strings → resolve to entity names
+      if (
+        typeof firstItem === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(firstItem)
+      ) {
+        return (raw as string[])
+          .map((id) => {
+            const e = db
+              .prepare('SELECT name FROM entities WHERE id = ? AND trashed_at IS NULL')
+              .get(id) as { name: string } | undefined
+            return e?.name ?? ''
+          })
+          .filter(Boolean)
+      }
+      // Plain string array (text_list)
+      return (raw as unknown[]).map((n) => String(n).trim()).filter(Boolean)
+    }
+
+    // Plain text field: split by newline or comma
+    if (typeof raw === 'string') {
+      return raw.split(/[\n,]+/).map((n) => n.trim()).filter(Boolean)
+    }
+
+    return []
+  } catch {
+    return []
+  }
+}
+
+/** Read attendee names from the calendar event, expanding team entities into their member names. */
 function readAttendeeNames(eventId: number | null): string[] {
   if (!eventId) return []
   const db = getDatabase()
@@ -642,9 +715,52 @@ function readAttendeeNames(eventId: number | null): string[] {
     .prepare('SELECT attendees FROM calendar_events WHERE id = ?')
     .get(eventId) as { attendees: string } | undefined
   if (!event?.attendees) return []
+
+  // Read team expansion settings
+  const teamTypeId =
+    (db.prepare("SELECT value FROM settings WHERE key = 'team_entity_type_id'").get() as
+      | { value: string }
+      | undefined)?.value ?? ''
+  const teamMembersField =
+    (db.prepare("SELECT value FROM settings WHERE key = 'team_members_field'").get() as
+      | { value: string }
+      | undefined)?.value ?? ''
+
   try {
-    const parsed = JSON.parse(event.attendees) as Array<{ name: string; email?: string }>
-    return parsed.map((a) => a.name).filter(Boolean)
+    const parsed = JSON.parse(event.attendees) as Array<{
+      name: string
+      email?: string
+      entity_id?: string
+    }>
+
+    const names: string[] = []
+    for (const a of parsed) {
+      if (!a.name) continue
+
+      // If this attendee is a team entity and members expansion is configured, expand members
+      if (a.entity_id && teamTypeId && teamMembersField) {
+        const entity = db
+          .prepare(
+            `SELECT e.type_id, e.fields, et.schema
+             FROM entities e
+             JOIN entity_types et ON et.id = e.type_id
+             WHERE e.id = ? AND e.trashed_at IS NULL`,
+          )
+          .get(a.entity_id) as { type_id: string; fields: string; schema: string } | undefined
+
+        if (entity && entity.type_id === teamTypeId) {
+          const memberNames = expandTeamMemberNames(a.entity_id, entity.fields, entity.schema, teamMembersField)
+          if (memberNames.length > 0) {
+            names.push(...memberNames)
+            continue
+          }
+        }
+      }
+
+      names.push(a.name)
+    }
+
+    return names.filter(Boolean)
   } catch {
     return []
   }
