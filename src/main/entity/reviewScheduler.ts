@@ -22,6 +22,7 @@ import {
   generateEntityReview,
   type EntityTypeWithReview,
   type EntityReview,
+  type ReviewFilter,
 } from './reviewGenerator'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -124,14 +125,66 @@ async function checkAndGenerateReviews(db: Database.Database): Promise<void> {
   }
 }
 
+/**
+ * Returns true if the entity's fields satisfy all configured review filters.
+ * All filters are ANDed; an empty filter list always returns true.
+ *
+ * Field values are coerced to strings for comparison:
+ *   - Strings: used directly
+ *   - Entity refs ({ id, name }): matched against the `name` string
+ *   - Everything else: JSON-stringified
+ */
+function entityMatchesFilters(
+  entity: { fields: string },
+  filters: ReviewFilter[],
+): boolean {
+  if (filters.length === 0) return true
+
+  let fields: Record<string, unknown> = {}
+  try { fields = JSON.parse(entity.fields) as Record<string, unknown> } catch { return true }
+
+  for (const f of filters) {
+    const raw = fields[f.field]
+    const val: string =
+      raw === null || raw === undefined
+        ? ''
+        : typeof raw === 'string'
+          ? raw
+          : typeof raw === 'object' && raw !== null && 'name' in raw
+            ? String((raw as Record<string, unknown>).name ?? '')
+            : JSON.stringify(raw)
+
+    const valLower = val.toLowerCase()
+    const filterLower = (f.value ?? '').toLowerCase()
+
+    switch (f.op) {
+      case 'eq':          if (valLower !== filterLower) return false; break
+      case 'neq':         if (valLower === filterLower) return false; break
+      case 'contains':    if (!valLower.includes(filterLower)) return false; break
+      case 'not_contains':if (valLower.includes(filterLower)) return false; break
+      case 'is_set':      if (!val.trim()) return false; break
+      case 'is_empty':    if (val.trim()) return false; break
+    }
+  }
+  return true
+}
+
 async function processType(db: Database.Database, type: EntityTypeWithReview): Promise<void> {
-  const entities = db
+  // Parse and apply entity-level review filters
+  let filters: ReviewFilter[] = []
+  if (type.review_filters) {
+    try { filters = JSON.parse(type.review_filters) as ReviewFilter[] } catch { /* ignore */ }
+  }
+
+  const allEntities = db
     .prepare(
       `SELECT id, name, type_id, fields FROM entities
        WHERE type_id = ? AND trashed_at IS NULL
        ORDER BY name ASC`,
     )
     .all(type.id) as { id: string; name: string; type_id: string; fields: string }[]
+
+  const entities = allEntities.filter((e) => entityMatchesFilters(e, filters))
 
   if (entities.length === 0) return
 

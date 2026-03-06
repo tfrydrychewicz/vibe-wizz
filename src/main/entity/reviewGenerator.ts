@@ -26,6 +26,22 @@ export interface EntityReview {
   acknowledged_at: string | null
 }
 
+/** Operator options for a review filter rule. */
+export type ReviewFilterOp =
+  | 'eq'           // field value equals (case-insensitive)
+  | 'neq'          // field value does not equal
+  | 'contains'     // field value contains substring
+  | 'not_contains' // field value does not contain substring
+  | 'is_set'       // field has a non-empty value
+  | 'is_empty'     // field is absent or empty
+
+/** A single filter rule applied when selecting entities for review. */
+export interface ReviewFilter {
+  field: string
+  op: ReviewFilterOp
+  value: string   // ignored for is_set / is_empty
+}
+
 export interface EntityTypeWithReview {
   id: string
   name: string
@@ -37,6 +53,7 @@ export interface EntityTypeWithReview {
   review_day: string | null        // 'mon'…'sun'
   review_time: string              // HH:MM
   review_guidance: string | null   // custom AI focus instructions
+  review_filters: string | null    // JSON: ReviewFilter[]
 }
 
 interface EntityRow {

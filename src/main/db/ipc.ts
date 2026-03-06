@@ -603,6 +603,7 @@ export function registerDbIpcHandlers(): void {
         review_day,
         review_time,
         review_guidance,
+        review_filters,
       }: {
         name: string
         icon: string
@@ -613,14 +614,15 @@ export function registerDbIpcHandlers(): void {
         review_day?: string | null
         review_time?: string
         review_guidance?: string | null
+        review_filters?: string | null
       }
     ) => {
       const db = getDatabase()
       const id = randomUUID()
       db.prepare(
         `INSERT INTO entity_types
-           (id, name, icon, color, schema, review_enabled, review_frequency, review_day, review_time, review_guidance)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, name, icon, color, schema, review_enabled, review_frequency, review_day, review_time, review_guidance, review_filters)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         id, name, icon, color, schema,
         review_enabled ?? 0,
@@ -628,6 +630,7 @@ export function registerDbIpcHandlers(): void {
         review_day ?? null,
         review_time ?? '07:00',
         review_guidance ?? null,
+        review_filters ?? null,
       )
       return db.prepare('SELECT * FROM entity_types WHERE id = ?').get(id) as EntityTypeRow
     }
@@ -652,6 +655,7 @@ export function registerDbIpcHandlers(): void {
         review_day,
         review_time,
         review_guidance,
+        review_filters,
       }: {
         id: string
         name: string
@@ -663,6 +667,7 @@ export function registerDbIpcHandlers(): void {
         review_day?: string | null
         review_time?: string
         review_guidance?: string | null
+        review_filters?: string | null
       }
     ) => {
       const db = getDatabase()
@@ -670,7 +675,7 @@ export function registerDbIpcHandlers(): void {
         `UPDATE entity_types
          SET name = ?, icon = ?, color = ?, schema = ?,
              review_enabled = ?, review_frequency = ?, review_day = ?, review_time = ?,
-             review_guidance = ?
+             review_guidance = ?, review_filters = ?
          WHERE id = ?`
       ).run(
         name, icon, color, schema,
@@ -679,6 +684,7 @@ export function registerDbIpcHandlers(): void {
         review_day ?? null,
         review_time ?? '07:00',
         review_guidance ?? null,
+        review_filters ?? null,
         id,
       )
       return db.prepare('SELECT * FROM entity_types WHERE id = ?').get(id) as EntityTypeRow

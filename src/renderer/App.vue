@@ -55,6 +55,7 @@ type EntityTypeRow = {
   review_day: string | null
   review_time: string
   review_guidance: string | null
+  review_filters: string | null
 }
 
 const FIXED_TOP_NAV: NavItem[] = [

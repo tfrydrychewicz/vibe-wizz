@@ -10,6 +10,7 @@ import { migration as m0008 } from './0008_gtd_task_fields'
 import { migration as m0009 } from './0009_action_items_next_action'
 import { migration as m0010 } from './0010_entity_reviews'
 import { migration as m0011 } from './0011_entity_type_review_guidance'
+import { migration as m0012 } from './0012_entity_type_review_filters'
 
 export interface Migration {
   /** Integer matching the 4-digit file prefix, e.g. file 0003_... → version 3 */
@@ -27,7 +28,7 @@ export interface Migration {
  *   3. If adding a new table, also add CREATE TABLE IF NOT EXISTS to schema.ts
  *      If adding a column to an existing table, migration file only (do NOT touch schema.ts)
  */
-const ALL_MIGRATIONS: Migration[] = [m0001, m0002, m0003, m0004, m0005, m0006, m0007, m0008, m0009, m0010, m0011]
+const ALL_MIGRATIONS: Migration[] = [m0001, m0002, m0003, m0004, m0005, m0006, m0007, m0008, m0009, m0010, m0011, m0012]
 
 /**
  * Run all pending migrations synchronously. Call once inside initDatabase(),

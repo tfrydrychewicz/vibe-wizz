@@ -48,6 +48,7 @@ type EntityTypeRow = {
   review_day: string | null
   review_time: string
   review_guidance: string | null
+  review_filters: string | null
 }
 
 const props = defineProps<{
@@ -84,6 +85,41 @@ const reviewTime = ref('07:00')
 const reviewGuidance = ref('')
 const generatingGuidance = ref(false)
 const guidanceError = ref('')
+
+// ── Review filters state ──────────────────────────────────────────────────────
+
+type ReviewFilterOp = 'eq' | 'neq' | 'contains' | 'not_contains' | 'is_set' | 'is_empty'
+interface ReviewFilterRow { field: string; op: ReviewFilterOp; value: string }
+
+const reviewFilters = ref<ReviewFilterRow[]>([])
+
+const FILTER_OPS: { value: ReviewFilterOp; label: string; needsValue: boolean }[] = [
+  { value: 'eq',          label: 'equals',       needsValue: true },
+  { value: 'neq',         label: 'not equals',   needsValue: true },
+  { value: 'contains',    label: 'contains',     needsValue: true },
+  { value: 'not_contains',label: 'not contains', needsValue: true },
+  { value: 'is_set',      label: 'is set',       needsValue: false },
+  { value: 'is_empty',    label: 'is empty',     needsValue: false },
+]
+
+function addFilter(): void {
+  const firstField = fields.value[0]?.name ?? ''
+  reviewFilters.value.push({ field: firstField, op: 'neq', value: '' })
+}
+
+function removeFilter(i: number): void {
+  reviewFilters.value.splice(i, 1)
+}
+
+/** Returns the FieldDef for a filter row (used to show option dropdowns for select fields). */
+function filterFieldDef(fieldName: string): FieldDef | undefined {
+  return fields.value.find((f) => f.name === fieldName)
+}
+
+/** Whether the selected op requires a value input. */
+function filterOpNeedsValue(op: ReviewFilterOp): boolean {
+  return FILTER_OPS.find((o) => o.value === op)?.needsValue ?? true
+}
 
 const DAY_LABELS: Record<string, string> = {
   mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
@@ -219,6 +255,7 @@ async function save(): Promise<void> {
     review_day: needsDayPicker.value ? reviewDay.value : null,
     review_time: reviewEnabled.value ? (reviewTime.value || '07:00') : '07:00',
     review_guidance: reviewGuidance.value.trim() || null,
+    review_filters: reviewFilters.value.length > 0 ? JSON.stringify(reviewFilters.value) : null,
   }
 
   if (isEditMode.value && props.editingType) {
@@ -280,6 +317,11 @@ onMounted(async () => {
     }
     if (props.editingType.review_guidance) {
       reviewGuidance.value = props.editingType.review_guidance
+    }
+    if (props.editingType.review_filters) {
+      try {
+        reviewFilters.value = JSON.parse(props.editingType.review_filters) as ReviewFilterRow[]
+      } catch { /* ignore malformed */ }
     }
   }
 })
@@ -449,6 +491,81 @@ onMounted(async () => {
               <p v-if="guidanceError" class="reviews-guidance-error">{{ guidanceError }}</p>
               <p class="reviews-hint">
                 Tells the AI what to focus on. Leave blank to use a generic summary. AI model used from <strong>Settings → AI Features → Entity Review Summary</strong>.
+              </p>
+            </div>
+
+            <!-- Entity filters -->
+            <div class="reviews-filters-section">
+              <div class="reviews-guidance-header">
+                <label class="reviews-control-label">Entity filters</label>
+                <button
+                  class="btn-generate-guidance"
+                  :disabled="fields.length === 0"
+                  :title="fields.length === 0 ? 'Add fields to this type first' : 'Add filter'"
+                  @click="addFilter"
+                >
+                  <Plus :size="12" /> Add filter
+                </button>
+              </div>
+              <p v-if="fields.length === 0" class="reviews-hint">
+                Define fields for this type above to enable filtering.
+              </p>
+              <template v-else-if="reviewFilters.length === 0">
+                <p class="reviews-hint">No filters — reviews will be generated for all entities of this type.</p>
+              </template>
+              <div v-else class="reviews-filter-list">
+                <div
+                  v-for="(filter, i) in reviewFilters"
+                  :key="i"
+                  class="reviews-filter-row"
+                >
+                  <!-- Field picker -->
+                  <select v-model="filter.field" class="modal-input reviews-filter-select">
+                    <option v-for="f in fields" :key="f.name" :value="f.name">
+                      {{ f.name }}
+                    </option>
+                  </select>
+
+                  <!-- Operator picker -->
+                  <select v-model="filter.op" class="modal-input reviews-filter-select">
+                    <option v-for="op in FILTER_OPS" :key="op.value" :value="op.value">
+                      {{ op.label }}
+                    </option>
+                  </select>
+
+                  <!-- Value: option dropdown for select fields, plain input otherwise -->
+                  <template v-if="filterOpNeedsValue(filter.op)">
+                    <select
+                      v-if="filterFieldDef(filter.field)?.type === 'select'"
+                      v-model="filter.value"
+                      class="modal-input reviews-filter-select"
+                    >
+                      <option value="">— any —</option>
+                      <option
+                        v-for="opt in (filterFieldDef(filter.field)?.options ?? '').split(',').map(s => s.trim()).filter(Boolean)"
+                        :key="opt"
+                        :value="opt"
+                      >
+                        {{ opt }}
+                      </option>
+                    </select>
+                    <input
+                      v-else
+                      v-model="filter.value"
+                      class="modal-input reviews-filter-value"
+                      type="text"
+                      placeholder="value"
+                    />
+                  </template>
+                  <span v-else class="reviews-filter-no-value" />
+
+                  <button class="field-remove-btn" title="Remove filter" @click="removeFilter(i)">
+                    <Trash2 :size="13" />
+                  </button>
+                </div>
+              </div>
+              <p v-if="reviewFilters.length > 0" class="reviews-hint">
+                All filters are combined with AND. Reviews are skipped for entities that don't match.
               </p>
             </div>
           </template>
@@ -894,6 +1011,43 @@ onMounted(async () => {
 .btn-generate-guidance:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.reviews-filters-section {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reviews-filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reviews-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reviews-filter-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+.reviews-filter-value {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+.reviews-filter-no-value {
+  flex: 1;
 }
 
 /* Toggle (reuses SettingsModal pattern) */
