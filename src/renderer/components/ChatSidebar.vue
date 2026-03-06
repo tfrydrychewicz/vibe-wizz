@@ -249,6 +249,7 @@ function actionCardMeta(type: ExecutedAction['type']): ActionCardMeta {
     case 'updated_action': return { icon: 'CheckSquare',   label: 'Updated action item',    variant: 'blue',  linkView: 'actions',  linkLabel: 'Open Actions'  }
     case 'deleted_action': return { icon: 'SquareMinus',   label: 'Deleted action item',    variant: 'red',   linkView: 'actions',  linkLabel: 'Open Actions'  }
     case 'created_note':   return { icon: 'FilePlus',      label: 'Created note',           variant: 'green',                       linkLabel: 'Open Note'     }
+    case 'created_entity': return { icon: 'UserPlus',      label: 'Created entity',         variant: 'green',                       linkLabel: ''              }
   }
 }
 
@@ -265,7 +266,8 @@ function onActionCardLink(e: MouseEvent, action: ExecutedAction): void {
 function formatActionPayload(action: ExecutedAction): string {
   const p = action.payload
   const parts: string[] = []
-  if (p.title) parts.push(p.title)
+  if (p.name) parts.push(p.type_name ? `${p.name} (${p.type_name})` : p.name)
+  if (!p.name && p.title) parts.push(p.title)
   if (p.start_at) {
     try {
       const start = new Date(p.start_at)

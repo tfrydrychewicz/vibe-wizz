@@ -81,15 +81,112 @@ export type ExecutedAction = {
     | 'updated_action'
     | 'deleted_action'
     | 'created_note'
+    | 'created_entity'
   payload: {
     id: number | string
     title?: string
+    name?: string
+    type_name?: string
     start_at?: string
     end_at?: string
     status?: string
     due_date?: string | null
     assigned_entity_name?: string | null
   }
+}
+
+// ── Entity tool helpers ───────────────────────────────────────────────────────
+
+type StoredFieldDef = {
+  name: string
+  type: 'text' | 'email' | 'date' | 'select' | 'text_list' | 'entity_ref' | 'entity_ref_list' | 'note_ref' | 'computed'
+  options?: string[]
+  entity_type?: string
+  query?: string
+}
+
+function slugifyTypeName(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+}
+
+function fieldToJsonSchema(field: StoredFieldDef): Record<string, unknown> | null {
+  switch (field.type) {
+    case 'text':
+      return { type: 'string', description: `${field.name}` }
+    case 'email':
+      return { type: 'string', description: `${field.name} (email address)` }
+    case 'date':
+      return { type: 'string', description: `${field.name} (ISO 8601 date, e.g. 2026-03-01)` }
+    case 'select':
+      return field.options && field.options.length > 0
+        ? { type: 'string', enum: field.options, description: `${field.name}` }
+        : { type: 'string', description: `${field.name}` }
+    case 'text_list':
+      return { type: 'array', items: { type: 'string' }, description: `${field.name} (list of text values)` }
+    case 'entity_ref':
+      return { type: 'string', description: `${field.name} — entity ID (UUID) of the referenced ${field.entity_type ?? 'entity'}` }
+    case 'entity_ref_list':
+      return { type: 'array', items: { type: 'string' }, description: `${field.name} — list of entity IDs (UUIDs) of referenced ${field.entity_type ?? 'entity'} records` }
+    case 'note_ref':
+      return { type: 'string', description: `${field.name} — note ID (UUID)` }
+    case 'computed':
+      return null  // skip — read-only computed values
+    default:
+      return { type: 'string', description: `${field.name}` }
+  }
+}
+
+/**
+ * Build one `create_<slug>` Anthropic tool per entity type in the DB.
+ * Returns both the tool definitions and a slug→typeId map for execution.
+ */
+function buildEntityTools(db: ReturnType<typeof getDatabase>): {
+  tools: Anthropic.Tool[]
+  slugToTypeId: Map<string, string>
+  slugToTypeName: Map<string, string>
+} {
+  const rows = db.prepare('SELECT id, name, schema FROM entity_types').all() as {
+    id: string
+    name: string
+    schema: string
+  }[]
+
+  const tools: Anthropic.Tool[] = []
+  const slugToTypeId = new Map<string, string>()
+  const slugToTypeName = new Map<string, string>()
+
+  for (const row of rows) {
+    const slug = slugifyTypeName(row.name)
+    slugToTypeId.set(slug, row.id)
+    slugToTypeName.set(slug, row.name)
+
+    let fields: StoredFieldDef[] = []
+    try {
+      const schema = JSON.parse(row.schema) as { fields?: StoredFieldDef[] }
+      fields = schema.fields ?? []
+    } catch { /* ignore malformed schema */ }
+
+    const properties: Record<string, unknown> = {
+      name: { type: 'string', description: `${row.name} name` },
+    }
+
+    for (const field of fields) {
+      const jsonSchema = fieldToJsonSchema(field)
+      if (jsonSchema) properties[field.name] = jsonSchema
+    }
+
+    tools.push({
+      name: `create_${slug}`,
+      description: `Create a new ${row.name} entity in the knowledge base.`,
+      input_schema: {
+        type: 'object',
+        properties,
+        required: ['name'],
+      },
+    })
+  }
+
+  return { tools, slugToTypeId, slugToTypeName }
 }
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
@@ -265,7 +362,12 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
 
 // ── Tool executor ────────────────────────────────────────────────────────────
 
-function executeTool(toolName: string, input: Record<string, unknown>): ExecutedAction {
+function executeTool(
+  toolName: string,
+  input: Record<string, unknown>,
+  slugToTypeId?: Map<string, string>,
+  slugToTypeName?: Map<string, string>,
+): ExecutedAction {
   const db = getDatabase()
 
   switch (toolName) {
@@ -440,8 +542,35 @@ function executeTool(toolName: string, input: Record<string, unknown>): Executed
       return { type: 'created_note', payload: { id, title: inp.title } }
     }
 
-    default:
+    default: {
+      // Dynamic entity creation tools: create_<slug>
+      if (toolName.startsWith('create_') && slugToTypeId && slugToTypeName) {
+        const slug = toolName.slice('create_'.length)
+        const typeId = slugToTypeId.get(slug)
+        const typeName = slugToTypeName.get(slug)
+        if (!typeId || !typeName) throw new Error(`Unknown tool: ${toolName}`)
+
+        const { name, ...fieldValues } = input as { name: string; [key: string]: unknown }
+        const id = randomUUID()
+        const now = new Date().toISOString()
+
+        // Serialise field values: arrays go in as JSON strings, everything else as plain string
+        const fieldsObj: Record<string, string> = {}
+        for (const [key, value] of Object.entries(fieldValues)) {
+          if (value === undefined || value === null) continue
+          fieldsObj[key] = Array.isArray(value) ? JSON.stringify(value) : String(value)
+        }
+
+        db.prepare(
+          `INSERT INTO entities (id, name, type_id, fields, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        ).run(id, name, typeId, JSON.stringify(fieldsObj), now, now)
+
+        return { type: 'created_entity', payload: { id, name, type_name: typeName } }
+      }
+
       throw new Error(`Unknown tool: ${toolName}`)
+    }
   }
 }
 
@@ -837,6 +966,8 @@ export async function sendChatMessage(
   const db = getDatabase()
   let fallbackWarning: string | undefined
 
+  const { tools: entityTools, slugToTypeId, slugToTypeName } = buildEntityTools(db)
+
   let systemPrompt =
     'You are Wizz, an AI assistant built into an engineering manager\'s personal knowledge base. ' +
     'You help the user find information from their notes, understand patterns across meetings, ' +
@@ -844,7 +975,8 @@ export async function sendChatMessage(
     `Today is ${getCurrentDateString()}.\n\n` +
     'Always reply in the same language the user writes in.\n\n' +
     'Be concise and actionable. When you don\'t have relevant context, say so rather than guessing.\n\n' +
-    'You have tools available to create, update, and delete calendar events and action items, and to create notes. ' +
+    'You have tools available to create, update, and delete calendar events and action items, create notes, ' +
+    'and create entities (people, teams, projects, and other custom types). ' +
     'Use them when the user asks you to make a change (schedule, add, create, write, draft, generate, mark, update, move, cancel, delete, etc.). ' +
     'For creates and updates: execute immediately without asking. ' +
     'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool. ' +
@@ -971,9 +1103,10 @@ export async function sendChatMessage(
       return { role: msg.role as 'user' | 'assistant', content: msg.content }
     })
 
+    const allWizzTools: Anthropic.Tool[] = [...WIZZ_TOOLS, ...entityTools]
     const tools: Anthropic.Messages.ToolUnion[] = useWebSearch
-      ? [...WIZZ_TOOLS, WEB_SEARCH_TOOL]
-      : WIZZ_TOOLS
+      ? [...allWizzTools, WEB_SEARCH_TOOL]
+      : allWizzTools
 
     const actions: ExecutedAction[] = []
     let finalText = ''
@@ -1006,7 +1139,7 @@ export async function sendChatMessage(
         let resultContent: string
         let isError = false
         try {
-          const action = executeTool(block.name, block.input as Record<string, unknown>)
+          const action = executeTool(block.name, block.input as Record<string, unknown>, slugToTypeId, slugToTypeName)
           actions.push(action)
           resultContent = JSON.stringify(action.payload)
         } catch (err) {
