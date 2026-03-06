@@ -279,6 +279,7 @@ function actionCardMeta(type: ExecutedAction['type']): ActionCardMeta {
     case 'deleted_action':        return { icon: 'SquareMinus',   label: 'Deleted action item',     variant: 'red',   linkView: 'actions',  linkLabel: 'Open Actions'  }
     case 'created_note':          return { icon: 'FilePlus',      label: 'Created note',            variant: 'green',                       linkLabel: 'Open Note'     }
     case 'created_entity':        return { icon: 'UserPlus',      label: 'Created entity',          variant: 'green',                       linkLabel: ''              }
+    case 'updated_entity':        return { icon: 'UserCheck',     label: 'Updated entity',          variant: 'blue',                        linkLabel: ''              }
     case 'ensured_action_created': return { icon: 'Link',         label: 'Created & linked task',   variant: 'green', linkView: 'actions',  linkLabel: 'Open Actions'  }
     case 'ensured_action_found':   return { icon: 'Link2',        label: 'Linked existing task',    variant: 'blue',  linkView: 'actions',  linkLabel: 'Open Actions'  }
   }

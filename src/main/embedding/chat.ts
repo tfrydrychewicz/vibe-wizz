@@ -95,6 +95,7 @@ export type ExecutedAction = {
     | 'deleted_action'
     | 'created_note'
     | 'created_entity'
+    | 'updated_entity'
     | 'ensured_action_created'   // ensure_action_item_for_task — new row inserted
     | 'ensured_action_found'     // ensure_action_item_for_task — existing row found
   payload: {
@@ -201,6 +202,26 @@ function buildEntityTools(db: ReturnType<typeof getDatabase>): {
         type: 'object',
         properties,
         required: ['name'],
+      },
+    })
+
+    // Build the edit tool: id is required; name and all non-computed fields are optional.
+    // 'properties' already contains 'name' plus all editable field schemas.
+    const editProperties: Record<string, unknown> = {
+      id: { type: 'string', description: `ID (UUID) of the ${row.name} entity to update` },
+      ...properties,
+    }
+
+    tools.push({
+      name: `edit_${slug}`,
+      description:
+        `Update an existing ${row.name} entity. ` +
+        `Resolve the entity ID from the context provided before calling this. ` +
+        `Only supply the fields you want to change; omitted fields are left unchanged.`,
+      input_schema: {
+        type: 'object',
+        properties: editProperties,
+        required: ['id'],
       },
     })
   }
@@ -638,6 +659,45 @@ function executeTool(
         return { type: 'created_entity', payload: { id, name, type_name: typeName } }
       }
 
+      // Dynamic entity edit tools: edit_<slug>
+      if (toolName.startsWith('edit_') && slugToTypeId && slugToTypeName) {
+        const slug = toolName.slice('edit_'.length)
+        const typeId = slugToTypeId.get(slug)
+        const typeName = slugToTypeName.get(slug)
+        if (!typeId || !typeName) throw new Error(`Unknown tool: ${toolName}`)
+
+        const { id, name, ...fieldValues } = input as { id: string; name?: string; [key: string]: unknown }
+
+        // Load existing entity
+        const existing = db
+          .prepare('SELECT id, name, fields FROM entities WHERE id = ? AND type_id = ? AND trashed_at IS NULL')
+          .get(id, typeId) as { id: string; name: string; fields: string } | undefined
+        if (!existing) throw new Error(`${typeName} entity with id ${id} not found`)
+
+        // Merge incoming field updates onto the existing fields JSON
+        let existingFields: Record<string, string> = {}
+        try {
+          existingFields = JSON.parse(existing.fields) as Record<string, string>
+        } catch { /* start fresh if stored value is malformed */ }
+
+        for (const [key, value] of Object.entries(fieldValues)) {
+          if (value === undefined || value === null) {
+            delete existingFields[key]
+          } else {
+            existingFields[key] = Array.isArray(value) ? JSON.stringify(value) : String(value)
+          }
+        }
+
+        const updatedName = name !== undefined ? name : existing.name
+        const now = new Date().toISOString()
+
+        db.prepare(
+          `UPDATE entities SET name = ?, fields = ?, updated_at = ? WHERE id = ?`,
+        ).run(updatedName, JSON.stringify(existingFields), now, id)
+
+        return { type: 'updated_entity', payload: { id, name: updatedName, type_name: typeName } }
+      }
+
       throw new Error(`Unknown tool: ${toolName}`)
     }
   }
@@ -1069,9 +1129,10 @@ export async function sendChatMessage(
     'Always reply in the same language the user writes in.\n\n' +
     'Be concise and actionable. When you don\'t have relevant context, say so rather than guessing.\n\n' +
     'You have tools available to create, update, and delete calendar events and action items, create notes, ' +
-    'and create entities (people, teams, projects, and other custom types). ' +
+    'and create or edit entities (people, teams, projects, and other custom types). ' +
     'Use them when the user asks you to make a change (schedule, add, create, write, draft, generate, mark, update, move, cancel, delete, etc.). ' +
     'For creates and updates: execute immediately without asking. ' +
+    'When editing an entity, resolve its ID from the entity context provided, then call the edit_<type> tool — only send the fields you want to change. ' +
     'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool. ' +
     'When creating a note, generate rich, well-structured Markdown content — use headings, bullet lists, task checkboxes, and GFM tables (| Col | Col |\\n| --- | --- |\\n| val | val |) as appropriate.\n\n' +
     'When the user asks you to modify a task that came from a pasted note selection (e.g. assign a project, ' +
