@@ -6,6 +6,7 @@ import { runClusterBatchNow } from '../embedding/scheduler'
 import { embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
 import { deriveTaskAttributes } from '../embedding/taskClarifier'
+import { generateEntityReview, type EntityTypeWithReview } from '../entity/reviewGenerator'
 import { pushToRenderer } from '../push'
 import { sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField } from '../embedding/chat'
 import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
@@ -59,6 +60,10 @@ type EntityTypeRow = {
   kanban_enabled: number
   kanban_status_field: string | null
   color: string | null
+  review_enabled: number
+  review_frequency: string | null
+  review_day: string | null
+  review_time: string
 }
 
 type EntityRow = {
@@ -593,13 +598,34 @@ export function registerDbIpcHandlers(): void {
         icon,
         color,
         schema,
-      }: { name: string; icon: string; color: string; schema: string }
+        review_enabled,
+        review_frequency,
+        review_day,
+        review_time,
+      }: {
+        name: string
+        icon: string
+        color: string
+        schema: string
+        review_enabled?: number
+        review_frequency?: string | null
+        review_day?: string | null
+        review_time?: string
+      }
     ) => {
       const db = getDatabase()
       const id = randomUUID()
       db.prepare(
-        `INSERT INTO entity_types (id, name, icon, color, schema) VALUES (?, ?, ?, ?, ?)`
-      ).run(id, name, icon, color, schema)
+        `INSERT INTO entity_types
+           (id, name, icon, color, schema, review_enabled, review_frequency, review_day, review_time)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        id, name, icon, color, schema,
+        review_enabled ?? 0,
+        review_frequency ?? null,
+        review_day ?? null,
+        review_time ?? '07:00',
+      )
       return db.prepare('SELECT * FROM entity_types WHERE id = ?').get(id) as EntityTypeRow
     }
   )
@@ -618,12 +644,36 @@ export function registerDbIpcHandlers(): void {
         icon,
         color,
         schema,
-      }: { id: string; name: string; icon: string; color: string; schema: string }
+        review_enabled,
+        review_frequency,
+        review_day,
+        review_time,
+      }: {
+        id: string
+        name: string
+        icon: string
+        color: string
+        schema: string
+        review_enabled?: number
+        review_frequency?: string | null
+        review_day?: string | null
+        review_time?: string
+      }
     ) => {
       const db = getDatabase()
       db.prepare(
-        `UPDATE entity_types SET name = ?, icon = ?, color = ?, schema = ? WHERE id = ?`
-      ).run(name, icon, color, schema, id)
+        `UPDATE entity_types
+         SET name = ?, icon = ?, color = ?, schema = ?,
+             review_enabled = ?, review_frequency = ?, review_day = ?, review_time = ?
+         WHERE id = ?`
+      ).run(
+        name, icon, color, schema,
+        review_enabled ?? 0,
+        review_frequency ?? null,
+        review_day ?? null,
+        review_time ?? '07:00',
+        id,
+      )
       return db.prepare('SELECT * FROM entity_types WHERE id = ?').get(id) as EntityTypeRow
     }
   )
@@ -1945,7 +1995,7 @@ export function registerDbIpcHandlers(): void {
           return db
             .prepare(
               `SELECT ai.id, ai.title, ai.status, ai.due_date,
-                      e.name as assigned_entity_name,
+                      ai.assigned_entity_id, e.name as assigned_entity_name,
                       ai.project_entity_id, pe.name as project_name,
                       ai.source_note_id, n.title as source_note_title
                FROM action_items ai
@@ -2675,6 +2725,70 @@ export function registerDbIpcHandlers(): void {
       return { ok: true }
     },
   )
+
+  // ─── Entity Reviews ──────────────────────────────────────────────────────────
+
+  /**
+   * entity-reviews:list — returns all reviews for a given entity, newest first.
+   */
+  ipcMain.handle('entity-reviews:list', (_event, { entity_id }: { entity_id: string }) => {
+    const db = getDatabase()
+    return db
+      .prepare(
+        `SELECT * FROM entity_reviews WHERE entity_id = ? ORDER BY generated_at DESC`,
+      )
+      .all(entity_id)
+  })
+
+  /**
+   * entity-reviews:generate — manually generate a review for an entity right now,
+   * regardless of schedule. Pushes entity-review:complete on success.
+   * Returns the EntityReview row or { error: string }.
+   */
+  ipcMain.handle('entity-reviews:generate', async (_event, { entity_id }: { entity_id: string }) => {
+    const db = getDatabase()
+
+    const entity = db
+      .prepare(`SELECT id, name, type_id, fields FROM entities WHERE id = ? AND trashed_at IS NULL`)
+      .get(entity_id) as { id: string; name: string; type_id: string; fields: string } | undefined
+
+    if (!entity) return { error: 'Entity not found or is in trash.' }
+
+    const type = db
+      .prepare(`SELECT * FROM entity_types WHERE id = ?`)
+      .get(entity.type_id) as EntityTypeWithReview | undefined
+
+    if (!type) return { error: 'Entity type not found.' }
+
+    const result = await generateEntityReview(db, entity, type)
+
+    if ('error' in result) return result
+
+    pushToRenderer('entity-review:complete', { entityId: entity_id, reviewId: result.id })
+    return result
+  })
+
+  /**
+   * entity-reviews:acknowledge — marks a review as viewed (sets acknowledged_at).
+   * Idempotent — only updates if acknowledged_at is currently NULL.
+   */
+  ipcMain.handle('entity-reviews:acknowledge', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    db.prepare(
+      `UPDATE entity_reviews SET acknowledged_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ? AND acknowledged_at IS NULL`,
+    ).run(id)
+    return { ok: true }
+  })
+
+  /**
+   * entity-reviews:delete — hard-deletes a single review row.
+   */
+  ipcMain.handle('entity-reviews:delete', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    db.prepare(`DELETE FROM entity_reviews WHERE id = ?`).run(id)
+    return { ok: true }
+  })
 
   /** debug:reembed-all — force L1+L2 for every note, then run L3 cluster batch.
    *  Fire-and-forget: pushes app:reembed-start (with note count) then app:reembed-done. */

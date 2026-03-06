@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { ChevronLeft, ChevronRight, RefreshCw, Sparkles } from 'lucide-vue-next'
 import type { OpenMode } from '../stores/tabStore'
+import { markdownToHtml } from '../utils/markdown'
+import { useEntityChips } from '../composables/useEntityChips'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +23,9 @@ const emit = defineEmits<{
 }>()
 
 // ── State ────────────────────────────────────────────────────────────────────
+
+const briefBodyRef = ref<HTMLElement | null>(null)
+const { applyToElement } = useEntityChips()
 
 const todayDate = getLocalDate(new Date())
 const currentDate = ref(todayDate)
@@ -129,6 +134,12 @@ watch(currentDate, () => {
   loadBrief()
 }, { immediate: true })
 
+// Apply entity chip styling whenever the rendered brief changes
+watch(renderedBrief, async () => {
+  await nextTick()
+  if (briefBodyRef.value) void applyToElement(briefBodyRef.value)
+})
+
 // ── Brief click delegation ────────────────────────────────────────────────────
 
 async function onBriefClick(e: MouseEvent): Promise<void> {
@@ -168,141 +179,6 @@ async function onBriefClick(e: MouseEvent): Promise<void> {
   }
 }
 
-// ── Markdown renderer ─────────────────────────────────────────────────────────
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-function renderInline(raw: string): string {
-  const entityItems: { id?: string; name: string }[] = []
-  const noteLinkItems: { id?: string; title: string }[] = []
-
-  const UUID_RE = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
-
-  // Pass 1a: {{entity:uuid:Name}} — ID embedded, no DB lookup needed
-  const withEntityId = raw.replace(
-    new RegExp(`\\{\\{entity:(${UUID_RE}):(.*?)\\}\\}`, 'g'),
-    (_m, id: string, name: string) => {
-      entityItems.push({ id, name: name.trim() })
-      return `WIZZENT${entityItems.length - 1}WIZZENT`
-    },
-  )
-
-  // Pass 1b: @EntityName — plain fallback, resolved by name at click time
-  const withEntityPlaceholders = withEntityId.replace(
-    /@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g,
-    (_m, name: string) => {
-      const trimmed = name.replace(/[.,!?;:'")\]]+$/, '').trim()
-      entityItems.push({ name: trimmed })
-      return `WIZZENT${entityItems.length - 1}WIZZENT`
-    },
-  )
-
-  // Pass 1c: {{note:uuid:Name}} — ID embedded, no DB lookup needed
-  const withNoteId = withEntityPlaceholders.replace(
-    new RegExp(`\\{\\{note:(${UUID_RE}):(.*?)\\}\\}`, 'g'),
-    (_m, id: string, title: string) => {
-      noteLinkItems.push({ id, title: title.trim() })
-      return `WIZZLINK${noteLinkItems.length - 1}WIZZLINK`
-    },
-  )
-
-  // Pass 1d: [[NoteTitle]] — plain fallback, resolved by title at click time
-  const withNoteLinkPlaceholders = withNoteId.replace(
-    /\[\[([^\]]{1,200})\]\]/g,
-    (_m, title: string) => {
-      noteLinkItems.push({ title: title.trim() })
-      return `WIZZLINK${noteLinkItems.length - 1}WIZZLINK`
-    },
-  )
-
-  // Pass 2: standard inline markdown on the safe-escaped remainder
-  const safe = escapeHtml(withNoteLinkPlaceholders)
-  let result = safe
-    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/__(.+?)__/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/_(.+?)_/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-
-  // Pass 3: substitute placeholders with styled buttons
-  result = result.replace(/WIZZENT(\d+)WIZZENT/g, (_m, idxStr: string) => {
-    const item = entityItems[Number(idxStr)]
-    if (!item) return ''
-    const idAttr = item.id ? ` data-entity-id="${escapeHtml(item.id)}"` : ''
-    return `<button class="brief-entity-ref"${idAttr} data-entity-name="${escapeHtml(item.name)}">@${escapeHtml(item.name)}</button>`
-  })
-  result = result.replace(/WIZZLINK(\d+)WIZZLINK/g, (_m, idxStr: string) => {
-    const item = noteLinkItems[Number(idxStr)]
-    if (!item) return ''
-    const idAttr = item.id ? ` data-note-id="${escapeHtml(item.id)}"` : ''
-    return `<button class="brief-note-ref"${idAttr} data-note-title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</button>`
-  })
-
-  return result
-}
-
-function markdownToHtml(md: string): string {
-  const lines = md.split('\n')
-  const out: string[] = []
-  let listType: 'ul-task' | 'ul' | null = null
-
-  function closeList(): void {
-    if (listType) { out.push('</ul>'); listType = null }
-  }
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-
-    const hm = trimmed.match(/^(#{1,6})\s+(.+)$/)
-    if (hm) {
-      closeList()
-      const level = hm[1].length
-      out.push(`<h${level}>${renderInline(hm[2])}</h${level}>`)
-      continue
-    }
-
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
-      closeList()
-      out.push('<hr>')
-      continue
-    }
-
-    const tm = trimmed.match(/^[-*]\s+\[([ xX])\]\s+(.+)$/)
-    if (tm) {
-      if (listType !== 'ul-task') { closeList(); out.push('<ul class="brief-task-list">'); listType = 'ul-task' }
-      const checked = tm[1].toLowerCase() === 'x'
-      out.push(
-        `<li class="brief-task-item">` +
-          `<span class="brief-checkbox${checked ? ' checked' : ''}">${checked ? '✓' : ''}</span>` +
-          `<span class="brief-task-text">${renderInline(tm[2])}</span>` +
-        `</li>`,
-      )
-      continue
-    }
-
-    const bm = trimmed.match(/^[-*]\s+(.+)$/)
-    if (bm) {
-      if (listType !== 'ul') { closeList(); out.push('<ul class="brief-bullet-list">'); listType = 'ul' }
-      out.push(`<li>${renderInline(bm[1])}</li>`)
-      continue
-    }
-
-    if (!trimmed) { closeList(); continue }
-
-    closeList()
-    out.push(`<p>${renderInline(trimmed)}</p>`)
-  }
-
-  closeList()
-  return out.join('\n')
-}
 </script>
 
 <template>
@@ -364,6 +240,7 @@ function markdownToHtml(md: string): string {
           <span>Regenerating…</span>
         </div>
         <div
+          ref="briefBodyRef"
           class="brief-body"
           :class="{ 'brief-body-dim': generating }"
           v-html="renderedBrief"
@@ -691,43 +568,7 @@ function markdownToHtml(md: string): string {
 
 :deep(.brief-task-text) { flex: 1; }
 
-/* Entity mention chip — matches MentionChip / .chat-entity-ref styling */
-:deep(.brief-entity-ref) {
-  display: inline-flex;
-  align-items: center;
-  background: rgba(91, 141, 239, 0.15);
-  color: var(--color-accent);
-  border: 1px solid rgba(91, 141, 239, 0.3);
-  border-radius: 6px;
-  padding: 1px 6px;
-  font-size: 11.5px;
-  font-weight: 500;
-  cursor: pointer;
-  margin: 0 1px;
-  vertical-align: middle;
-  font-family: inherit;
-  line-height: 1.4;
-}
-:deep(.brief-entity-ref:hover) { background: rgba(91, 141, 239, 0.25); }
-
-/* Note link chip in brief — matches .chat-note-ref tone */
-:deep(.brief-note-ref) {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
-  border-radius: 10px;
-  font-size: 11.5px;
-  font-weight: 500;
-  background: rgba(91, 141, 239, 0.15);
-  color: var(--color-accent);
-  border: 1px solid rgba(91, 141, 239, 0.3);
-  cursor: pointer;
-  vertical-align: middle;
-  white-space: nowrap;
-  font-family: inherit;
-  line-height: 1.4;
-}
-:deep(.brief-note-ref:hover) { background: rgba(91, 141, 239, 0.25); }
+/* Chip styling lives in the global style.css (.wizz-entity-chip, .wizz-note-chip) */
 
 /* ── Empty state ── */
 

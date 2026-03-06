@@ -39,6 +39,7 @@ export type ActionItemContext = {
   title: string
   status: string
   due_date: string | null
+  assigned_entity_id: string | null
   assigned_entity_name: string | null
   project_entity_id: string | null
   project_name: string | null
@@ -467,9 +468,15 @@ function formatCalendarEvent(ev: CalendarEventContext): string {
 
 function formatActionItem(item: ActionItemContext): string {
   let line = `- [id:${item.id}] [${item.status}] "${item.title}"`
-  if (item.project_name) line += ` [project: ${item.project_name}]`
+  if (item.project_name) {
+    const ref = item.project_entity_id ? `{{entity:${item.project_entity_id}:${item.project_name}}}` : item.project_name
+    line += ` [project: ${ref}]`
+  }
   if (item.due_date) line += ` (due: ${item.due_date})`
-  if (item.assigned_entity_name) line += ` → ${item.assigned_entity_name}`
+  if (item.assigned_entity_name) {
+    const ref = item.assigned_entity_id ? `{{entity:${item.assigned_entity_id}:${item.assigned_entity_name}}}` : item.assigned_entity_name
+    line += ` → ${ref}`
+  }
   if (item.source_note_title) line += ` (from: "${item.source_note_title}")`
   return line
 }

@@ -36,6 +36,7 @@ import {
 import type { OpenMode } from './stores/tabStore'
 import { pendingAutoStartNoteId } from './stores/transcriptionStore'
 import { registerOpenDetailHandler } from './stores/taskDetailStore'
+import { registerEntityTypes } from './stores/entityTypeStore'
 
 type NavItem = {
   id: string
@@ -49,6 +50,10 @@ type EntityTypeRow = {
   icon: string
   color: string | null
   schema: string
+  review_enabled: number
+  review_frequency: string | null
+  review_day: string | null
+  review_time: string
 }
 
 const FIXED_TOP_NAV: NavItem[] = [
@@ -125,6 +130,7 @@ const activeEntityId = computed((): string | null => {
 
 async function loadEntityTypes(): Promise<void> {
   entityTypes.value = (await window.api.invoke('entity-types:list')) as EntityTypeRow[]
+  registerEntityTypes(entityTypes.value)
 }
 
 function isEntityView(viewId: string): boolean {

@@ -78,6 +78,12 @@ export const FEATURE_SLOTS = [
     capability: 'chat',
   },
   {
+    id: 'entity_review',
+    label: 'Entity Review Summary',
+    description: 'Generates periodic AI summaries of everything Wizz knows about a single entity (notes, tasks, calendar events). Tone is adapted to the entity type (Person, Project, Team, etc.).',
+    capability: 'chat',
+  },
+  {
     id: 'embedding',
     label: 'Vector Embeddings',
     description: 'Generates vector embeddings for notes and chunks.',
@@ -101,5 +107,6 @@ export const DEFAULT_CHAINS: Record<FeatureSlotId, string[]> = {
   query_expand:    ['claude-haiku-4-5-20251001'],
   rerank:          ['claude-haiku-4-5-20251001'],
   task_clarify:    ['claude-haiku-4-5-20251001'],
+  entity_review:   ['claude-haiku-4-5-20251001'],
   embedding:       ['text-embedding-3-small'],
 }

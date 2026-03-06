@@ -7,6 +7,10 @@ import type { OpenMode } from '../stores/tabStore'
 import { useInputMention } from '../composables/useInputMention'
 import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
+import { useEntityChips } from '../composables/useEntityChips'
+import { entityTypeMap } from '../stores/entityTypeStore'
+import { renderEntityChip, renderNoteChip, escapeHtml } from '../utils/markdown'
+import LucideIcon from './LucideIcon.vue'
 import AttachmentBar from './AttachmentBar.vue'
 
 const emit = defineEmits<{
@@ -18,7 +22,17 @@ const emit = defineEmits<{
 }>()
 
 const inputText = ref('')
+const messagesContainerRef = ref<HTMLElement | null>(null)
 const messagesEndRef = ref<HTMLElement | null>(null)
+
+const { applyToElement: applyChips } = useEntityChips()
+
+// Apply entity chip styling after each new message is pushed (watch length
+// because messages is mutated in-place via .push — the ref itself never changes).
+watch(() => messages.value.length, async () => {
+  await nextTick()
+  if (messagesContainerRef.value) void applyChips(messagesContainerRef.value)
+})
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const chatModels = ref<{ id: string; label: string }[]>([])
@@ -60,6 +74,16 @@ const {
   close: closeNoteLinkPicker,
   removeNote: removeNoteLinkNote,
 } = useInputNoteLink(textareaRef, inputText, adjustTextareaHeight)
+
+function entityChipStyle(typeId: string): Record<string, string> {
+  const color = entityTypeMap.get(typeId)?.color
+  if (!color) return {}
+  return {
+    background: `${color}1a`,
+    borderColor: `${color}40`,
+    color,
+  }
+}
 
 // Configure marked: no GFM tables/extensions needed beyond basic, keep it safe
 marked.setOptions({ breaks: true })
@@ -274,13 +298,6 @@ function onBubbleClick(e: MouseEvent, _msg: ChatMessage): void {
   if (noteId) openNote(e, noteId, noteTitle)
 }
 
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-}
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
 /**
  * Convert assistant message content to safe HTML with Markdown rendered,
  * [Note: "Title"] citations, @EntityName mentions, and [[NoteTitle]] links
@@ -370,25 +387,21 @@ function renderMessage(
   result = result.replace(/WIZZENT(\d+)WIZZENT/g, (_m, idxStr: string) => {
     const entity = entityRefItems[Number(idxStr)]
     if (!entity) return ''
-    return `<button class="chat-entity-ref" data-entity-id="${escapeAttr(entity.id)}" data-entity-name="${escapeAttr(entity.name)}">@${escapeHtml(entity.name)}</button>`
+    return renderEntityChip(entity.id, entity.name)
   })
 
   result = result.replace(/WIZZLINK(\d+)WIZZLINK/g, (_m, idxStr: string) => {
     const title = noteLinkTitles[Number(idxStr)] ?? ''
     const ref = noteByTitle.get(title.toLowerCase())
-    if (ref) {
-      return `<button class="chat-note-ref" data-note-id="${escapeAttr(ref.id)}" data-note-title="${escapeAttr(ref.title)}">${escapeHtml(title)}</button>`
-    }
-    return `<span class="chat-note-ref-plain">[[${escapeHtml(title)}]]</span>`
+    if (ref) return renderNoteChip(ref.id, title)
+    return `<span class="wizz-note-chip-plain">[[${escapeHtml(title)}]]</span>`
   })
 
   result = result.replace(/WIZZREF(\d+)WIZZREF/g, (_m, idxStr: string) => {
     const title = noteRefTitles[Number(idxStr)] ?? ''
     const ref = noteByTitle.get(title.toLowerCase())
-    if (ref) {
-      return `<button class="chat-note-ref" data-note-id="${escapeAttr(ref.id)}" data-note-title="${escapeAttr(ref.title)}">${escapeHtml(title)}</button>`
-    }
-    return `<span class="chat-note-ref-plain">${escapeHtml(title)}</span>`
+    if (ref) return renderNoteChip(ref.id, title)
+    return `<span class="wizz-note-chip-plain">${escapeHtml(title)}</span>`
   })
 
   return result
@@ -430,7 +443,7 @@ function renderMessage(
     </div>
 
     <!-- Messages -->
-    <div class="chat-messages">
+    <div ref="messagesContainerRef" class="chat-messages">
       <div v-if="messages.length === 0" class="chat-empty">
         <MessageSquare :size="28" class="chat-empty-icon" />
         <p>Ask anything about your notes</p>
@@ -522,7 +535,13 @@ function renderMessage(
         v-for="entity in mentionedEntities"
         :key="entity.id"
         class="chat-mention-chip"
+        :style="entityChipStyle(entity.type_id)"
       >
+        <LucideIcon
+          :name="entityTypeMap.get(entity.type_id)?.icon ?? entity.type_icon ?? 'tag'"
+          :size="11"
+          class="chat-mention-chip-icon"
+        />
         <span class="chat-mention-chip-name">@{{ entity.name }}</span>
         <span class="chat-mention-chip-type">{{ entity.type_name }}</span>
         <button class="chat-chip-remove" title="Remove" @click="removeMentionEntity(entity.id)">
@@ -885,53 +904,7 @@ function renderMessage(
   margin: 8px 0;
 }
 
-/* Entity mention chip injected by renderMessage() — matches chat-mention-chip (input bar) styling */
-.chat-bubble-assistant :deep(.chat-entity-ref) {
-  display: inline-flex;
-  align-items: center;
-  background: rgba(91, 141, 239, 0.15);
-  color: var(--color-accent);
-  border: 1px solid rgba(91, 141, 239, 0.3);
-  border-radius: 6px;
-  padding: 1px 6px;
-  font-size: 11.5px;
-  font-weight: 500;
-  cursor: pointer;
-  margin: 0 1px;
-  vertical-align: middle;
-  font-family: inherit;
-  line-height: 1.4;
-}
-.chat-bubble-assistant :deep(.chat-entity-ref:hover) {
-  background: rgba(91, 141, 239, 0.25);
-}
-
-/* Note reference chip injected by renderMessage() */
-.chat-bubble-assistant :deep(.chat-note-ref) {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 1px 7px;
-  border-radius: 10px;
-  font-size: 11.5px;
-  font-weight: 500;
-  background: rgba(91, 141, 239, 0.15);
-  color: var(--color-accent);
-  border: 1px solid rgba(91, 141, 239, 0.3);
-  cursor: pointer;
-  vertical-align: middle;
-  white-space: nowrap;
-  transition: background 0.1s;
-  font-family: inherit;
-  line-height: 1.4;
-}
-.chat-bubble-assistant :deep(.chat-note-ref:hover) {
-  background: rgba(91, 141, 239, 0.25);
-}
-.chat-bubble-assistant :deep(.chat-note-ref-plain) {
-  color: var(--color-text-muted);
-  font-style: italic;
-}
+/* Chip styling lives in the global style.css (.wizz-entity-chip, .wizz-note-chip, .wizz-note-chip-plain) */
 
 /* ── Drag-over state ── */
 
@@ -1282,8 +1255,13 @@ function renderMessage(
   flex-shrink: 0;
 }
 
+.chat-mention-chip-icon {
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
 .chat-mention-chip-name {
-  color: var(--color-accent);
+  color: inherit;
 }
 
 .chat-mention-chip-type {

@@ -9,6 +9,7 @@ import { registerTranscriptionIpcHandlers } from './transcription/session'
 import { scheduleNightlyClusterBatch } from './embedding/scheduler'
 import { processDirtyNotes } from './embedding/pipeline'
 import { startCalendarSyncScheduler } from './calendar/sync/scheduler'
+import { scheduleEntityReviews } from './entity/reviewScheduler'
 
 const isDev = process.env['NODE_ENV'] === 'development'
 
@@ -67,6 +68,7 @@ app.whenReady().then(() => {
   createMeetingWindow()
   scheduleNightlyClusterBatch()
   startCalendarSyncScheduler()
+  scheduleEntityReviews()
 
   app.on('activate', () => {
     // On macOS re-create a window when the dock icon is clicked and no windows are open

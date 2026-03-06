@@ -11,6 +11,8 @@ Wizz is the operating system for an engineering manager's brain. It captures eve
 3. **AI acts, not just answers.** Wizz doesn't wait for queries — it proactively surfaces follow-ups, conflicts, and opportunities.
 4. **Local-first, private by default.** Your management notes are sensitive. Data lives on your machine. Cloud is opt-in, only for AI inference.
 5. **Consistency in behaviour and look.** Every surface that shares a concept (e.g. file attachment, @mention, note linking) must look and behave identically. When planning or implementing a feature, always check whether a similar pattern already exists and reuse it — shared composables, shared components, shared types. Divergence between surfaces is a bug, not a style choice.
+6. **Abstraction, reusability, and consistency are the default choice — for every change.** Before writing any new logic, style, or component, ask: does this already exist? Can this be extracted so the next feature gets it for free? The right order is always: (1) find the existing abstraction, (2) extend it if needed, (3) only then create something new — and immediately make that new thing reusable. This applies to everything: utility functions, composables, IPC helpers, CSS rules, data-fetch patterns, AI prompt builders, click-handler conventions. Duplication is a bug.
+7. **Single source of truth for every shared UI pattern.** Shared HTML generators, CSS classes, and composables must not be duplicated across components. Example: all entity/note reference chips rendered inside `v-html` use `renderEntityChip`/`renderNoteChip` from `markdown.ts`, carry the canonical classes `.wizz-entity-chip`/`.wizz-note-chip`, are styled exclusively in `style.css`, and have their post-render colour/icon applied by the `useEntityChips` composable. If a new surface needs chip rendering, it must call the same helpers — never re-implement the HTML inline. Apply the same discipline to every other pattern.
 
 ## Target User
 
@@ -1080,6 +1082,21 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] **Phase H — Daily Brief + AI Chat Integration**: `dailyBrief.ts` extended with project names on tasks and broader stale section (all open/in_progress tasks inactive for X days, not assignee-gated); `chat.ts` WIZZ_TOOLS `create_action_item`/`update_action_item` extended with `project_entity_id`, `contexts`, `energy_level`, `is_waiting_for`, `parent_id`; `actionExtractor.ts` batch-derives GTD attributes via `Promise.all`; `ActionItemContext` in `chat.ts` extended with project fields
 - [x] **Phase I — Push Events and Live Sync**: `TaskDetailPanel.vue` subscribes to `action:updated` push event; reloads task in-place when `payload.actionId === props.taskId && !saving`; cleaned up on `onBeforeUnmount`
 - [x] **Phase J — Polish**: `Cmd+Shift+A` → jump to Actions view; empty states already implemented in ActionsView (Inbox, Projects, Waiting, Someday); ARIA labels + `aria-pressed` on all TaskDetailPanel interactive fields; `role="complementary"` on panel root
+
+### Phase 7 — Entity Recurring Reviews
+
+Full feature spec: [`features/ENTITY_RECURRING_REVIEWS.md`](features/ENTITY_RECURRING_REVIEWS.md)
+
+- [x] **Phase A — Shared Utility Extraction**: `src/renderer/utils/markdown.ts` extracted from `TodayView.vue`; exports `markdownToHtml`, `renderInline`, `escapeHtml`; `TodayView.vue` updated to import from shared utility
+- [x] **Phase B — DB Schema + Migration**: migration `0010_entity_reviews.ts` adds `review_enabled`, `review_frequency`, `review_day`, `review_time` columns to `entity_types`; creates `entity_reviews` table (`id`, `entity_id`, `period_start`, `period_end`, `content`, `generated_at`, `model_id`, `acknowledged_at`) with index; registered in `ALL_MIGRATIONS`; `schema.ts` updated for fresh installs
+- [x] **Phase C — AI Feature Slot**: `entity_review` slot added to `FEATURE_SLOTS` in `featureSlots.ts`; default chain: `claude-haiku-4-5-20251001`; slot count now 12; auto-appears in Settings → AI → AI Features
+- [x] **Phase D — Review Generator**: `src/main/entity/reviewGenerator.ts` — `generateEntityReview()` gathers entity context + builds type-aware prompt + calls `callWithFallback('entity_review', ...)` + persists to `entity_reviews`; `getPeriodWindow()` date utility for frequency windows; helper types `EntityTypeWithReview`, `EntityReview`
+- [x] **Phase E — Background Scheduler**: `src/main/entity/reviewScheduler.ts` — `scheduleEntityReviews()` tick every 30 min; checks each enabled type against frequency/day/time/cooldown; per-type mutex; called at startup in `src/main/index.ts`
+- [x] **Phase F — IPC Handlers**: `entity-reviews:list`, `entity-reviews:generate`, `entity-reviews:acknowledge`, `entity-reviews:delete` handlers added to `src/main/db/ipc.ts`; `entity-types:create` and `entity-types:update` extended to accept and persist review config fields; `entity-review:complete` push event fired on review generation
+- [x] **Phase G — EntityTypeModal UI**: Automated Reviews collapsible section with enable toggle, frequency/day/time pickers; validation; saves via existing `entity-types:create/update` IPC
+- [x] **Phase H — EntityReviewPanel + EntityDetail Integration**: `EntityReviewPanel.vue` — self-contained panel (load, subscribe to push, render, generate now, delete, collapse state in localStorage); mounted in `EntityDetail.vue` below fields form when `reviewEnabled`
+- [x] **Phase I — Settings AI Features**: `entity_review` slot auto-appears via `FEATURE_SLOTS` iteration in `ai-feature-models:list`; `DEFAULT_CHAINS` fallback to Haiku; no additional code required
+- [x] **Phase J — Documentation**: `CLAUDE.md` updated with new IPC channels, push event, AI slot, migration, schema, components, scheduler; `DESIGN.md` updated with this phase checklist
 
 ---
 

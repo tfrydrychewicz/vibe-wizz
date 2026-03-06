@@ -43,6 +43,10 @@ type EntityTypeRow = {
   icon: string
   color: string | null
   schema: string
+  review_enabled: number
+  review_frequency: string | null
+  review_day: string | null
+  review_time: string
 }
 
 const props = defineProps<{
@@ -70,6 +74,38 @@ const isSaving = ref(false)
 const confirmingDelete = ref(false)
 const isDeleting = ref(false)
 const deleteError = ref('')
+
+// ── Review schedule state ─────────────────────────────────────────────────────
+const reviewEnabled = ref(false)
+const reviewFrequency = ref<'daily' | 'weekly' | 'biweekly' | 'monthly'>('weekly')
+const reviewDay = ref<'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'>('mon')
+const reviewTime = ref('07:00')
+
+const DAY_LABELS: Record<string, string> = {
+  mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
+  fri: 'Friday', sat: 'Saturday', sun: 'Sunday',
+}
+
+const reviewDescription = computed((): string => {
+  if (!reviewEnabled.value) return ''
+  const time = reviewTime.value || '07:00'
+  const [h, m] = time.split(':')
+  const hour = parseInt(h ?? '7', 10)
+  const minute = m ?? '00'
+  const ampm = hour >= 12 ? 'PM' : 'AM'
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12
+  const timeStr = `${hour12}:${minute} ${ampm}`
+
+  if (reviewFrequency.value === 'daily') return `Reviews will be generated every day at ${timeStr}.`
+  if (reviewFrequency.value === 'monthly') return `Reviews will be generated monthly at ${timeStr}.`
+  const dayLabel = DAY_LABELS[reviewDay.value] ?? reviewDay.value
+  const freqLabel = reviewFrequency.value === 'biweekly' ? 'every two weeks' : 'every week'
+  return `Reviews will be generated ${freqLabel} on ${dayLabel} at ${timeStr}.`
+})
+
+const needsDayPicker = computed(() =>
+  reviewEnabled.value && (reviewFrequency.value === 'weekly' || reviewFrequency.value === 'biweekly'),
+)
 
 async function deleteType(): Promise<void> {
   if (!props.editingType) return
@@ -137,9 +173,24 @@ async function save(): Promise<void> {
     error.value = 'Name is required.'
     return
   }
+  if (reviewEnabled.value && !reviewFrequency.value) {
+    error.value = 'Please select a review frequency.'
+    return
+  }
+  if (needsDayPicker.value && !reviewDay.value) {
+    error.value = 'Please select a day of the week for the review.'
+    return
+  }
 
   isSaving.value = true
   const schema = buildSchema()
+
+  const reviewPayload = {
+    review_enabled: reviewEnabled.value ? 1 : 0,
+    review_frequency: reviewEnabled.value ? reviewFrequency.value : null,
+    review_day: needsDayPicker.value ? reviewDay.value : null,
+    review_time: reviewEnabled.value ? (reviewTime.value || '07:00') : '07:00',
+  }
 
   if (isEditMode.value && props.editingType) {
     const result = (await window.api.invoke('entity-types:update', {
@@ -148,6 +199,7 @@ async function save(): Promise<void> {
       icon: typeIcon.value || 'tag',
       color: typeColor.value,
       schema,
+      ...reviewPayload,
     })) as EntityTypeRow
     isSaving.value = false
     emit('updated', result)
@@ -157,6 +209,7 @@ async function save(): Promise<void> {
       icon: typeIcon.value || 'tag',
       color: typeColor.value,
       schema,
+      ...reviewPayload,
     })) as EntityTypeRow
     isSaving.value = false
     emit('created', result)
@@ -183,6 +236,18 @@ onMounted(async () => {
       }))
     } catch {
       fields.value = []
+    }
+
+    // Pre-populate review schedule
+    reviewEnabled.value = props.editingType.review_enabled === 1
+    if (props.editingType.review_frequency) {
+      reviewFrequency.value = props.editingType.review_frequency as typeof reviewFrequency.value
+    }
+    if (props.editingType.review_day) {
+      reviewDay.value = props.editingType.review_day as typeof reviewDay.value
+    }
+    if (props.editingType.review_time) {
+      reviewTime.value = props.editingType.review_time
     }
   }
 })
@@ -284,6 +349,58 @@ onMounted(async () => {
               />
             </div>
           </div>
+        </div>
+
+        <!-- Automated Reviews -->
+        <div class="modal-field reviews-section">
+          <div class="reviews-header">
+            <span class="modal-label">Automated Reviews</span>
+            <label class="toggle-row">
+              <input v-model="reviewEnabled" type="checkbox" class="toggle-checkbox" />
+              <span class="toggle-label">{{ reviewEnabled ? 'On' : 'Off' }}</span>
+            </label>
+          </div>
+
+          <template v-if="reviewEnabled">
+            <div class="reviews-controls">
+              <div class="reviews-control-row">
+                <label class="reviews-control-label">Frequency</label>
+                <select v-model="reviewFrequency" class="modal-input reviews-select">
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Biweekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+
+              <div v-if="needsDayPicker" class="reviews-control-row">
+                <label class="reviews-control-label">Day</label>
+                <select v-model="reviewDay" class="modal-input reviews-select">
+                  <option value="mon">Monday</option>
+                  <option value="tue">Tuesday</option>
+                  <option value="wed">Wednesday</option>
+                  <option value="thu">Thursday</option>
+                  <option value="fri">Friday</option>
+                  <option value="sat">Saturday</option>
+                  <option value="sun">Sunday</option>
+                </select>
+              </div>
+
+              <div class="reviews-control-row">
+                <label class="reviews-control-label">Time</label>
+                <input v-model="reviewTime" type="time" class="modal-input reviews-time-input" />
+              </div>
+            </div>
+
+            <p class="reviews-description">{{ reviewDescription }}</p>
+            <p class="reviews-hint">
+              AI model used from <strong>Settings → AI Features → Entity Review Summary</strong>.
+            </p>
+          </template>
+
+          <p v-else class="reviews-hint">
+            When enabled, Wizz generates a periodic AI summary for each entity of this type — covering mentions in notes, action items, and calendar events.
+          </p>
         </div>
 
         <p v-if="error" class="modal-error">{{ error }}</p>
@@ -590,5 +707,86 @@ onMounted(async () => {
 .modal-footer :global(.btn-primary) {
   margin-top: 0;
   font-family: inherit;
+}
+
+/* ── Automated Reviews section ── */
+
+.reviews-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+}
+
+.reviews-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reviews-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.reviews-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reviews-control-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.reviews-select {
+  width: 180px;
+}
+
+.reviews-time-input {
+  width: 120px;
+}
+
+.reviews-description {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+.reviews-hint {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.reviews-hint strong {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+/* Toggle (reuses SettingsModal pattern) */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-checkbox {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.toggle-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 </style>

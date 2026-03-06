@@ -3,7 +3,9 @@ import { ref, nextTick, type Ref } from 'vue'
 export interface EntityResult {
   id: string
   name: string
+  type_id: string
   type_name: string
+  type_icon: string
 }
 
 /**

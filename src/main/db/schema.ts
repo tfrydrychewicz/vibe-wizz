@@ -30,7 +30,11 @@ CREATE TABLE IF NOT EXISTS entity_types (
   schema               TEXT NOT NULL DEFAULT '{}', -- JSON field definitions
   kanban_enabled       INTEGER NOT NULL DEFAULT 0,
   kanban_status_field  TEXT,
-  color                TEXT
+  color                TEXT,
+  review_enabled       INTEGER NOT NULL DEFAULT 0,
+  review_frequency     TEXT,                       -- 'daily'|'weekly'|'biweekly'|'monthly'
+  review_day           TEXT,                       -- 'mon'…'sun' (weekly/biweekly only)
+  review_time          TEXT NOT NULL DEFAULT '07:00' -- local HH:MM for scheduler window
 );
 
 INSERT OR IGNORE INTO entity_types (id, name, icon, schema, kanban_enabled, color) VALUES
@@ -306,5 +310,22 @@ CREATE TABLE IF NOT EXISTS ai_feature_models (
   model_id     TEXT NOT NULL REFERENCES ai_models(id) ON DELETE CASCADE,
   PRIMARY KEY (feature_slot, position)
 );
+
+-- ─────────────────────────────────────────────
+-- Entity reviews (AI-generated recurring summaries per entity)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS entity_reviews (
+  id              TEXT PRIMARY KEY,
+  entity_id       TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  period_start    TEXT NOT NULL,   -- ISO date YYYY-MM-DD
+  period_end      TEXT NOT NULL,   -- ISO date YYYY-MM-DD
+  content         TEXT NOT NULL,   -- Markdown review body
+  generated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  model_id        TEXT,            -- model used (for reference/debugging)
+  acknowledged_at TEXT             -- set when user first expands/views this review
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_reviews_entity
+  ON entity_reviews(entity_id, generated_at DESC);
 
 `

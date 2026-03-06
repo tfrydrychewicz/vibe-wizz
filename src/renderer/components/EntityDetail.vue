@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { Trash2, X, ExternalLink } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
+import EntityReviewPanel from './EntityReviewPanel.vue'
 import { entityTrashStatus } from '../stores/mentionStore'
 import { activePane } from '../stores/tabStore'
 import type { OpenMode } from '../stores/tabStore'
@@ -35,6 +36,10 @@ type EntityTypeRow = {
   icon: string
   schema: string
   color: string | null
+  review_enabled: number
+  review_frequency: string | null
+  review_day: string | null
+  review_time: string
 }
 
 type EntityRow = {
@@ -63,6 +68,8 @@ const schema = ref<EntitySchema>({ fields: [] })
 const entityType = ref<EntityTypeRow | null>(null)
 const saveStatus = ref<'' | 'saving' | 'saved'>('')
 const isLoading = ref(false)
+
+const reviewEnabled = computed(() => entityType.value?.review_enabled === 1)
 
 // Ref field resolved display data
 const refEntityMap = ref<Record<string, RefEntityData | null>>({})
@@ -695,6 +702,14 @@ watch(() => props.entityId, async (id) => {
           </div>
         </template>
       </div>
+
+      <!-- Reviews panel (shown only when review_enabled on the entity type) -->
+      <EntityReviewPanel
+        :entity-id="entityId"
+        :review-enabled="reviewEnabled"
+        @open-note="emit('open-note', $event)"
+        @open-entity="emit('open-entity', $event)"
+      />
     </template>
   </div>
 </template>
