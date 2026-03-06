@@ -9,6 +9,13 @@
  * NoteEditor unmounts so TabBar and other UI can reflect the active session.
  * Cleared when transcription stops or errors.
  *
+ * `processingTranscriptionNoteId` — set when the user stops recording and
+ * post-processing (speaker mapping + AI note generation) begins; cleared when
+ * `transcription:complete` fires. Used by NoteList to show a wave animation.
+ *
+ * `processingStep` — human-readable label of the current post-processing step
+ * (e.g. "Mapping speakers…", "Generating meeting notes…"). Empty string when idle.
+ *
  * `activeAudio` — browser-side audio capture objects kept alive across NoteEditor
  * unmounts so audio keeps flowing to the main-process WebSocket when the user
  * navigates away from the transcription note.
@@ -22,6 +29,12 @@ export const pendingAutoStartNoteId = ref<string | null>(null)
 
 /** Note ID currently being transcribed (null when idle). */
 export const activeTranscriptionNoteId = ref<string | null>(null)
+
+/** Note ID whose transcript is currently being post-processed (null when idle). */
+export const processingTranscriptionNoteId = ref<string | null>(null)
+
+/** Label of the current post-processing step, e.g. "Generating meeting notes…" */
+export const processingStep = ref<string>('')
 
 /**
  * Browser-side audio capture objects. Stored at module scope so they survive

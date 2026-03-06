@@ -713,6 +713,7 @@ async function stopSession(): Promise<void> {
       (db.prepare('SELECT value FROM settings WHERE key = ?').get('transcription_language') as { value: string } | undefined)?.value || 'multi'
     const attendeeNames = readAttendeeNames(eventId)
 
+    pushToRenderer('transcription:processing-step', { noteId, step: 'Transcribing audio…' })
     stopElevenLabsBatch(chunks, elKey, language)
       .then((labeled) =>
         processTranscript(noteId, labeled, startedAt ?? undefined, endedAt, attendeeNames),

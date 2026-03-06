@@ -606,6 +606,7 @@ export async function processTranscript(
   // If the transcript has speaker labels and attendees are known, resolve Speaker N → name
   let labeledTranscript = rawTranscript
   if (attendeeNames && attendeeNames.length >= 2 && rawTranscript.includes('[Speaker ')) {
+    pushToRenderer('transcription:processing-step', { noteId, step: 'Identifying speakers…' })
     const speakerMap = await matchSpeakersToAttendees(rawTranscript, attendeeNames)
     if (Object.keys(speakerMap).length > 0) {
       labeledTranscript = applySpeakerNames(rawTranscript, speakerMap)
@@ -614,6 +615,7 @@ export async function processTranscript(
   }
 
   // Persist the transcription session row (speaker-resolved transcript stored)
+  pushToRenderer('transcription:processing-step', { noteId, step: 'Saving transcript…' })
   const transcriptionId = randomUUID()
   if (startedAt) {
     db.prepare(
@@ -623,6 +625,7 @@ export async function processTranscript(
   }
 
   // Generate merged note (transcript + user's existing notes, graceful on failure)
+  pushToRenderer('transcription:processing-step', { noteId, step: 'Generating meeting notes…' })
   const mergedContent = await generateMergedNote(labeledTranscript, noteBodyPlain)
 
   // Store merged content as the session summary for the history panel
@@ -632,6 +635,8 @@ export async function processTranscript(
       transcriptionId,
     )
   }
+
+  pushToRenderer('transcription:processing-step', { noteId, step: 'Saving note…' })
 
   // Replace note body with merged content (or append transcript as fallback).
   // Use the speaker-resolved transcript so the fallback raw section shows names.

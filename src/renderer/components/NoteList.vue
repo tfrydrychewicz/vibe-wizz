@@ -2,7 +2,9 @@
 import { ref, onMounted, defineExpose } from 'vue'
 import { Plus, Trash2, ChevronDown } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
+import AudioWaveLoader from './AudioWaveLoader.vue'
 import { noteArchivedStatus } from '../stores/noteLinkStore'
+import { activeTranscriptionNoteId, processingTranscriptionNoteId } from '../stores/transcriptionStore'
 
 type NoteListItem = {
   id: string
@@ -173,6 +175,21 @@ defineExpose({ refresh })
         </template>
 
         <template v-else>
+          <!-- Recording / processing indicator -->
+          <div
+            v-if="activeTranscriptionNoteId === note.id || processingTranscriptionNoteId === note.id"
+            class="note-list-item-indicator"
+            :title="processingTranscriptionNoteId === note.id ? 'Processing audio…' : 'Recording'"
+          >
+            <AudioWaveLoader
+              v-if="processingTranscriptionNoteId === note.id"
+              :bar-count="3"
+              size="xs"
+              color="#a78bfa"
+            />
+            <span v-else class="transcript-recording-dot" />
+          </div>
+
           <div class="note-list-item-body">
             <div class="note-list-item-title">{{ note.title || 'Untitled' }}</div>
             <div class="note-list-item-date">{{ formatDate(note.updated_at) }}</div>
@@ -255,6 +272,14 @@ defineExpose({ refresh })
 .td-icon {
   flex-shrink: 0;
   color: var(--color-text-muted);
+}
+
+.note-list-item-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
 }
 
 .note-list-item.is-confirming {

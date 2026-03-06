@@ -34,7 +34,7 @@ import {
   closePanesForContent,
 } from './stores/tabStore'
 import type { OpenMode } from './stores/tabStore'
-import { pendingAutoStartNoteId } from './stores/transcriptionStore'
+import { pendingAutoStartNoteId, processingTranscriptionNoteId, processingStep } from './stores/transcriptionStore'
 import { registerOpenDetailHandler } from './stores/taskDetailStore'
 import { registerEntityTypes } from './stores/entityTypeStore'
 
@@ -451,6 +451,8 @@ async function onRecoveryDiscard(session: RecoveryMeta) {
 }
 
 let unsubTranscriptionOpenNote: (() => void) | null = null
+let unsubTranscriptionProcessingStep: (() => void) | null = null
+let unsubTranscriptionComplete: (() => void) | null = null
 let unsubQuitEmbeddings: (() => void) | null = null
 
 onMounted(() => {
@@ -468,6 +470,30 @@ onMounted(() => {
     if (autoStart) pendingAutoStartNoteId.value = noteId
     activeView.value = 'notes'
     openContent('note', noteId, 'Meeting Note', 'default', undefined, 'file-text')
+  })
+
+  // Keep processingStep in sync globally so NoteList wave tooltip + NoteEditor bar
+  // stay accurate even when the user navigates away from the recording note.
+  unsubTranscriptionProcessingStep = window.api.on('transcription:processing-step', (...args: unknown[]) => {
+    const { noteId, step } = args[0] as { noteId: string; step: string }
+    if (processingTranscriptionNoteId.value === noteId) {
+      processingStep.value = step
+    }
+  })
+
+  unsubTranscriptionComplete = window.api.on('transcription:complete', (...args: unknown[]) => {
+    const { noteId } = args[0] as { noteId: string }
+    if (processingTranscriptionNoteId.value === noteId) {
+      processingTranscriptionNoteId.value = null
+      processingStep.value = ''
+    }
+  })
+
+  window.api.on('transcription:error', () => {
+    if (processingTranscriptionNoteId.value !== null) {
+      processingTranscriptionNoteId.value = null
+      processingStep.value = ''
+    }
   })
 
   unsubQuitEmbeddings = window.api.on('app:quit-embeddings-start', (...args: unknown[]) => {
@@ -495,6 +521,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   unsubTranscriptionOpenNote?.()
+  unsubTranscriptionProcessingStep?.()
+  unsubTranscriptionComplete?.()
   unsubQuitEmbeddings?.()
 })
 </script>

@@ -140,6 +140,10 @@ export async function stopSwiftTranscriber(startedAt?: string, endedAt?: string)
   // Capture transcript after process drains stdout
   const captured = { text: lastFullText }
 
+  if (noteId) {
+    pushToRenderer('transcription:processing-step', { noteId, step: 'Finalizing transcript…' })
+  }
+
   await new Promise<void>((resolve) => {
     // 'close' fires after the process exits AND all stdio streams have closed,
     // guaranteeing we've received all stdout data including the final partial.

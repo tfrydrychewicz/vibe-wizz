@@ -1062,6 +1062,10 @@ body {
   flex-shrink: 0;
 }
 
+.transcript-live-label--processing {
+  color: #a78bfa;
+}
+
 .transcript-live-text {
   font-size: 12px;
   color: var(--color-text-muted);

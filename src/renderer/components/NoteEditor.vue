@@ -91,8 +91,11 @@ import {
 import {
   pendingAutoStartNoteId,
   activeTranscriptionNoteId,
+  processingTranscriptionNoteId,
+  processingStep,
   activeAudio,
 } from '../stores/transcriptionStore'
+import AudioWaveLoader from './AudioWaveLoader.vue'
 
 const props = defineProps<{ noteId: string }>()
 const emit = defineEmits<{
@@ -161,6 +164,11 @@ const transcriptPartial = ref('')   // current non-final partial (shown while st
 const transcriptionError = ref<string | null>(null)
 // Set when a realtime session failed and is being retried via batch
 const isRetryingTranscription = ref(false)
+
+// True while this note's audio is being post-processed (between stop and complete)
+const isProcessingThisNote = computed(
+  () => processingTranscriptionNoteId.value === props.noteId,
+)
 
 // Audio capture objects live in activeAudio (module scope) so they persist
 // across NoteEditor unmounts — see transcriptionStore.ts.
@@ -369,6 +377,9 @@ async function stopTranscription(): Promise<void> {
   activeAudio.format = null
   activeTranscriptionNoteId.value = null
   isTranscribing.value = false
+  // Mark this note as entering post-processing
+  processingTranscriptionNoteId.value = props.noteId
+  processingStep.value = 'Stopping recording…'
   await window.api.invoke('transcription:stop')
 }
 
@@ -390,6 +401,7 @@ const unsubTranscriptComplete = window.api.on('transcription:complete', (...args
     isRetryingTranscription.value = false
     activeTranscriptionNoteId.value = null
     activeAudio.format = null
+    // processingTranscriptionNoteId + processingStep cleared by App.vue global handler
     // Expand the incoming session when it loads; open the side panel
     expandedTranscriptIds.value = []
     showTranscriptPanel.value = true
@@ -406,6 +418,7 @@ const unsubTranscriptError = window.api.on('transcription:error', (...args: unkn
     activeTranscriptionNoteId.value = null
     activeAudio.format = null
   }
+  // processingTranscriptionNoteId cleared by App.vue error handler if needed
 })
 
 const unsubTranscriptRetrying = window.api.on('transcription:retrying', (...args: unknown[]) => {
@@ -1886,13 +1899,20 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Live transcription status bar (while recording or retrying) -->
-    <div v-if="isTranscribing || isRetryingTranscription" class="transcript-live-bar">
-      <span class="transcript-recording-dot" :class="{ retrying: isRetryingTranscription }" />
-      <span class="transcript-live-label">{{ isRetryingTranscription ? 'Retrying with batch transcription…' : 'Recording' }}</span>
-      <template v-if="!isRetryingTranscription">
-        <span v-if="lastTranscriptLine" class="transcript-live-text">{{ lastTranscriptLine }}</span>
-        <span v-else class="transcript-live-waiting">Listening…</span>
+    <!-- Live transcription status bar (recording, retrying, or post-processing) -->
+    <div v-if="isTranscribing || isRetryingTranscription || isProcessingThisNote" class="transcript-live-bar">
+      <template v-if="isProcessingThisNote">
+        <AudioWaveLoader :bar-count="4" size="xs" color="#a78bfa" />
+        <span class="transcript-live-label transcript-live-label--processing">Processing</span>
+        <span class="transcript-live-text">{{ processingStep }}</span>
+      </template>
+      <template v-else>
+        <span class="transcript-recording-dot" :class="{ retrying: isRetryingTranscription }" />
+        <span class="transcript-live-label">{{ isRetryingTranscription ? 'Retrying with batch transcription…' : 'Recording' }}</span>
+        <template v-if="!isRetryingTranscription">
+          <span v-if="lastTranscriptLine" class="transcript-live-text">{{ lastTranscriptLine }}</span>
+          <span v-else class="transcript-live-waiting">Listening…</span>
+        </template>
       </template>
     </div>
 
