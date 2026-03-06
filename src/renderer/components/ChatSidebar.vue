@@ -12,6 +12,8 @@ import { entityTypeMap } from '../stores/entityTypeStore'
 import { renderEntityChip, renderNoteChip, escapeHtml } from '../utils/markdown'
 import LucideIcon from './LucideIcon.vue'
 import AttachmentBar from './AttachmentBar.vue'
+import InputEntityPicker from './InputEntityPicker.vue'
+import InputNoteLinkPicker from './InputNoteLinkPicker.vue'
 
 const emit = defineEmits<{
   close: []
@@ -578,32 +580,19 @@ function renderMessage(
     <!-- Input -->
     <div class="chat-input-area">
       <!-- @mention entity picker (floats above input) -->
-      <div v-if="mentionActive && mentionResults.length > 0" class="mention-picker">
-        <button
-          v-for="(entity, i) in mentionResults"
-          :key="entity.id"
-          class="mention-option"
-          :class="{ 'mention-option--active': i === mentionIndex }"
-          @mousedown.prevent="pickMention(entity)"
-        >
-          <span class="mention-option-name">@{{ entity.name }}</span>
-          <span class="mention-option-type">{{ entity.type_name }}</span>
-        </button>
-      </div>
+      <InputEntityPicker
+        v-if="mentionActive && mentionResults.length > 0"
+        :items="mentionResults"
+        :active-index="mentionIndex"
+        @pick="pickMention"
+      />
       <!-- [[note link picker (floats above input) -->
-      <div v-if="noteLinkActive && noteLinkResults.length > 0" class="mention-picker">
-        <button
-          v-for="(note, i) in noteLinkResults"
-          :key="note.id"
-          class="mention-option"
-          :class="{ 'mention-option--active': i === noteLinkIndex }"
-          @mousedown.prevent="pickNote(note)"
-        >
-          <span class="mention-option-name">
-            <FileText :size="12" style="margin-right: 5px; opacity: 0.6; flex-shrink: 0;" />{{ note.title }}
-          </span>
-        </button>
-      </div>
+      <InputNoteLinkPicker
+        v-if="noteLinkActive && noteLinkResults.length > 0"
+        :items="noteLinkResults"
+        :active-index="noteLinkIndex"
+        @pick="pickNote"
+      />
       <button
         class="chat-attach-btn"
         :disabled="isLoading"
@@ -1152,63 +1141,6 @@ function renderMessage(
 .chat-attach-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
-}
-
-/* ── @mention picker ── */
-
-.mention-picker {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
-  z-index: 100;
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-.mention-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 7px 12px;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--color-border);
-  text-align: left;
-  cursor: pointer;
-  gap: 8px;
-  font-family: inherit;
-}
-
-.mention-option:last-child {
-  border-bottom: none;
-}
-
-.mention-option:hover,
-.mention-option--active {
-  background: var(--color-hover);
-}
-
-.mention-option-name {
-  font-size: 13px;
-  color: var(--color-text);
-  font-weight: 500;
-}
-
-.mention-option-type {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  background: rgba(255, 255, 255, 0.06);
-  padding: 1px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--color-border);
-  flex-shrink: 0;
 }
 
 /* ── Note chips in attachments bar ── */

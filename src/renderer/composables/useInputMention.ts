@@ -65,7 +65,7 @@ export function useInputMention(
     const pos = ta.selectionStart ?? val.length
     const before = val.slice(0, pos)
 
-    const atMatch = before.match(/@([^\s@]*)$/)
+    const atMatch = before.match(/@([^@]*)$/)
     if (atMatch) {
       const newStart = before.length - atMatch[0].length
       const newQuery = atMatch[1]
@@ -104,7 +104,13 @@ export function useInputMention(
    * Returns true if the event was consumed (caller should stop further processing).
    */
   function handleKeydown(e: KeyboardEvent): boolean {
-    if (!mentionActive.value || mentionResults.value.length === 0) return false
+    if (!mentionActive.value) return false
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      close()
+      return true
+    }
+    if (mentionResults.value.length === 0) return false
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       mentionIndex.value = (mentionIndex.value + 1) % mentionResults.value.length
@@ -119,11 +125,6 @@ export function useInputMention(
       e.preventDefault()
       const entity = mentionResults.value[mentionIndex.value]
       if (entity) pick(entity)
-      return true
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      close()
       return true
     }
     return false

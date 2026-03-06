@@ -5,6 +5,8 @@ import { useInputMention } from '../composables/useInputMention'
 import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT, type AttachedFile } from '../composables/useFileAttachment'
 import AttachmentBar from './AttachmentBar.vue'
+import InputEntityPicker from './InputEntityPicker.vue'
+import InputNoteLinkPicker from './InputNoteLinkPicker.vue'
 
 export interface AIPromptSubmit {
   prompt: string
@@ -164,34 +166,20 @@ const hasContext = () =>
       <!-- Textarea with floating dropdowns -->
       <div class="ai-modal-input-wrap">
         <!-- Entity mention dropdown -->
-        <div v-if="mention.mentionActive.value && mention.mentionResults.value.length > 0" class="ai-modal-picker">
-          <button
-            v-for="(entity, i) in mention.mentionResults.value"
-            :key="entity.id"
-            class="ai-modal-picker-option"
-            :class="{ 'ai-modal-picker-option--active': i === mention.mentionIndex.value }"
-            @mousedown.prevent
-            @click="mention.pick(entity)"
-          >
-            <span class="ai-modal-picker-name">@{{ entity.name }}</span>
-            <span class="ai-modal-picker-badge">{{ entity.type_name }}</span>
-          </button>
-        </div>
+        <InputEntityPicker
+          v-if="mention.mentionActive.value && mention.mentionResults.value.length > 0"
+          :items="mention.mentionResults.value"
+          :active-index="mention.mentionIndex.value"
+          @pick="mention.pick"
+        />
 
         <!-- Note link dropdown -->
-        <div v-if="noteLink.noteLinkActive.value && noteLink.noteLinkResults.value.length > 0" class="ai-modal-picker">
-          <button
-            v-for="(note, i) in noteLink.noteLinkResults.value"
-            :key="note.id"
-            class="ai-modal-picker-option"
-            :class="{ 'ai-modal-picker-option--active': i === noteLink.noteLinkIndex.value }"
-            @mousedown.prevent
-            @click="noteLink.pick(note)"
-          >
-            <FileText :size="13" class="ai-modal-picker-note-icon" />
-            <span class="ai-modal-picker-name">{{ note.title }}</span>
-          </button>
-        </div>
+        <InputNoteLinkPicker
+          v-if="noteLink.noteLinkActive.value && noteLink.noteLinkResults.value.length > 0"
+          :items="noteLink.noteLinkResults.value"
+          :active-index="noteLink.noteLinkIndex.value"
+          @pick="noteLink.pick"
+        />
 
         <textarea
           ref="textarea"
@@ -361,61 +349,6 @@ const hasContext = () =>
   position: relative;
 }
 
-.ai-modal-picker {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  overflow-y: auto;
-  max-height: 200px;
-  z-index: 10;
-}
-
-.ai-modal-picker-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  background: none;
-  border: none;
-  text-align: left;
-  padding: 7px 10px;
-  cursor: pointer;
-  color: var(--color-text);
-  font-size: 13px;
-  font-family: inherit;
-}
-
-.ai-modal-picker-option:hover,
-.ai-modal-picker-option--active {
-  background: var(--color-hover);
-}
-
-.ai-modal-picker-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ai-modal-picker-badge {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  padding: 1px 5px;
-  white-space: nowrap;
-}
-
-.ai-modal-picker-note-icon {
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-}
 
 .ai-modal-textarea {
   background: var(--color-bg);

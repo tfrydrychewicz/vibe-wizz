@@ -103,7 +103,13 @@ export function useInputNoteLink(
    * Returns true if the event was consumed.
    */
   function handleKeydown(e: KeyboardEvent): boolean {
-    if (!noteLinkActive.value || noteLinkResults.value.length === 0) return false
+    if (!noteLinkActive.value) return false
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      close()
+      return true
+    }
+    if (noteLinkResults.value.length === 0) return false
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       noteLinkIndex.value = (noteLinkIndex.value + 1) % noteLinkResults.value.length
@@ -118,11 +124,6 @@ export function useInputNoteLink(
       e.preventDefault()
       const note = noteLinkResults.value[noteLinkIndex.value]
       if (note) pick(note)
-      return true
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      close()
       return true
     }
     return false

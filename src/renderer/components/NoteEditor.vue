@@ -609,48 +609,62 @@ registerUnlinkHandler((actionId) => {
   popupTaskId.value = null
 })
 
+/**
+ * Shared TipTap suggestion render factory.
+ * Creates a fixed-position dropdown using the given Vue component.
+ * Handles positioning, Escape key dismissal, and cleanup — identical
+ * for every suggestion type (mention, note-link, etc.).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildSuggestionRender(Component: any) {
+  return () => {
+    let renderer: VueRenderer
+    let el: HTMLDivElement
+
+    function positionEl(rect: DOMRect | null | undefined) {
+      if (!el || !rect) return
+      el.style.top = `${rect.bottom + 4}px`
+      el.style.left = `${rect.left}px`
+    }
+
+    return {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      onStart: (props: SuggestionProps<any>) => {
+        el = document.createElement('div')
+        el.style.cssText = 'position:fixed;z-index:9999'
+        document.body.appendChild(el)
+        renderer = new VueRenderer(Component, { props, editor: props.editor })
+        if (renderer.element) el.appendChild(renderer.element)
+        positionEl(props.clientRect?.())
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      onUpdate: (props: SuggestionProps<any>) => {
+        renderer?.updateProps(props)
+        positionEl(props.clientRect?.())
+      },
+      onKeyDown: ({ event }: SuggestionKeyDownProps): boolean => {
+        if (event.key === 'Escape') {
+          el?.remove()
+          renderer?.destroy()
+          return true
+        }
+        return (renderer?.ref as { onKeyDown?: (e: KeyboardEvent) => boolean })?.onKeyDown?.(event) ?? false
+      },
+      onExit: () => {
+        el?.remove()
+        renderer?.destroy()
+      },
+    }
+  }
+}
+
 function buildMentionSuggestion() {
   return {
+    allowSpaces: true,
     items: async ({ query }: { query: string }): Promise<MentionItem[]> => {
       return (await window.api.invoke('entities:search', { query })) as MentionItem[]
     },
-    render: () => {
-      let renderer: VueRenderer
-      let el: HTMLDivElement
-
-      function positionEl(rect: DOMRect | null | undefined) {
-        if (!el || !rect) return
-        el.style.top = `${rect.bottom + 4}px`
-        el.style.left = `${rect.left}px`
-      }
-
-      return {
-        onStart: (props: SuggestionProps<MentionItem>) => {
-          el = document.createElement('div')
-          el.style.cssText = 'position:fixed;z-index:9999'
-          document.body.appendChild(el)
-          renderer = new VueRenderer(MentionList, { props, editor: props.editor })
-          if (renderer.element) el.appendChild(renderer.element)
-          positionEl(props.clientRect?.())
-        },
-        onUpdate: (props: SuggestionProps<MentionItem>) => {
-          renderer?.updateProps(props)
-          positionEl(props.clientRect?.())
-        },
-        onKeyDown: ({ event }: SuggestionKeyDownProps): boolean => {
-          if (event.key === 'Escape') {
-            el?.remove()
-            renderer?.destroy()
-            return true
-          }
-          return (renderer?.ref as { onKeyDown?: (e: KeyboardEvent) => boolean })?.onKeyDown?.(event) ?? false
-        },
-        onExit: () => {
-          el?.remove()
-          renderer?.destroy()
-        },
-      }
-    },
+    render: buildSuggestionRender(MentionList),
   }
 }
 
@@ -661,43 +675,7 @@ function buildNoteLinkSuggestion() {
     items: async ({ query }: { query: string }): Promise<NoteLinkItem[]> => {
       return (await window.api.invoke('notes:search', { query })) as NoteLinkItem[]
     },
-    render: () => {
-      let renderer: VueRenderer
-      let el: HTMLDivElement
-
-      function positionEl(rect: DOMRect | null | undefined) {
-        if (!el || !rect) return
-        el.style.top = `${rect.bottom + 4}px`
-        el.style.left = `${rect.left}px`
-      }
-
-      return {
-        onStart: (props: SuggestionProps<NoteLinkItem>) => {
-          el = document.createElement('div')
-          el.style.cssText = 'position:fixed;z-index:9999'
-          document.body.appendChild(el)
-          renderer = new VueRenderer(NoteLinkList, { props, editor: props.editor })
-          if (renderer.element) el.appendChild(renderer.element)
-          positionEl(props.clientRect?.())
-        },
-        onUpdate: (props: SuggestionProps<NoteLinkItem>) => {
-          renderer?.updateProps(props)
-          positionEl(props.clientRect?.())
-        },
-        onKeyDown: ({ event }: SuggestionKeyDownProps): boolean => {
-          if (event.key === 'Escape') {
-            el?.remove()
-            renderer?.destroy()
-            return true
-          }
-          return (renderer?.ref as { onKeyDown?: (e: KeyboardEvent) => boolean })?.onKeyDown?.(event) ?? false
-        },
-        onExit: () => {
-          el?.remove()
-          renderer?.destroy()
-        },
-      }
-    },
+    render: buildSuggestionRender(NoteLinkList),
   }
 }
 
