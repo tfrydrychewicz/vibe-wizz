@@ -7,11 +7,13 @@ import type { OpenMode } from '../stores/tabStore'
 import { useInputMention } from '../composables/useInputMention'
 import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
+import { useNoteSelectionPaste } from '../composables/useNoteSelectionPaste'
 import { useEntityChips } from '../composables/useEntityChips'
 import { entityTypeMap } from '../stores/entityTypeStore'
 import { renderEntityChip, renderNoteChip, escapeHtml } from '../utils/markdown'
 import LucideIcon from './LucideIcon.vue'
 import AttachmentBar from './AttachmentBar.vue'
+import NoteSelectionChip from './NoteSelectionChip.vue'
 import InputEntityPicker from './InputEntityPicker.vue'
 import InputNoteLinkPicker from './InputNoteLinkPicker.vue'
 
@@ -47,10 +49,28 @@ const {
   dropError,
   removeImage,
   removeFile,
-  onPaste,
+  onPaste: onFilePaste,
   onDrop,
   onFileInputChange,
 } = useFileAttachment()
+
+// ── Note selection paste (checked first — before file attachment) ─────────────
+const {
+  attachedSelections,
+  onPaste: onNoteSelectionPaste,
+  removeSelection,
+  clear: clearSelections,
+} = useNoteSelectionPaste()
+
+/**
+ * Combined paste handler for the chat textarea.
+ * Note selection paste is checked first; falls through to file/image paste
+ * when no Wizz clipboard data is present.
+ */
+function onPaste(e: ClipboardEvent): void {
+  if (onNoteSelectionPaste(e)) return
+  onFilePaste(e)
+}
 
 // ── @mention + [[note link pickers (shared composables) ──────────────────────
 const {
@@ -146,7 +166,8 @@ function onClear(): void {
 
 async function send(): Promise<void> {
   const text = inputText.value.trim()
-  if ((!text && attachedImages.value.length === 0 && attachedFiles.value.length === 0) || isLoading.value) return
+  const hasAttachments = attachedImages.value.length > 0 || attachedFiles.value.length > 0 || attachedSelections.value.length > 0
+  if ((!text && !hasAttachments) || isLoading.value) return
 
   inputText.value = ''
   nextTick(() => {
@@ -160,11 +181,17 @@ async function send(): Promise<void> {
   const fileNamesForDisplay = attachedFiles.value.map(({ name }) => ({ name }))
   attachedFiles.value = []
 
+  // Spread each attachment into a plain object so Electron's IPC serializer
+  // (v8.serialize) can clone them — Vue reactive Proxies are not cloneable.
+  const selectionsToSend = attachedSelections.value.map((s) => ({ ...s }))
+  clearSelections()
+
   const userMsg: ChatMessage = {
     role: 'user',
     content: text,
     images: imagesToSend.length > 0 ? imagesToSend.map(({ dataUrl }) => ({ dataUrl })) : undefined,
     files: fileNamesForDisplay.length > 0 ? fileNamesForDisplay : undefined,
+    noteSelections: selectionsToSend.length > 0 ? selectionsToSend : undefined,
   }
   messages.value.push(userMsg)
 
@@ -179,6 +206,7 @@ async function send(): Promise<void> {
       searchQuery: text,
       images: imagesToSend,
       files: filesToSend.length > 0 ? filesToSend : undefined,
+      noteSelections: selectionsToSend.length > 0 ? selectionsToSend : undefined,
       overrideModelId: selectedModelId.value || undefined,
       mentionedEntityIds: mentionedEntities.value.length > 0
         ? mentionedEntities.value.map((e) => e.id)
@@ -199,7 +227,8 @@ async function send(): Promise<void> {
     if (result.actions?.some((a) => a.type === 'created_note')) {
       emit('note-created')
     }
-  } catch {
+  } catch (err) {
+    console.error('[Chat] send failed:', err)
     messages.value.push({
       role: 'assistant',
       content: 'An error occurred. Please try again.',
@@ -242,14 +271,16 @@ interface ActionCardMeta {
 
 function actionCardMeta(type: ExecutedAction['type']): ActionCardMeta {
   switch (type) {
-    case 'created_event':  return { icon: 'CalendarPlus',  label: 'Created event',          variant: 'green', linkView: 'calendar', linkLabel: 'Open Calendar' }
-    case 'updated_event':  return { icon: 'CalendarCheck', label: 'Updated event',          variant: 'blue',  linkView: 'calendar', linkLabel: 'Open Calendar' }
-    case 'deleted_event':  return { icon: 'CalendarX',     label: 'Deleted event',          variant: 'red',   linkView: 'calendar', linkLabel: 'Open Calendar' }
-    case 'created_action': return { icon: 'ListPlus',      label: 'Created action item',    variant: 'green', linkView: 'actions',  linkLabel: 'Open Actions'  }
-    case 'updated_action': return { icon: 'CheckSquare',   label: 'Updated action item',    variant: 'blue',  linkView: 'actions',  linkLabel: 'Open Actions'  }
-    case 'deleted_action': return { icon: 'SquareMinus',   label: 'Deleted action item',    variant: 'red',   linkView: 'actions',  linkLabel: 'Open Actions'  }
-    case 'created_note':   return { icon: 'FilePlus',      label: 'Created note',           variant: 'green',                       linkLabel: 'Open Note'     }
-    case 'created_entity': return { icon: 'UserPlus',      label: 'Created entity',         variant: 'green',                       linkLabel: ''              }
+    case 'created_event':         return { icon: 'CalendarPlus',  label: 'Created event',           variant: 'green', linkView: 'calendar', linkLabel: 'Open Calendar' }
+    case 'updated_event':         return { icon: 'CalendarCheck', label: 'Updated event',           variant: 'blue',  linkView: 'calendar', linkLabel: 'Open Calendar' }
+    case 'deleted_event':         return { icon: 'CalendarX',     label: 'Deleted event',           variant: 'red',   linkView: 'calendar', linkLabel: 'Open Calendar' }
+    case 'created_action':        return { icon: 'ListPlus',      label: 'Created action item',     variant: 'green', linkView: 'actions',  linkLabel: 'Open Actions'  }
+    case 'updated_action':        return { icon: 'CheckSquare',   label: 'Updated action item',     variant: 'blue',  linkView: 'actions',  linkLabel: 'Open Actions'  }
+    case 'deleted_action':        return { icon: 'SquareMinus',   label: 'Deleted action item',     variant: 'red',   linkView: 'actions',  linkLabel: 'Open Actions'  }
+    case 'created_note':          return { icon: 'FilePlus',      label: 'Created note',            variant: 'green',                       linkLabel: 'Open Note'     }
+    case 'created_entity':        return { icon: 'UserPlus',      label: 'Created entity',          variant: 'green',                       linkLabel: ''              }
+    case 'ensured_action_created': return { icon: 'Link',         label: 'Created & linked task',   variant: 'green', linkView: 'actions',  linkLabel: 'Open Actions'  }
+    case 'ensured_action_found':   return { icon: 'Link2',        label: 'Linked existing task',    variant: 'blue',  linkView: 'actions',  linkLabel: 'Open Actions'  }
   }
 }
 
@@ -476,6 +507,15 @@ function renderMessage(
               <FileText :size="11" />{{ f.name }}
             </span>
           </div>
+          <!-- Note selection chips in history — non-removable -->
+          <div v-if="msg.noteSelections && msg.noteSelections.length > 0" class="chat-msg-selections">
+            <NoteSelectionChip
+              v-for="(sel, si) in msg.noteSelections"
+              :key="si"
+              :attachment="sel"
+              :removable="false"
+            />
+          </div>
           <div v-if="msg.content" class="chat-bubble chat-bubble-user">{{ msg.content }}</div>
         </template>
 
@@ -526,8 +566,15 @@ function renderMessage(
       <div ref="messagesEndRef" />
     </div>
 
-    <!-- Attachments bar (images + files + mentioned entities + pinned notes) -->
-    <div v-if="attachedImages.length > 0 || attachedFiles.length > 0 || mentionedEntities.length > 0 || mentionedNotes.length > 0" class="chat-attachments-bar">
+    <!-- Attachments bar (note selections + images + files + mentioned entities + pinned notes) -->
+    <div v-if="attachedSelections.length > 0 || attachedImages.length > 0 || attachedFiles.length > 0 || mentionedEntities.length > 0 || mentionedNotes.length > 0" class="chat-attachments-bar">
+      <!-- Note selection chips (above file attachments) -->
+      <NoteSelectionChip
+        v-for="(sel, idx) in attachedSelections"
+        :key="idx"
+        :attachment="sel"
+        @remove="removeSelection(idx)"
+      />
       <AttachmentBar
         :attached-images="attachedImages"
         :attached-files="attachedFiles"
@@ -617,7 +664,7 @@ function renderMessage(
       />
       <button
         class="chat-send-btn"
-        :disabled="(!inputText.trim() && attachedImages.length === 0 && attachedFiles.length === 0) || isLoading"
+        :disabled="(!inputText.trim() && attachedImages.length === 0 && attachedFiles.length === 0 && attachedSelections.length === 0) || isLoading"
         title="Send (Enter)"
         @click="send"
       >
@@ -1059,6 +1106,16 @@ function renderMessage(
 /* ── File chips in sent messages ── */
 
 .chat-msg-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+  max-width: 92%;
+}
+
+/* ── Note selection chips in sent messages ── */
+
+.chat-msg-selections {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;

@@ -1407,6 +1407,68 @@ body {
   font-style: italic;
 }
 
+/* ── Note selection attachment chip (input areas: ChatSidebar, AIPromptModal) ──
+ * Shown when the user pastes a copied note selection into an AI input.
+ * Matches the .attachment-file chip look from AttachmentBar.
+ * CSS lives here only — never duplicated in component <style scoped>.        */
+
+.wizz-note-selection-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  flex-shrink: 0;
+  max-width: 260px;
+  cursor: default;
+  user-select: none;
+}
+
+.wizz-note-selection-chip__icon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.wizz-note-selection-chip__title {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.wizz-note-selection-chip__range {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.wizz-note-selection-chip__remove {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.wizz-note-selection-chip__remove:hover {
+  background: rgba(220, 80, 80, 0.15);
+  color: #e05555;
+}
+
 /* ── Textarea-based picker dropdown (@mention + [[note-link) ── */
 
 .input-picker {

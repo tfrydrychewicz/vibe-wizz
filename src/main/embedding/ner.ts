@@ -80,7 +80,10 @@ export async function detectEntityMentions(
     if (!block || block.type !== 'text') return []
 
     const text = block.text.trim().replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '')
-    const parsed: unknown = JSON.parse(text)
+    // Extract only the JSON array — model may append prose after the closing bracket
+    const arrayMatch = text.match(/\[[\s\S]*\]/)
+    if (!arrayMatch) return []
+    const parsed: unknown = JSON.parse(arrayMatch[0])
     if (!Array.isArray(parsed)) return []
 
     const validIds = new Set(entitySubset.map((e) => e.id))

@@ -90,6 +90,8 @@ import {
 } from 'lucide-vue-next'
 import { useEntityChips } from '../composables/useEntityChips'
 import { renderEntityChip, escapeHtml } from '../utils/markdown'
+import { buildNoteSelectionAttachment } from '../utils/noteSelection'
+import { NOTE_SELECTION_MIME } from '../types/noteSelection'
 import {
   pendingAutoStartNoteId,
   activeTranscriptionNoteId,
@@ -1251,6 +1253,35 @@ function onEditorContextMenu(e: MouseEvent): void {
   tableContextMenu.value = { x: e.clientX, y: e.clientY }
 }
 
+/**
+ * Copy handler wired to the `.note-body` container via `@copy`.
+ * When the TipTap editor has a non-empty selection, writes a
+ * `application/x-wizz-note-selection` JSON entry to the clipboard alongside
+ * the normal `text/plain` payload that TipTap writes.  The extra MIME entry
+ * carries structured metadata (noteId, noteTitle, block range, selected text)
+ * so that ChatSidebar and AIPromptModal can intercept the paste and render a
+ * labelled chip instead of inserting raw text.
+ *
+ * We do NOT call e.preventDefault() — TipTap must still write text/plain so
+ * that pasting into external apps works normally.
+ */
+function onEditorCopy(e: ClipboardEvent): void {
+  if (!editor.value || !props.noteId || !title.value) return
+  const { from, to, empty } = editor.value.state.selection
+  if (empty) return
+
+  const attachment = buildNoteSelectionAttachment(
+    editor.value,
+    props.noteId,
+    title.value,
+    from,
+    to,
+  )
+  if (!attachment) return
+
+  e.clipboardData?.setData(NOTE_SELECTION_MIME, JSON.stringify(attachment))
+}
+
 function closeTableContextMenu(): void {
   tableContextMenu.value = null
 }
@@ -1311,6 +1342,7 @@ async function onAIPromptSubmit(payload: import('./AIPromptModal.vue').AIPromptS
       })(),
       images: payload.images.length > 0 ? payload.images : undefined,
       files: payload.files.length > 0 ? payload.files : undefined,
+      noteSelections: payload.noteSelections.length > 0 ? payload.noteSelections : undefined,
       overrideModelId: payload.model || undefined,
     })) as { content: object[] } | { error: string }
 
@@ -1898,7 +1930,7 @@ onBeforeUnmount(() => {
         </button>
       </BubbleMenu>
 
-      <div class="note-body" @mousedown="onNoteBodyMouseDown" @contextmenu="onEditorContextMenu">
+      <div class="note-body" @mousedown="onNoteBodyMouseDown" @contextmenu="onEditorContextMenu" @copy="onEditorCopy">
         <EditorContent :editor="editor" />
       </div>
 

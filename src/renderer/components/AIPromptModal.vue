@@ -4,7 +4,10 @@ import { Sparkles, X, FileText, Paperclip } from 'lucide-vue-next'
 import { useInputMention } from '../composables/useInputMention'
 import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT, type AttachedFile } from '../composables/useFileAttachment'
+import { useNoteSelectionPaste } from '../composables/useNoteSelectionPaste'
+import type { NoteSelectionAttachment } from '../types/noteSelection'
 import AttachmentBar from './AttachmentBar.vue'
+import NoteSelectionChip from './NoteSelectionChip.vue'
 import InputEntityPicker from './InputEntityPicker.vue'
 import InputNoteLinkPicker from './InputNoteLinkPicker.vue'
 
@@ -14,6 +17,7 @@ export interface AIPromptSubmit {
   mentionedNoteIds: string[]
   images: { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[]
   files: { name: string; content: string; mimeType: AttachedFile['mimeType'] }[]
+  noteSelections: NoteSelectionAttachment[]
   model: string
 }
 
@@ -42,10 +46,22 @@ const {
   dropError,
   removeImage,
   removeFile,
-  onPaste,
+  onPaste: onFilePaste,
   onDrop,
   onFileInputChange,
 } = useFileAttachment()
+
+// Note selection paste — checked before file attachment paste
+const {
+  attachedSelections,
+  onPaste: onNoteSelectionPaste,
+  removeSelection,
+} = useNoteSelectionPaste()
+
+function onPaste(e: ClipboardEvent): void {
+  if (onNoteSelectionPaste(e)) return
+  onFilePaste(e)
+}
 
 const mention = useInputMention(textarea, promptText)
 const noteLink = useInputNoteLink(textarea, promptText)
@@ -103,6 +119,7 @@ function doSubmit(): void {
     mentionedNoteIds: noteLink.mentionedNotes.value.map((n) => n.id),
     images: attachedImages.value.map(({ dataUrl, mimeType }) => ({ dataUrl, mimeType })),
     files: attachedFiles.value.map(({ name, content, mimeType }) => ({ name, content, mimeType })),
+    noteSelections: attachedSelections.value.map((s) => ({ ...s })),
     model: selectedModel.value,
   })
 }
@@ -111,7 +128,8 @@ const hasContext = () =>
   mention.mentionedEntities.value.length > 0 ||
   noteLink.mentionedNotes.value.length > 0 ||
   attachedImages.value.length > 0 ||
-  attachedFiles.value.length > 0
+  attachedFiles.value.length > 0 ||
+  attachedSelections.value.length > 0
 </script>
 
 <template>
@@ -160,6 +178,13 @@ const hasContext = () =>
           :attached-files="attachedFiles"
           @remove-image="removeImage"
           @remove-file="removeFile"
+        />
+        <!-- Note selection chips -->
+        <NoteSelectionChip
+          v-for="(sel, idx) in attachedSelections"
+          :key="idx"
+          :attachment="sel"
+          @remove="removeSelection(idx)"
         />
       </div>
 
@@ -230,7 +255,7 @@ const hasContext = () =>
         </select>
         <button
           class="ai-modal-submit"
-          :disabled="loading || (!promptText.trim() && attachedImages.length === 0 && attachedFiles.length === 0)"
+          :disabled="loading || (!promptText.trim() && attachedImages.length === 0 && attachedFiles.length === 0 && attachedSelections.length === 0)"
           @mousedown.prevent
           @click="doSubmit"
         >

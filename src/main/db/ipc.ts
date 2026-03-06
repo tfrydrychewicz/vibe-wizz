@@ -8,7 +8,7 @@ import { extractActionItems } from '../embedding/actionExtractor'
 import { deriveTaskAttributes } from '../embedding/taskClarifier'
 import { generateEntityReview, type EntityTypeWithReview } from '../entity/reviewGenerator'
 import { pushToRenderer } from '../push'
-import { sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField } from '../embedding/chat'
+import { sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField, NoteSelectionAttachment } from '../embedding/chat'
 import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { parseQuery } from '../entity-query/parser'
@@ -1404,6 +1404,7 @@ export function registerDbIpcHandlers(): void {
         mentionedNoteIds,
         images,
         files,
+        noteSelections,
         overrideModelId,
       }: {
         prompt: string
@@ -1413,6 +1414,7 @@ export function registerDbIpcHandlers(): void {
         mentionedNoteIds?: string[]
         images?: { dataUrl: string; mimeType: string }[]
         files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
+        noteSelections?: NoteSelectionAttachment[]
         overrideModelId?: string
       },
     ): Promise<{ content: object[] } | { error: string }> => {
@@ -1519,6 +1521,7 @@ export function registerDbIpcHandlers(): void {
           files && files.length > 0 ? files : undefined,
           inlineNeedsWebSearch,
           overrideModelId,
+          noteSelections ?? [],
         )
         if (!markdown) {
           return { error: 'AI returned empty content. Please try a different prompt.' }
@@ -1882,6 +1885,7 @@ export function registerDbIpcHandlers(): void {
         files,
         mentionedEntityIds,
         mentionedNoteIds,
+        noteSelections,
         overrideModelId,
       }: {
         messages: { role: 'user' | 'assistant'; content: string }[]
@@ -1890,9 +1894,11 @@ export function registerDbIpcHandlers(): void {
         files?: { name: string; content: string; mimeType: 'application/pdf' | 'text/plain' }[]
         mentionedEntityIds?: string[]
         mentionedNoteIds?: string[]
+        noteSelections?: NoteSelectionAttachment[]
         overrideModelId?: string
       },
     ): Promise<{ content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[]; warning?: string }> => {
+      try {
       const db = getDatabase()
 
       // Use the last user message as the search query if not explicitly provided
@@ -2174,7 +2180,7 @@ export function registerDbIpcHandlers(): void {
       let entityRefs: { id: string; name: string }[] = []
       let responseWarning: string | undefined
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes, needsWebSearch, overrideModelId)
+        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes, needsWebSearch, overrideModelId, noteSelections ?? [])
         content = result.content
         executedActions = result.actions
         entityRefs = result.entityRefs
@@ -2218,6 +2224,15 @@ export function registerDbIpcHandlers(): void {
       entityRefs = Array.from(refsById.values())
 
       return { content, references, actions: executedActions, entityRefs, warning: responseWarning }
+      } catch (err) {
+        console.error('[Chat] Unhandled error in chat:send handler:', err)
+        return {
+          content: 'An unexpected error occurred. Please check the console for details.',
+          references: [],
+          actions: [],
+          entityRefs: [],
+        }
+      }
     },
   )
 

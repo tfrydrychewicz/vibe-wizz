@@ -64,6 +64,19 @@ export type ResolvedField = {
   value: string  // human-readable; refs formatted as "{{entity:uuid:Name}}" or "{{note:uuid:Name}}"
 }
 
+/**
+ * A block of note content the user copied from the editor and pasted into the
+ * AI chat or inline-AI prompt.  Mirrors the renderer-side NoteSelectionAttachment
+ * type (kept separate because main-process tsconfig excludes renderer sources).
+ */
+export type NoteSelectionAttachment = {
+  noteId: string
+  noteTitle: string
+  blockStart: number
+  blockEnd: number
+  selectedText: string
+}
+
 export type RichEntityContext = {
   id: string
   name: string
@@ -82,8 +95,14 @@ export type ExecutedAction = {
     | 'deleted_action'
     | 'created_note'
     | 'created_entity'
+    | 'ensured_action_created'   // ensure_action_item_for_task — new row inserted
+    | 'ensured_action_found'     // ensure_action_item_for_task — existing row found
   payload: {
     id: number | string
+    /** Returned to Claude as `action_item_id` so it can chain into update_action_item */
+    action_item_id?: string
+    /** True when ensure_action_item_for_task created a new row (false = existing found) */
+    created?: boolean
     title?: string
     name?: string
     type_name?: string
@@ -338,6 +357,27 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'ensure_action_item_for_task',
+    description:
+      'Find or create an action item that corresponds to a task from a pasted note selection. ' +
+      'Call this BEFORE calling update_action_item whenever you need to modify a task that came from a pasted note selection and you do not yet have its action_item_id. ' +
+      'Returns { action_item_id, created, title } — use action_item_id as the id parameter for update_action_item.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_text: {
+          type: 'string',
+          description: 'The verbatim text of the task from the pasted note selection (used to look up an existing action item by fuzzy title match)',
+        },
+        source_note_id: {
+          type: 'string',
+          description: 'The ID of the note the task came from (from the pasted note selection metadata)',
+        },
+      },
+      required: ['task_text', 'source_note_id'],
+    },
+  },
+  {
     name: 'create_note',
     description:
       'Create a new note in the knowledge base. Use this when the user asks to create, write, draft, or generate a note, document, summary, or any piece of structured content. ' +
@@ -526,6 +566,35 @@ function executeTool(
       if (!row) throw new Error(`Action item with id ${id} not found`)
       db.prepare('DELETE FROM action_items WHERE id = ?').run(id)
       return { type: 'deleted_action', payload: row }
+    }
+
+    case 'ensure_action_item_for_task': {
+      const { task_text, source_note_id } = input as { task_text: string; source_note_id: string }
+      const existing = db
+        .prepare(
+          `SELECT id, title FROM action_items
+           WHERE source_note_id = ? AND title LIKE '%'||?||'%' AND status != 'cancelled'
+           LIMIT 1`,
+        )
+        .get(source_note_id, task_text) as { id: string; title: string } | undefined
+      if (existing) {
+        return {
+          type: 'ensured_action_found',
+          payload: { id: existing.id, action_item_id: existing.id, title: existing.title, created: false },
+        }
+      }
+      // No existing match — create a new action item linked to the note
+      const newId = randomUUID()
+      const now = new Date().toISOString()
+      db.prepare(
+        `INSERT INTO action_items
+           (id, title, source_note_id, extraction_type, confidence, created_at, updated_at)
+         VALUES (?, ?, ?, 'manual', 1.0, ?, ?)`,
+      ).run(newId, task_text, source_note_id, now, now)
+      return {
+        type: 'ensured_action_created',
+        payload: { id: newId, action_item_id: newId, title: task_text, created: true },
+      }
     }
 
     case 'create_note': {
@@ -797,6 +866,7 @@ export async function generateInlineContent(
   files?: AttachedFilePayload[],
   useWebSearch = false,
   overrideModelId?: string,
+  noteSelections: NoteSelectionAttachment[] = [],
 ): Promise<string> {
   const db = getDatabase()
 
@@ -847,14 +917,19 @@ export async function generateInlineContent(
       entityBlocks
   }
 
+  // Prepend pasted note selections as labelled context before the user instructions
+  const selectionsPrefix = formatNoteSelectionsBlock(noteSelections)
+
   let userText: string
   if (selectedText) {
     userText =
+      selectionsPrefix +
       `Selected text to rewrite:\n"""\n${selectedText}\n"""\n\n` +
       `Instructions: ${userPrompt}\n\n` +
       `Rewrite the selected text following the instructions. Return only the replacement content.`
   } else {
     userText =
+      selectionsPrefix +
       `Instructions: ${userPrompt}\n\n` +
       `Generate the requested content to insert at the cursor position in the note.`
   }
@@ -949,6 +1024,23 @@ export type AttachedFilePayload = {
   mimeType: 'application/pdf' | 'text/plain'
 }
 
+/**
+ * Format a list of NoteSelectionAttachments as a labelled context block for
+ * injection into the last user message sent to the model.
+ * Mirrors the renderer-side `formatNoteSelectionsForPrompt` utility (kept in
+ * the main process to avoid cross-process imports).
+ */
+function formatNoteSelectionsBlock(selections: NoteSelectionAttachment[]): string {
+  if (selections.length === 0) return ''
+  const blocks = selections
+    .map(
+      (s) =>
+        `--- Note Selection: "${s.noteTitle}" (note_id: ${s.noteId}, blocks ${s.blockStart}–${s.blockEnd}) ---\n${s.selectedText}\n---`,
+    )
+    .join('\n\n')
+  return `<note_selections>\n${blocks}\n</note_selections>\n\n`
+}
+
 export async function sendChatMessage(
   messages: { role: 'user' | 'assistant'; content: string }[],
   contextNotes: { id: string; title: string; excerpt: string }[],
@@ -962,6 +1054,7 @@ export async function sendChatMessage(
   entityLinkedNotes: EntityLinkedNote[] = [],
   useWebSearch = false,
   overrideModelId?: string,
+  noteSelections: NoteSelectionAttachment[] = [],
 ): Promise<{ content: string; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[]; fallbackWarning?: string }> {
   const db = getDatabase()
   let fallbackWarning: string | undefined
@@ -980,7 +1073,11 @@ export async function sendChatMessage(
     'Use them when the user asks you to make a change (schedule, add, create, write, draft, generate, mark, update, move, cancel, delete, etc.). ' +
     'For creates and updates: execute immediately without asking. ' +
     'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool. ' +
-    'When creating a note, generate rich, well-structured Markdown content — use headings, bullet lists, task checkboxes, and GFM tables (| Col | Col |\\n| --- | --- |\\n| val | val |) as appropriate.'
+    'When creating a note, generate rich, well-structured Markdown content — use headings, bullet lists, task checkboxes, and GFM tables (| Col | Col |\\n| --- | --- |\\n| val | val |) as appropriate.\n\n' +
+    'When the user asks you to modify a task that came from a pasted note selection (e.g. assign a project, ' +
+    'set status, link to a project), ALWAYS call ensure_action_item_for_task first to obtain the ' +
+    'action item ID, then call update_action_item with that ID. ' +
+    'Do not call update_action_item without a verified action_item_id from ensure_action_item_for_task.'
 
   if (pinnedNotes.length > 0) {
     const pinnedStr = pinnedNotes
@@ -1074,11 +1171,19 @@ export async function sendChatMessage(
 
     // Build a mutable message list for the tool loop.
     // The loop may append assistant tool-use blocks and user tool-result blocks.
-    // If images or files are provided, attach them to the last user message as content blocks.
+    // If images, files, or note selections are provided, attach them to the last
+    // user message as content blocks / prepended text.
+    const noteSelectionsPrefix = formatNoteSelectionsBlock(noteSelections)
     const loopMessages: Anthropic.MessageParam[] = messages.map((msg, i) => {
       const hasImages = images && images.length > 0
       const hasFiles = files && files.length > 0
-      if (i === lastUserIndex && (hasImages || hasFiles)) {
+      const hasSelections = noteSelectionsPrefix.length > 0
+      if (i === lastUserIndex && (hasImages || hasFiles || hasSelections)) {
+        // Prepend note selections to the user text so the model sees structured
+        // context first, then the user's typed message.
+        const userText = hasSelections
+          ? noteSelectionsPrefix + (msg.content || '')
+          : msg.content || '(see attached file)'
         return {
           role: 'user' as const,
           content: [
@@ -1096,7 +1201,7 @@ export async function sendChatMessage(
                 ? { type: 'base64' as const, media_type: 'application/pdf' as const, data: f.content }
                 : { type: 'text' as const, media_type: 'text/plain' as const, data: f.content },
             })) : []),
-            { type: 'text' as const, text: msg.content || '(see attached file)' },
+            { type: 'text' as const, text: userText },
           ],
         }
       }
