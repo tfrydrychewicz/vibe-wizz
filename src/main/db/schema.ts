@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS entity_types (
   review_enabled       INTEGER NOT NULL DEFAULT 0,
   review_frequency     TEXT,                       -- 'daily'|'weekly'|'biweekly'|'monthly'
   review_day           TEXT,                       -- 'mon'…'sun' (weekly/biweekly only)
-  review_time          TEXT NOT NULL DEFAULT '07:00' -- local HH:MM for scheduler window
+  review_time          TEXT NOT NULL DEFAULT '07:00', -- local HH:MM for scheduler window
+  review_guidance      TEXT                        -- custom AI focus instructions for this type
 );
 
 INSERT OR IGNORE INTO entity_types (id, name, icon, schema, kanban_enabled, color) VALUES

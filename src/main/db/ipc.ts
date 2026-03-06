@@ -602,6 +602,7 @@ export function registerDbIpcHandlers(): void {
         review_frequency,
         review_day,
         review_time,
+        review_guidance,
       }: {
         name: string
         icon: string
@@ -611,20 +612,22 @@ export function registerDbIpcHandlers(): void {
         review_frequency?: string | null
         review_day?: string | null
         review_time?: string
+        review_guidance?: string | null
       }
     ) => {
       const db = getDatabase()
       const id = randomUUID()
       db.prepare(
         `INSERT INTO entity_types
-           (id, name, icon, color, schema, review_enabled, review_frequency, review_day, review_time)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, name, icon, color, schema, review_enabled, review_frequency, review_day, review_time, review_guidance)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         id, name, icon, color, schema,
         review_enabled ?? 0,
         review_frequency ?? null,
         review_day ?? null,
         review_time ?? '07:00',
+        review_guidance ?? null,
       )
       return db.prepare('SELECT * FROM entity_types WHERE id = ?').get(id) as EntityTypeRow
     }
@@ -648,6 +651,7 @@ export function registerDbIpcHandlers(): void {
         review_frequency,
         review_day,
         review_time,
+        review_guidance,
       }: {
         id: string
         name: string
@@ -658,13 +662,15 @@ export function registerDbIpcHandlers(): void {
         review_frequency?: string | null
         review_day?: string | null
         review_time?: string
+        review_guidance?: string | null
       }
     ) => {
       const db = getDatabase()
       db.prepare(
         `UPDATE entity_types
          SET name = ?, icon = ?, color = ?, schema = ?,
-             review_enabled = ?, review_frequency = ?, review_day = ?, review_time = ?
+             review_enabled = ?, review_frequency = ?, review_day = ?, review_time = ?,
+             review_guidance = ?
          WHERE id = ?`
       ).run(
         name, icon, color, schema,
@@ -672,9 +678,53 @@ export function registerDbIpcHandlers(): void {
         review_frequency ?? null,
         review_day ?? null,
         review_time ?? '07:00',
+        review_guidance ?? null,
         id,
       )
       return db.prepare('SELECT * FROM entity_types WHERE id = ?').get(id) as EntityTypeRow
+    }
+  )
+
+  /**
+   * entity-types:generate-review-guidance — uses AI to generate a custom
+   * review_guidance string for an entity type, based on its name and fields.
+   * Returns { guidance: string } on success or { error: string } on failure.
+   */
+  ipcMain.handle(
+    'entity-types:generate-review-guidance',
+    async (_event, { type_name, field_names }: { type_name: string; field_names: string[] }) => {
+      const db = getDatabase()
+      const { callWithFallback } = await import('../ai/modelRouter')
+      const { getAdapter } = await import('../ai/registry')
+      try {
+        const guidance = await callWithFallback('inline_ai', db, async (model) => {
+          const adapter = getAdapter(model.providerId)
+          const fieldList = field_names.length > 0
+            ? `Fields tracked: ${field_names.join(', ')}.`
+            : ''
+          const prompt =
+            `You are helping configure an AI review system for a personal knowledge base.\n\n` +
+            `The user has an entity type called "${type_name}". ${fieldList}\n\n` +
+            `Write a concise instruction (20–60 words) telling the AI reviewer ` +
+            `what aspects to focus on when generating a periodic review for entities of this type. ` +
+            `Start directly with the focus areas — do not include preamble like "Focus on" or "You should".\n\n` +
+            `Examples of good guidance for built-in types:\n` +
+            `- Person: "relationship health, collaboration, commitments made and received, open follow-ups, and any patterns worth noting"\n` +
+            `- Project: "progress, blockers, decisions made, open tasks, and upcoming milestones"\n` +
+            `- Team: "team-wide activity, decisions, workload distribution, and upcoming deadlines"\n` +
+            `- Decision: "the rationale recorded, implications discussed, and action items triggered"\n` +
+            `- OKR: "progress against key results, risks, and blockers"\n\n` +
+            `Now write the guidance for the "${type_name}" type. Output only the instruction text, no quotes, no label.`
+          const result = await adapter.chat(
+            { model: model.modelId, messages: [{ role: 'user', content: prompt }], maxTokens: 120 },
+            model.apiKey,
+          )
+          return result.text.trim()
+        })
+        return { guidance }
+      } catch {
+        return { error: 'No AI model configured. Set one up in Settings → AI Features → Inline AI.' }
+      }
     }
   )
 

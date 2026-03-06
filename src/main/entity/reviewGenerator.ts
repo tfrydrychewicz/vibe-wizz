@@ -36,6 +36,7 @@ export interface EntityTypeWithReview {
   review_frequency: string | null  // 'daily'|'weekly'|'biweekly'|'monthly'
   review_day: string | null        // 'mon'…'sun'
   review_time: string              // HH:MM
+  review_guidance: string | null   // custom AI focus instructions
 }
 
 interface EntityRow {
@@ -107,6 +108,7 @@ export function getPeriodWindow(frequency: string): { periodStart: string; perio
 interface EntityContext {
   entityName: string
   typeName: string
+  reviewGuidance: string   // custom or fallback guidance for the AI prompt
   fieldsText: string
   noteLines: string
   openActionsLines: string
@@ -294,9 +296,13 @@ export function buildEntityContext(
     // Non-critical — skip calendar events if something goes wrong
   }
 
+  const fallbackGuidance = `summarise activity relevant to a ${type.name}`
+  const reviewGuidance = (type.review_guidance ?? '').trim() || fallbackGuidance
+
   return {
     entityName: entity.name,
     typeName: type.name,
+    reviewGuidance,
     fieldsText,
     noteLines,
     noteCount: notes.length,
@@ -311,19 +317,9 @@ export function buildEntityContext(
 // ── Prompt builder ─────────────────────────────────────────────────────────────
 
 function buildPrompt(ctx: EntityContext, periodStart: string, periodEnd: string): string {
-  const typeGuidance: Record<string, string> = {
-    person:   'focus on relationship, collaboration, commitments made and received, open follow-ups, and any patterns worth noting',
-    project:  'focus on progress, blockers, decisions made, open tasks, and upcoming milestones',
-    team:     'focus on team-wide activity, decisions, workload distribution, and upcoming deadlines',
-    decision: 'focus on the rationale recorded, implications discussed, and action items triggered',
-    okr:      'focus on progress against key results, risks, and blockers',
-  }
-  const lowerType = ctx.typeName.toLowerCase()
-  const guidance = typeGuidance[lowerType] ?? `summarise activity relevant to a ${ctx.typeName}`
-
   return (
     `You are a personal knowledge assistant. Generate a concise, structured review.\n\n` +
-    `Entity type: "${ctx.typeName}" — ${guidance}.\n\n` +
+    `Entity type: "${ctx.typeName}" — ${ctx.reviewGuidance}.\n\n` +
     `Review period: ${periodStart} to ${periodEnd}.\n\n` +
 
     `## Entity: ${ctx.entityName} (type: ${ctx.typeName})\n` +

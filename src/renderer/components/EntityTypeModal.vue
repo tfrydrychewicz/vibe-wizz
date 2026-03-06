@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { Plus, Trash2, X } from 'lucide-vue-next'
+import { Plus, Trash2, X, Wand2 } from 'lucide-vue-next'
 import IconPicker from './IconPicker.vue'
 import QueryFieldEditor from './QueryFieldEditor.vue'
 
@@ -47,6 +47,7 @@ type EntityTypeRow = {
   review_frequency: string | null
   review_day: string | null
   review_time: string
+  review_guidance: string | null
 }
 
 const props = defineProps<{
@@ -80,6 +81,9 @@ const reviewEnabled = ref(false)
 const reviewFrequency = ref<'daily' | 'weekly' | 'biweekly' | 'monthly'>('weekly')
 const reviewDay = ref<'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'>('mon')
 const reviewTime = ref('07:00')
+const reviewGuidance = ref('')
+const generatingGuidance = ref(false)
+const guidanceError = ref('')
 
 const DAY_LABELS: Record<string, string> = {
   mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
@@ -106,6 +110,30 @@ const reviewDescription = computed((): string => {
 const needsDayPicker = computed(() =>
   reviewEnabled.value && (reviewFrequency.value === 'weekly' || reviewFrequency.value === 'biweekly'),
 )
+
+async function generateGuidance(): Promise<void> {
+  generatingGuidance.value = true
+  guidanceError.value = ''
+  try {
+    const name = typeName.value.trim() || props.editingType?.name || 'this type'
+    const fieldNames = fields.value
+      .filter((f) => f.name.trim())
+      .map((f) => f.name.trim())
+    const result = await window.api.invoke(
+      'entity-types:generate-review-guidance',
+      { type_name: name, field_names: fieldNames },
+    ) as { guidance?: string; error?: string }
+    if (result.error) {
+      guidanceError.value = result.error
+    } else {
+      reviewGuidance.value = result.guidance ?? ''
+    }
+  } catch {
+    guidanceError.value = 'Failed to generate guidance.'
+  } finally {
+    generatingGuidance.value = false
+  }
+}
 
 async function deleteType(): Promise<void> {
   if (!props.editingType) return
@@ -190,6 +218,7 @@ async function save(): Promise<void> {
     review_frequency: reviewEnabled.value ? reviewFrequency.value : null,
     review_day: needsDayPicker.value ? reviewDay.value : null,
     review_time: reviewEnabled.value ? (reviewTime.value || '07:00') : '07:00',
+    review_guidance: reviewGuidance.value.trim() || null,
   }
 
   if (isEditMode.value && props.editingType) {
@@ -248,6 +277,9 @@ onMounted(async () => {
     }
     if (props.editingType.review_time) {
       reviewTime.value = props.editingType.review_time
+    }
+    if (props.editingType.review_guidance) {
+      reviewGuidance.value = props.editingType.review_guidance
     }
   }
 })
@@ -393,9 +425,32 @@ onMounted(async () => {
             </div>
 
             <p class="reviews-description">{{ reviewDescription }}</p>
-            <p class="reviews-hint">
-              AI model used from <strong>Settings → AI Features → Entity Review Summary</strong>.
-            </p>
+
+            <!-- Review Guidance -->
+            <div class="reviews-guidance-section">
+              <div class="reviews-guidance-header">
+                <label class="reviews-control-label">AI Focus Guidance</label>
+                <button
+                  class="btn-generate-guidance"
+                  :disabled="generatingGuidance"
+                  title="Generate guidance with AI"
+                  @click="generateGuidance"
+                >
+                  <Wand2 :size="12" />
+                  {{ generatingGuidance ? 'Generating…' : 'Generate with AI' }}
+                </button>
+              </div>
+              <textarea
+                v-model="reviewGuidance"
+                class="reviews-guidance-textarea"
+                placeholder="e.g. relationship health, commitments made and received, open follow-ups, and any collaboration patterns worth highlighting"
+                rows="3"
+              />
+              <p v-if="guidanceError" class="reviews-guidance-error">{{ guidanceError }}</p>
+              <p class="reviews-hint">
+                Tells the AI what to focus on. Leave blank to use a generic summary. AI model used from <strong>Settings → AI Features → Entity Review Summary</strong>.
+              </p>
+            </div>
           </template>
 
           <p v-else class="reviews-hint">
@@ -767,6 +822,78 @@ onMounted(async () => {
 .reviews-hint strong {
   color: var(--color-text);
   font-weight: 500;
+}
+
+.reviews-guidance-section {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reviews-guidance-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.reviews-guidance-textarea {
+  width: 100%;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 12.5px;
+  font-family: inherit;
+  line-height: 1.5;
+  padding: 7px 10px;
+  resize: vertical;
+  min-height: 64px;
+  transition: border-color 0.15s;
+}
+
+.reviews-guidance-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.reviews-guidance-textarea::placeholder {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.reviews-guidance-error {
+  font-size: 11.5px;
+  color: #ef4444;
+  margin: 0;
+}
+
+.btn-generate-guidance {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: inherit;
+  background: rgba(91, 141, 239, 0.1);
+  color: var(--color-accent);
+  border: 1px solid rgba(91, 141, 239, 0.25);
+  cursor: pointer;
+  transition: background 0.1s, opacity 0.1s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-generate-guidance:hover:not(:disabled) {
+  background: rgba(91, 141, 239, 0.2);
+}
+
+.btn-generate-guidance:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* Toggle (reuses SettingsModal pattern) */

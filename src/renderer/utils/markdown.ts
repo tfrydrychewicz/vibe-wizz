@@ -69,9 +69,11 @@ export function renderInline(raw: string): string {
 
   const UUID_RE = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
 
-  // Pass 1a: {{entity:uuid:Name}} — ID embedded, no DB lookup needed at click time
+  // Pass 1a: {{entity:uuid:Name}} — ID embedded, no DB lookup needed at click time.
+  // The leading `@?` absorbs any @ the AI or post-processor wrote before the token,
+  // preventing `@WIZZENT0WIZZENT` from leaking into Pass 1b's @EntityName regex.
   const withEntityId = raw.replace(
-    new RegExp(`\\{\\{entity:(${UUID_RE}):(.*?)\\}\\}`, 'g'),
+    new RegExp(`@?\\{\\{entity:(${UUID_RE}):(.*?)\\}\\}`, 'g'),
     (_m, id: string, name: string) => {
       entityItems.push({ id, name: name.trim() })
       return `WIZZENT${entityItems.length - 1}WIZZENT`

@@ -455,6 +455,8 @@ watch(
 
 .review-panel-body {
   padding: 0 0 12px;
+  max-height: 480px;
+  overflow-y: auto;
 }
 
 .review-loading {
