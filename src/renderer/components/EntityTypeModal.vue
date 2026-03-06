@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { Plus, Trash2, X, Wand2 } from 'lucide-vue-next'
+import { Plus, Trash2, X, Wand2, GripVertical } from 'lucide-vue-next'
 import IconPicker from './IconPicker.vue'
 import QueryFieldEditor from './QueryFieldEditor.vue'
 
@@ -205,6 +205,39 @@ function removeField(index: number): void {
   fields.value.splice(index, 1)
 }
 
+// ── Drag-to-reorder fields ────────────────────────────────────────────────────
+const dragFromIndex = ref<number | null>(null)
+const dragOverIndex = ref<number | null>(null)
+
+function onFieldDragStart(e: DragEvent, index: number): void {
+  dragFromIndex.value = index
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', String(index))
+  }
+}
+
+function onFieldDragOver(e: DragEvent, index: number): void {
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dragOverIndex.value = index
+}
+
+function onFieldDrop(e: DragEvent, index: number): void {
+  e.preventDefault()
+  const from = dragFromIndex.value
+  if (from === null || from === index) return
+  const moved = fields.value.splice(from, 1)[0]
+  fields.value.splice(index, 0, moved)
+  dragFromIndex.value = null
+  dragOverIndex.value = null
+}
+
+function onFieldDragEnd(): void {
+  dragFromIndex.value = null
+  dragOverIndex.value = null
+}
+
 function buildSchema(): string {
   const schemaFields = fields.value
     .filter((f) => f.name.trim() !== '')
@@ -376,8 +409,21 @@ onMounted(async () => {
           </div>
 
           <div class="fields-list">
-            <div v-for="(field, i) in fields" :key="i" class="field-entry">
+            <div
+              v-for="(field, i) in fields"
+              :key="i"
+              class="field-entry"
+              :class="{ 'field-entry--drag-over': dragOverIndex === i && dragFromIndex !== i }"
+              draggable="true"
+              @dragstart="onFieldDragStart($event, i)"
+              @dragover="onFieldDragOver($event, i)"
+              @drop="onFieldDrop($event, i)"
+              @dragend="onFieldDragEnd"
+            >
               <div class="field-row">
+                <span class="field-drag-handle" title="Drag to reorder">
+                  <GripVertical :size="14" />
+                </span>
                 <input
                   v-model="field.name"
                   class="modal-input field-name-input"
@@ -765,12 +811,37 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  border-radius: 5px;
+  transition: background 0.1s;
+}
+
+.field-entry--drag-over {
+  background: rgba(91, 141, 239, 0.08);
+  outline: 1px dashed rgba(91, 141, 239, 0.4);
 }
 
 .field-row {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+.field-drag-handle {
+  display: flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  cursor: grab;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+
+.field-entry:hover .field-drag-handle {
+  opacity: 0.8;
+}
+
+.field-drag-handle:active {
+  cursor: grabbing;
 }
 
 .field-name-input {

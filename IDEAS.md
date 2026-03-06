@@ -8,17 +8,15 @@
 - [ ] support for openai models, alongside claude models
 - [x] entity list allow grouping by entity field and sorting by [name, date created, date updated] in both direction [increment, decrement]
 - [ ] automated daily review generation (morning and evening)
-- [ ] recurring summary for an entity type - configurable in entity type settings
+- [x] recurring summary for an entity type - configurable in entity type settings
 
 PROMPT
 
-Design a new feature.
+For context read and @CLAUDE.md, @DESIGN.md.
 
-Redesign tasks to implement GTD (getting things done) methodology. In the settings I should be able to set the entity type for projects. Tasks can be parts of projects. Tasks can be assigned to someoone. Tasks can have due date. Tasks can have sub-tasks. 
+Design a new feature. 
 
-Also redesign how we attach tasks in notes to tasks in the actions view. I should be able to set tasks attributes from the note view as well, if the task has been attached. When attaching the task, run an AI prompt to try to derive the task attributes from the task description in the note.
 
-All have too look professionally and nice and allow to fully implement the GTD methodology.
 
 Remember about reusability and consistency across whole app.
 
