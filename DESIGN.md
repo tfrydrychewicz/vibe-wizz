@@ -1069,6 +1069,18 @@ Offline-created notes are queued for embedding/processing and handled automatica
 - [x] Keyboard shortcuts + command palette
 - [ ] Performance optimization
 
+### Phase 6 — GTD Methodology
+- [x] **Phase A — Data layer**: migration `0008` adds `parent_id`, `project_entity_id`, `contexts`, `energy_level`, `is_waiting_for`, `someday`, `weekly_review_at` to `action_items`; `gtd_project_entity_type_id` and `gtd_contexts` settings keys
+- [x] **Phase B — Reusable components**: `TaskAttributeChip.vue` (project/context/energy/waiting chips), `SubTaskInput.vue` (inline sub-task creation), `TaskCard.vue` (unified card for all views with depth, status toggle, open-detail emit)
+- [x] **Phase C — TaskDetailPanel + taskDetailStore**: full-screen right panel with title, status, project search, assignee, due date, contexts, energy level, waiting-for toggle + search, sub-task list; `src/renderer/stores/taskDetailStore.ts` module-level store (`openDetail`, `registerOpenDetailHandler`)
+- [x] **Phase D — ActionsView redesign**: 4-tab layout (Inbox / Projects / Waiting / Someday); per-tab empty states; GTD Weekly Review panel (`GTDWeeklyReview.vue`) behind "Weekly Review" button; keyboard nav within groups
+- [x] **Phase E — TaskInlineDetail + NoteEditor integration**: `ActionTaskItem.vue` upgraded to show GTD chips inline; NoteEditor `extractAndInsertActions` creates DB rows with derived GTD attrs immediately (pre-populates `taskDataCache`); `action-items:derive-attributes` IPC → `deriveTaskAttributes()` in `taskClarifier.ts`
+- [x] **Phase F — Promotion Flow + AI Derivation**: `/action` slash command shows sub-commands (Quick / Derive attributes); `action-items:derive-attributes` IPC; `derivingIds` reactive set with spinner; "Promote to project" button in TaskDetailPanel (sets project entity type, status → in_progress); `taskClarifier.ts` calls `callWithFallback('action_extract', ...)` with GTD JSON schema
+- [x] **Phase G — Settings UI**: `GTDSettingsPanel.vue` with project entity type picker, default contexts multi-input; surfaced as "Actions" tab in `SettingsModal.vue`
+- [x] **Phase H — Daily Brief + AI Chat Integration**: `dailyBrief.ts` extended with project names on tasks and broader stale section (all open/in_progress tasks inactive for X days, not assignee-gated); `chat.ts` WIZZ_TOOLS `create_action_item`/`update_action_item` extended with `project_entity_id`, `contexts`, `energy_level`, `is_waiting_for`, `parent_id`; `actionExtractor.ts` batch-derives GTD attributes via `Promise.all`; `ActionItemContext` in `chat.ts` extended with project fields
+- [x] **Phase I — Push Events and Live Sync**: `TaskDetailPanel.vue` subscribes to `action:updated` push event; reloads task in-place when `payload.actionId === props.taskId && !saving`; cleaned up on `onBeforeUnmount`
+- [x] **Phase J — Polish**: `Cmd+Shift+A` → jump to Actions view; empty states already implemented in ActionsView (Inbox, Projects, Waiting, Someday); ARIA labels + `aria-pressed` on all TaskDetailPanel interactive fields; `role="complementary"` on panel root
+
 ---
 
 ## Risks & Mitigations

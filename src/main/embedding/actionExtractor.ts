@@ -8,6 +8,7 @@
 import { callWithFallback } from '../ai/modelRouter'
 import { getDatabase } from '../db/index'
 import { getCurrentDateString } from '../utils/date'
+import { deriveTaskAttributes } from './taskClarifier'
 
 // Keep prompts manageable; 4000 chars ≈ 1000 tokens of note content
 const MAX_BODY_CHARS = 4000
@@ -17,6 +18,12 @@ const MAX_ACTIONS = 20
 
 export interface ExtractedAction {
   title: string
+  project_entity_id: string | null
+  project_name: string | null
+  due_date: string | null
+  contexts: string[]
+  energy_level: 'low' | 'medium' | 'high' | null
+  confidence: number
 }
 
 export interface ExtractedActions {
@@ -84,14 +91,35 @@ export async function extractActionItems(
         : 'Action Items'
     const rawItems = Array.isArray(obj['items']) ? obj['items'] : []
 
-    const items = (rawItems as unknown[])
+    const rawTitles = (rawItems as unknown[])
       .filter((item): item is { title: string } => {
         if (!item || typeof item !== 'object') return false
         const r = item as Record<string, unknown>
         return typeof r['title'] === 'string' && r['title'].trim().length > 0
       })
-      .map((item) => ({ title: item.title.trim() }))
+      .map((item) => item.title.trim())
       .slice(0, MAX_ACTIONS)
+
+    // Batch-derive GTD attributes for all extracted items in parallel
+    const derived = await Promise.all(
+      rawTitles.map((title) =>
+        deriveTaskAttributes(title, truncated, '').catch(() => null)
+      )
+    )
+
+    const items: ExtractedAction[] = rawTitles.map((title, i) => {
+      const d = derived[i]
+      const useGtd = (d?.confidence ?? 0) >= 0.5
+      return {
+        title,
+        project_entity_id: useGtd ? (d?.project_entity_id ?? null) : null,
+        project_name: useGtd ? (d?.project_name ?? null) : null,
+        due_date: useGtd ? (d?.due_date ?? null) : null,
+        contexts: useGtd ? (d?.contexts ?? []) : [],
+        energy_level: useGtd ? (d?.energy_level ?? null) : null,
+        confidence: d?.confidence ?? 0,
+      }
+    })
 
     return { heading, items }
   })

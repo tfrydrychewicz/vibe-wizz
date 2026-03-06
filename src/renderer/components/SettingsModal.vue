@@ -1,20 +1,22 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { X, Eye, EyeOff, BrainCircuit, CalendarDays, Bug, Plus, RefreshCw, Pencil, Trash2, AlertCircle, Loader2 } from 'lucide-vue-next'
+import { X, Eye, EyeOff, BrainCircuit, CalendarDays, CheckSquare, Bug, Plus, RefreshCw, Pencil, Trash2, AlertCircle, Loader2 } from 'lucide-vue-next'
 import CalendarSourceModal from './CalendarSourceModal.vue'
 import AIProviderCard from './AIProviderCard.vue'
 import FeatureChainEditor from './FeatureChainEditor.vue'
+import GTDSettingsPanel from './GTDSettingsPanel.vue'
 
 const providerCardRefs = new Map<string, InstanceType<typeof AIProviderCard>>()
 
 const emit = defineEmits<{ close: [] }>()
 
 // ── Category navigation ───────────────────────────────────────────────────────
-type CategoryId = 'ai' | 'calendar' | 'debug'
+type CategoryId = 'ai' | 'actions' | 'calendar' | 'debug'
 const selectedCategory = ref<CategoryId>('ai')
 
 const categories: { id: CategoryId; label: string; icon: typeof BrainCircuit }[] = [
   { id: 'ai', label: 'AI', icon: BrainCircuit },
+  { id: 'actions', label: 'Actions', icon: CheckSquare },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'debug', label: 'Debug', icon: Bug },
 ]
@@ -630,24 +632,6 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                 </select>
               </div>
 
-              <div v-if="followupAssigneeEntityTypeId" class="field-group">
-                <label class="field-label" for="followup-days">Staleness Threshold</label>
-                <p class="field-hint">
-                  Flag action items with no updates after this many days.
-                </p>
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <input
-                    id="followup-days"
-                    v-model.number="followupStalenessDays"
-                    type="number"
-                    min="1"
-                    max="90"
-                    class="modal-input"
-                    style="width: 72px;"
-                  />
-                  <span class="field-hint" style="margin: 0;">days</span>
-                </div>
-              </div>
             </template>
 
             <!-- AI Features tab -->
@@ -672,6 +656,14 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                 />
               </div>
             </template>
+          </template>
+
+          <!-- ── Actions ── -->
+          <template v-else-if="selectedCategory === 'actions'">
+            <div class="pane-header">
+              <h3 class="pane-title">Actions</h3>
+            </div>
+            <GTDSettingsPanel />
           </template>
 
           <!-- ── Calendar ── -->

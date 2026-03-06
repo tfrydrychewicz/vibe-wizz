@@ -72,6 +72,12 @@ export const FEATURE_SLOTS = [
     capability: 'chat',
   },
   {
+    id: 'task_clarify',
+    label: 'Task Attribute Derivation',
+    description: 'Derives GTD attributes (project, assignee, due date, context) from task text and note context.',
+    capability: 'chat',
+  },
+  {
     id: 'embedding',
     label: 'Vector Embeddings',
     description: 'Generates vector embeddings for notes and chunks.',
@@ -94,5 +100,6 @@ export const DEFAULT_CHAINS: Record<FeatureSlotId, string[]> = {
   cluster_summary: ['claude-haiku-4-5-20251001'],
   query_expand:    ['claude-haiku-4-5-20251001'],
   rerank:          ['claude-haiku-4-5-20251001'],
+  task_clarify:    ['claude-haiku-4-5-20251001'],
   embedding:       ['text-embedding-3-small'],
 }

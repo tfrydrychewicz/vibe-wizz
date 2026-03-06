@@ -15,6 +15,7 @@ import TemplateEditor from './components/TemplateEditor.vue'
 import LucideIcon from './components/LucideIcon.vue'
 import TabBar from './components/TabBar.vue'
 import ChatSidebar from './components/ChatSidebar.vue'
+import TaskDetailPanel from './components/TaskDetailPanel.vue'
 import CalendarView from './components/CalendarView.vue'
 import TodayView from './components/TodayView.vue'
 import CommandPalette from './components/CommandPalette.vue'
@@ -34,6 +35,7 @@ import {
 } from './stores/tabStore'
 import type { OpenMode } from './stores/tabStore'
 import { pendingAutoStartNoteId } from './stores/transcriptionStore'
+import { registerOpenDetailHandler } from './stores/taskDetailStore'
 
 type NavItem = {
   id: string
@@ -82,6 +84,10 @@ const showSettings = ref(false)
 
 // AI Chat sidebar
 const showChat = ref(false)
+
+// Task detail panel
+const showTaskDetail = ref(false)
+const activeTaskDetailId = ref<string | null>(null)
 
 // Command palette
 const showCommandPalette = ref(false)
@@ -388,6 +394,12 @@ function onGlobalKeydown(e: KeyboardEvent): void {
     return
   }
 
+  if (mod && e.shiftKey && e.key === 'A') {
+    e.preventDefault()
+    void onNavClick('actions')
+    return
+  }
+
   if (mod && e.key === 'f') {
     const tag = (e.target as HTMLElement)?.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
@@ -437,6 +449,11 @@ onMounted(() => {
   loadEntityTypes()
   loadNoteTemplates()
   window.addEventListener('keydown', onGlobalKeydown)
+
+  registerOpenDetailHandler((taskId: string) => {
+    activeTaskDetailId.value = taskId
+    showTaskDetail.value = true
+  })
 
   unsubTranscriptionOpenNote = window.api.on('transcription:open-note', (...args: unknown[]) => {
     const { noteId, autoStart } = args[0] as { noteId: string; autoStart?: boolean }
@@ -801,6 +818,16 @@ onBeforeUnmount(() => {
       @open-entity="onChatOpenEntity"
       @open-view="onChatOpenView"
       @note-created="noteListRef?.refresh()"
+    />
+
+    <!-- Task detail panel -->
+    <TaskDetailPanel
+      v-if="showTaskDetail && activeTaskDetailId"
+      :task-id="activeTaskDetailId"
+      @close="showTaskDetail = false"
+      @open-note="onOpenNote"
+      @open-actions="activeView = 'actions'; showTaskDetail = false"
+      @deleted="showTaskDetail = false"
     />
 
     <!-- Quit-time / debug re-embed overlay -->

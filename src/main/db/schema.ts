@@ -133,19 +133,27 @@ CREATE TABLE IF NOT EXISTS note_relations (
 -- Action items
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS action_items (
-  id                   TEXT PRIMARY KEY,
-  title                TEXT NOT NULL,
-  body                 TEXT,
-  source_note_id       TEXT REFERENCES notes(id) ON DELETE SET NULL,
-  assigned_entity_id   TEXT REFERENCES entities(id) ON DELETE SET NULL,
-  due_date             TEXT,
-  status               TEXT NOT NULL DEFAULT 'open'
-                       CHECK(status IN ('open','in_progress','done','cancelled')),
-  extraction_type      TEXT NOT NULL DEFAULT 'manual'
-                       CHECK(extraction_type IN ('manual','ai_extracted')),
-  confidence           REAL NOT NULL DEFAULT 1.0,
-  created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  completed_at         TEXT
+  id                    TEXT PRIMARY KEY,
+  title                 TEXT NOT NULL,
+  body                  TEXT,
+  source_note_id        TEXT REFERENCES notes(id) ON DELETE SET NULL,
+  assigned_entity_id    TEXT REFERENCES entities(id) ON DELETE SET NULL,
+  parent_id             TEXT REFERENCES action_items(id) ON DELETE SET NULL,
+  project_entity_id     TEXT REFERENCES entities(id) ON DELETE SET NULL,
+  contexts              TEXT NOT NULL DEFAULT '[]',
+  energy_level          TEXT CHECK(energy_level IN ('low','medium','high') OR energy_level IS NULL),
+  is_waiting_for        INTEGER NOT NULL DEFAULT 0,
+  is_next_action        INTEGER NOT NULL DEFAULT 0,
+  waiting_for_entity_id TEXT REFERENCES entities(id) ON DELETE SET NULL,
+  due_date              TEXT,
+  status                TEXT NOT NULL DEFAULT 'open'
+                        CHECK(status IN ('open','in_progress','done','cancelled','someday')),
+  extraction_type       TEXT NOT NULL DEFAULT 'manual'
+                        CHECK(extraction_type IN ('manual','ai_extracted')),
+  confidence            REAL NOT NULL DEFAULT 1.0,
+  created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at            TEXT,
+  completed_at          TEXT
 );
 
 -- ─────────────────────────────────────────────
@@ -257,6 +265,8 @@ CREATE INDEX IF NOT EXISTS idx_note_relations_target    ON note_relations(target
 CREATE INDEX IF NOT EXISTS idx_action_items_status      ON action_items(status);
 CREATE INDEX IF NOT EXISTS idx_action_items_source_note ON action_items(source_note_id);
 CREATE INDEX IF NOT EXISTS idx_action_items_assigned    ON action_items(assigned_entity_id);
+-- idx_action_items_parent, idx_action_items_project, idx_action_items_waiting are created by
+-- migration 0008 (after the GTD columns are added to existing DBs).
 
 CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_at);
 -- idx_calendar_events_source_id is created by migration 0005 after source_id is added to existing DBs

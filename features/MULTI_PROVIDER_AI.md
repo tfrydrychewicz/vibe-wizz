@@ -342,9 +342,9 @@ Replace every hardcoded model constant with a `callWithFallback` call:
 - [x] If all chain entries fail, actionable error: "No AI models available. Open Settings → AI Providers to add an API key."
 
 ### Phase H — Cleanup
-- [ ] Remove `openai_api_key` and `anthropic_api_key` from the `settings` table knowledge (settings:get/set still works but UI no longer writes them)
-- [ ] Remove the `AVAILABLE_MODELS` export from `chat.ts` (replaced by dynamic provider list)
-- [ ] Update `CLAUDE.md` and `DESIGN.md` with new IPC channels, architecture, and completed checklist items
+- [x] Remove `openai_api_key` and `anthropic_api_key` from the `settings` table knowledge (settings:get/set still works but UI no longer writes them)
+- [x] Remove the `AVAILABLE_MODELS` export from `chat.ts` (replaced by dynamic provider list)
+- [x] Update `CLAUDE.md` and `DESIGN.md` with new IPC channels, architecture, and completed checklist items
 
 ---
 

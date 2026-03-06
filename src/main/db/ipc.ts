@@ -5,6 +5,7 @@ import { scheduleNer, scheduleEmbeddingOnly, processAllNotes } from '../embeddin
 import { runClusterBatchNow } from '../embedding/scheduler'
 import { embedTexts } from '../embedding/embedder'
 import { extractActionItems } from '../embedding/actionExtractor'
+import { deriveTaskAttributes } from '../embedding/taskClarifier'
 import { pushToRenderer } from '../push'
 import { sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField } from '../embedding/chat'
 import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
@@ -991,33 +992,118 @@ export function registerDbIpcHandlers(): void {
 
   // ─── Action Items ─────────────────────────────────────────────────────────────
 
-  /**
-   * action-items:list — returns action items, optionally filtered by status or source note.
-   * Non-cancelled items are returned by default. Includes source note title and assignee name.
-   */
-  ipcMain.handle('action-items:list', (_event, opts?: { status?: string; source_note_id?: string }) => {
-    const db = getDatabase()
-    const SELECT = `
-      SELECT ai.id, ai.title, ai.status, ai.extraction_type, ai.confidence,
-             ai.created_at, ai.completed_at, ai.source_note_id, ai.assigned_entity_id, ai.due_date,
-             n.title AS source_note_title, e.name AS assigned_entity_name
-      FROM action_items ai
-      LEFT JOIN notes n ON ai.source_note_id = n.id
-      LEFT JOIN entities e ON ai.assigned_entity_id = e.id`
+  /** Shared SELECT with all GTD fields and JOIN columns. */
+  const ACTION_SELECT = `
+    SELECT
+      ai.id, ai.title, ai.status, ai.extraction_type, ai.confidence,
+      ai.created_at, ai.updated_at, ai.completed_at,
+      ai.source_note_id, ai.assigned_entity_id, ai.due_date,
+      ai.parent_id, ai.project_entity_id,
+      ai.contexts, ai.energy_level, ai.is_waiting_for, ai.is_next_action, ai.waiting_for_entity_id,
+      n.title  AS source_note_title,
+      e.name   AS assigned_entity_name,
+      p.name   AS project_name,
+      wf.name  AS waiting_for_entity_name,
+      (SELECT COUNT(*) FROM action_items sub WHERE sub.parent_id = ai.id)                               AS subtask_count,
+      (SELECT COUNT(*) FROM action_items sub WHERE sub.parent_id = ai.id AND sub.status NOT IN ('done','cancelled')) AS open_subtask_count
+    FROM action_items ai
+    LEFT JOIN notes    n  ON ai.source_note_id        = n.id
+    LEFT JOIN entities e  ON ai.assigned_entity_id    = e.id
+    LEFT JOIN entities p  ON ai.project_entity_id     = p.id
+    LEFT JOIN entities wf ON ai.waiting_for_entity_id = wf.id`
 
-    if (opts?.source_note_id) {
+  /**
+   * action-items:list — returns action items with all GTD fields.
+   * Supports filtering by: status, source_note_id, project_entity_id,
+   * is_waiting_for, parent_id, status_multi (array).
+   * Excludes cancelled/someday by default.
+   */
+  ipcMain.handle(
+    'action-items:list',
+    (
+      _event,
+      opts?: {
+        status?: string
+        status_multi?: string[]
+        source_note_id?: string
+        project_entity_id?: string | null
+        is_waiting_for?: boolean
+        is_next_action?: boolean
+        has_assignee?: boolean
+        no_assignee?: boolean
+        has_project?: boolean
+        parent_id?: string | null
+      },
+    ) => {
+      const db = getDatabase()
+      const where: string[] = []
+      const params: unknown[] = []
+
+      if (opts?.source_note_id) {
+        where.push("ai.source_note_id = ? AND ai.status NOT IN ('cancelled')")
+        params.push(opts.source_note_id)
+      } else if (opts?.status_multi && opts.status_multi.length > 0) {
+        const ph = opts.status_multi.map(() => '?').join(',')
+        where.push(`ai.status IN (${ph})`)
+        params.push(...opts.status_multi)
+      } else if (opts?.status) {
+        where.push('ai.status = ?')
+        params.push(opts.status)
+      } else {
+        where.push("ai.status NOT IN ('cancelled')")
+      }
+
+      if ('project_entity_id' in (opts ?? {})) {
+        if (opts!.project_entity_id === null) {
+          where.push('ai.project_entity_id IS NULL')
+        } else {
+          where.push('ai.project_entity_id = ?')
+          params.push(opts!.project_entity_id)
+        }
+      }
+
+      if (opts?.is_waiting_for !== undefined) {
+        where.push('ai.is_waiting_for = ?')
+        params.push(opts.is_waiting_for ? 1 : 0)
+      }
+
+      if (opts?.is_next_action !== undefined) {
+        where.push('ai.is_next_action = ?')
+        params.push(opts.is_next_action ? 1 : 0)
+      }
+
+      if (opts?.has_assignee) {
+        where.push('ai.assigned_entity_id IS NOT NULL')
+      }
+
+      if (opts?.no_assignee) {
+        where.push('ai.assigned_entity_id IS NULL')
+      }
+
+      if (opts?.has_project) {
+        where.push('ai.project_entity_id IS NOT NULL')
+      }
+
+      if ('parent_id' in (opts ?? {})) {
+        if (opts!.parent_id === null) {
+          where.push('ai.parent_id IS NULL')
+        } else {
+          where.push('ai.parent_id = ?')
+          params.push(opts!.parent_id)
+        }
+      }
+
+      const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
       return db
-        .prepare(`${SELECT} WHERE ai.source_note_id = ? AND ai.status != 'cancelled' ORDER BY ai.created_at DESC`)
-        .all(opts.source_note_id)
-    }
-    if (opts?.status) {
-      return db
-        .prepare(`${SELECT} WHERE ai.status = ? ORDER BY ai.created_at DESC`)
-        .all(opts.status)
-    }
-    return db
-      .prepare(`${SELECT} WHERE ai.status != 'cancelled' ORDER BY ai.created_at DESC`)
-      .all()
+        .prepare(`${ACTION_SELECT} ${clause} ORDER BY ai.due_date ASC NULLS LAST, ai.created_at DESC`)
+        .all(...(params as (string | number | null)[]))
+    },
+  )
+
+  /** action-items:get — fetches a single action item with all GTD fields and joins. */
+  ipcMain.handle('action-items:get', (_event, { id }: { id: string }) => {
+    const db = getDatabase()
+    return db.prepare(`${ACTION_SELECT} WHERE ai.id = ?`).get(id) ?? null
   })
 
   /** action-items:create — creates a new action item and returns the full row with joins. */
@@ -1029,42 +1115,48 @@ export function registerDbIpcHandlers(): void {
         title: string
         source_note_id?: string | null
         assigned_entity_id?: string | null
+        parent_id?: string | null
+        project_entity_id?: string | null
+        contexts?: string[]
+        energy_level?: 'low' | 'medium' | 'high' | null
+        is_waiting_for?: boolean
+        waiting_for_entity_id?: string | null
         due_date?: string | null
         extraction_type?: string
         confidence?: number
-      }
+      },
     ) => {
       const db = getDatabase()
       const id = randomUUID()
+      const contextsJson = JSON.stringify(opts.contexts ?? [])
       db.prepare(
-        `INSERT INTO action_items (id, title, source_note_id, assigned_entity_id, due_date, extraction_type, confidence)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO action_items
+           (id, title, source_note_id, assigned_entity_id, parent_id, project_entity_id,
+            contexts, energy_level, is_waiting_for, waiting_for_entity_id,
+            due_date, extraction_type, confidence)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         opts.title,
         opts.source_note_id ?? null,
         opts.assigned_entity_id ?? null,
+        opts.parent_id ?? null,
+        opts.project_entity_id ?? null,
+        contextsJson,
+        opts.energy_level ?? null,
+        opts.is_waiting_for ? 1 : 0,
+        opts.waiting_for_entity_id ?? null,
         opts.due_date ?? null,
         opts.extraction_type ?? 'manual',
-        opts.confidence ?? 1.0
+        opts.confidence ?? 1.0,
       )
-      const row = db
-        .prepare(
-          `SELECT ai.id, ai.title, ai.status, ai.extraction_type, ai.confidence,
-                  ai.created_at, ai.completed_at, ai.source_note_id, ai.assigned_entity_id, ai.due_date,
-                  n.title AS source_note_title, e.name AS assigned_entity_name
-           FROM action_items ai
-           LEFT JOIN notes n ON ai.source_note_id = n.id
-           LEFT JOIN entities e ON ai.assigned_entity_id = e.id
-           WHERE ai.id = ?`
-        )
-        .get(id)
+      const row = db.prepare(`${ACTION_SELECT} WHERE ai.id = ?`).get(id)
       pushToRenderer('action:created', { actionId: id })
       return row
-    }
+    },
   )
 
-  /** action-items:update — updates status, title, assignee, or due date. */
+  /** action-items:update — updates any task fields. Always stamps updated_at. */
   ipcMain.handle(
     'action-items:update',
     (
@@ -1074,17 +1166,21 @@ export function registerDbIpcHandlers(): void {
         title?: string
         status?: string
         assigned_entity_id?: string | null
+        parent_id?: string | null
+        project_entity_id?: string | null
+        contexts?: string[]
+        energy_level?: 'low' | 'medium' | 'high' | null
+        is_waiting_for?: boolean
+        is_next_action?: boolean
+        waiting_for_entity_id?: string | null
         due_date?: string | null
-      }
+      },
     ) => {
       const db = getDatabase()
       const sets: string[] = []
       const params: unknown[] = []
 
-      if (opts.title !== undefined) {
-        sets.push('title = ?')
-        params.push(opts.title)
-      }
+      if (opts.title !== undefined) { sets.push('title = ?'); params.push(opts.title) }
       if (opts.status !== undefined) {
         sets.push('status = ?')
         params.push(opts.status)
@@ -1094,44 +1190,62 @@ export function registerDbIpcHandlers(): void {
           sets.push('completed_at = NULL')
         }
       }
-      if ('assigned_entity_id' in opts) {
-        sets.push('assigned_entity_id = ?')
-        params.push(opts.assigned_entity_id ?? null)
-      }
-      if ('due_date' in opts) {
-        sets.push('due_date = ?')
-        params.push(opts.due_date ?? null)
-      }
+      if ('assigned_entity_id' in opts) { sets.push('assigned_entity_id = ?'); params.push(opts.assigned_entity_id ?? null) }
+      if ('parent_id' in opts) { sets.push('parent_id = ?'); params.push(opts.parent_id ?? null) }
+      if ('project_entity_id' in opts) { sets.push('project_entity_id = ?'); params.push(opts.project_entity_id ?? null) }
+      if ('contexts' in opts) { sets.push('contexts = ?'); params.push(JSON.stringify(opts.contexts ?? [])) }
+      if ('energy_level' in opts) { sets.push('energy_level = ?'); params.push(opts.energy_level ?? null) }
+      if ('is_waiting_for' in opts) { sets.push('is_waiting_for = ?'); params.push(opts.is_waiting_for ? 1 : 0) }
+      if ('is_next_action' in opts) { sets.push('is_next_action = ?'); params.push(opts.is_next_action ? 1 : 0) }
+      if ('waiting_for_entity_id' in opts) { sets.push('waiting_for_entity_id = ?'); params.push(opts.waiting_for_entity_id ?? null) }
+      if ('due_date' in opts) { sets.push('due_date = ?'); params.push(opts.due_date ?? null) }
 
       if (!sets.length) return { ok: true }
       sets.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')")
       params.push(opts.id)
       db.prepare(`UPDATE action_items SET ${sets.join(', ')} WHERE id = ?`).run(...(params as (string | number | null)[]))
 
+      const row = db.prepare('SELECT source_note_id, status FROM action_items WHERE id = ?').get(opts.id) as
+        | { source_note_id: string | null; status: string }
+        | undefined
+
+      pushToRenderer('action:updated', { actionId: opts.id, status: row?.status, sourceNoteId: row?.source_note_id ?? null })
       if (opts.status !== undefined) {
-        const row = db
-          .prepare('SELECT source_note_id FROM action_items WHERE id = ?')
-          .get(opts.id) as { source_note_id: string | null } | undefined
-        pushToRenderer('action:status-changed', {
-          actionId: opts.id,
-          status: opts.status,
-          sourceNoteId: row?.source_note_id ?? null,
-        })
+        pushToRenderer('action:status-changed', { actionId: opts.id, status: opts.status, sourceNoteId: row?.source_note_id ?? null })
       }
 
       return { ok: true }
-    }
+    },
+  )
+
+  /**
+   * action-items:derive-attributes — uses AI to derive GTD attributes (project, assignee,
+   * due date, contexts, energy level, waiting-for) from a task's text and its surrounding
+   * note context. Returns DerivedTaskAttributes; confidence = 0 on failure.
+   */
+  ipcMain.handle(
+    'action-items:derive-attributes',
+    async (
+      _event,
+      { taskText, noteContext, noteId }: { taskText: string; noteContext: string; noteId: string },
+    ) => {
+      try {
+        return await deriveTaskAttributes(taskText, noteContext, noteId)
+      } catch {
+        return { project_entity_id: null, project_name: null, assigned_entity_id: null, assigned_entity_name: null, due_date: null, contexts: [], energy_level: null, is_waiting_for: false, waiting_for_entity_id: null, waiting_for_entity_name: null, confidence: 0 }
+      }
+    },
   )
 
   /**
    * notes:extract-actions — uses Claude Haiku to extract action items from note body_plain.
-   * Called on-demand by the /action slash command in the editor.
-   * Returns { heading: string, items: string[] } — heading and titles are in the note's language.
+   * Called on-demand by the /task slash command in the editor.
+   * Returns { heading: string, items: ExtractedAction[] } — items include pre-derived GTD attributes.
    */
   ipcMain.handle('notes:extract-actions', async (_event, { body_plain }: { body_plain: string }) => {
     try {
       const extracted = await extractActionItems('', body_plain)
-      return { heading: extracted.heading, items: extracted.items.map((e) => e.title) }
+      return { heading: extracted.heading, items: extracted.items }
     } catch {
       return { heading: 'Action Items', items: [] }
     }
@@ -1390,6 +1504,7 @@ export function registerDbIpcHandlers(): void {
     db.prepare('DELETE FROM action_items WHERE id = ?').run(id)
 
     if (noteId) pushToRenderer('action:unlinked', { actionId: id, noteId })
+    pushToRenderer('action:deleted', { actionId: id })
 
     return { ok: true }
   })
@@ -1831,9 +1946,11 @@ export function registerDbIpcHandlers(): void {
             .prepare(
               `SELECT ai.id, ai.title, ai.status, ai.due_date,
                       e.name as assigned_entity_name,
+                      ai.project_entity_id, pe.name as project_name,
                       ai.source_note_id, n.title as source_note_title
                FROM action_items ai
                LEFT JOIN entities e ON e.id = ai.assigned_entity_id
+               LEFT JOIN entities pe ON pe.id = ai.project_entity_id AND pe.trashed_at IS NULL
                LEFT JOIN notes n ON n.id = ai.source_note_id
                WHERE ai.status IN ('open', 'in_progress')
                ORDER BY ai.due_date ASC NULLS LAST, ai.created_at DESC

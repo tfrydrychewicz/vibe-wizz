@@ -51,7 +51,9 @@ import { MAX_FILE_SIZE } from '../composables/useFileAttachment'
 import { TaskList } from '@tiptap/extension-task-list'
 import { TaskItem } from '@tiptap/extension-task-item'
 import ActionTaskItem from './ActionTaskItem.vue'
+import TaskInlineDetail from './TaskInlineDetail.vue'
 import { setCurrentNoteId, registerPromoteHandler } from '../stores/taskActionStore'
+import { taskDataCache, derivingIds, registerShowInlineDetailHandler, registerUnlinkHandler } from '../stores/taskInlineDetailStore'
 import ToolbarDropdown from './ToolbarDropdown.vue'
 import AutoMentionPopup from './AutoMentionPopup.vue'
 import { AutoMentionDecoration } from '../extensions/AutoMentionDecoration'
@@ -471,6 +473,9 @@ const popupAnchorRect = ref<DOMRect | null>(null)
 const popupNoteId = ref<string | null>(null)
 const popupNoteAnchorRect = ref<DOMRect | null>(null)
 
+const popupTaskId = ref<string | null>(null)
+const popupTaskAnchorRect = ref<DOMRect | null>(null)
+
 registerMentionClickHandler((id, rect) => {
   popupEntityId.value = id
   popupAnchorRect.value = rect
@@ -479,6 +484,32 @@ registerMentionClickHandler((id, rect) => {
 registerNoteLinkClickHandler((id, rect) => {
   popupNoteId.value = id
   popupNoteAnchorRect.value = rect
+})
+
+registerShowInlineDetailHandler((id, rect) => {
+  popupTaskId.value = id
+  popupTaskAnchorRect.value = rect
+})
+
+registerUnlinkHandler((actionId) => {
+  if (!editor.value) return
+  const { state, view } = editor.value
+  const tr = state.tr
+  let found = false
+  state.doc.descendants((node, pos) => {
+    if (node.type.name === 'taskItem' && node.attrs.actionId === actionId) {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, actionId: null })
+      found = true
+      return false
+    }
+    return true
+  })
+  if (found) {
+    view.dispatch(tr)
+    scheduleSave()
+  }
+  taskDataCache.delete(actionId)
+  popupTaskId.value = null
 })
 
 function buildMentionSuggestion() {
@@ -574,7 +605,17 @@ function buildNoteLinkSuggestion() {
 }
 
 const SLASH_COMMANDS: SlashCommandItem[] = [
-  { id: 'action', label: 'Extract action items', description: 'AI-extract tasks and insert as a list', icon: 'sparkles' },
+  {
+    id: 'task',
+    label: 'Task',
+    description: 'Add or extract tasks',
+    icon: 'check-square',
+    subItems: [
+      { id: 'task:extract', label: 'Extract tasks (AI)', description: 'AI-extract tasks and insert as a list', icon: 'sparkles' },
+      { id: 'task:blank', label: 'Insert blank task', description: 'Insert a single empty task item', icon: 'check-square' },
+    ],
+  },
+  { id: 'action', label: 'Extract action items', description: 'AI-extract tasks (alias)', icon: 'sparkles' },
   { id: 'date', label: 'Insert date', description: 'Pick a date to insert at cursor', icon: 'calendar' },
 ]
 
@@ -586,17 +627,55 @@ async function extractAndInsertActions(
   try {
     const result = (await window.api.invoke('notes:extract-actions', { body_plain: bodyPlain })) as {
       heading: string
-      items: string[]
+      items: Array<{
+        title: string
+        project_entity_id: string | null
+        project_name: string | null
+        due_date: string | null
+        contexts: string[]
+        energy_level: string | null
+        confidence: number
+      }>
     }
     if (!result.items.length) return
+
+    // Create DB records immediately so each task item is linked from the start
+    const createdItems = await Promise.all(
+      result.items.map(async (item) => {
+        const useGtd = (item.confidence ?? 0) >= 0.5
+        const row = (await window.api.invoke('action-items:create', {
+          title: item.title,
+          source_note_id: props.noteId ?? null,
+          extraction_type: 'ai_extracted',
+          confidence: item.confidence ?? 0,
+          ...(useGtd
+            ? {
+                project_entity_id: item.project_entity_id ?? null,
+                due_date: item.due_date ?? null,
+                contexts: item.contexts ?? [],
+                energy_level: item.energy_level ?? null,
+              }
+            : {}),
+        })) as { id: string }
+        // Pre-populate the badge cache so chips render immediately
+        taskDataCache.set(row.id, {
+          title: item.title,
+          status: 'open',
+          project_name: useGtd ? (item.project_name ?? null) : null,
+          due_date: useGtd ? (item.due_date ?? null) : null,
+        })
+        return { id: row.id, title: item.title }
+      })
+    )
+
     ed.chain().focus().insertContent([
       { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: result.heading }] },
       {
         type: 'taskList',
-        content: result.items.map((t) => ({
+        content: createdItems.map((item) => ({
           type: 'taskItem',
-          attrs: { checked: false, actionId: null },
-          content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }],
+          attrs: { checked: false, actionId: item.id },
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: item.title }] }],
         })),
       },
     ]).run()
@@ -651,16 +730,31 @@ function buildSlashCommandSuggestion() {
     char: '/',
     allowSpaces: false,
     startOfLine: false,
-    items: ({ query }: { query: string }): SlashCommandItem[] =>
-      SLASH_COMMANDS.filter((c) => c.label.toLowerCase().includes(query.toLowerCase())),
+    items: ({ query }: { query: string }): SlashCommandItem[] => {
+      const q = query.toLowerCase()
+      return SLASH_COMMANDS.filter((c) =>
+        c.label.toLowerCase().includes(q) ||
+        c.subItems?.some((s) => s.label.toLowerCase().includes(q))
+      )
+    },
     command: ({ editor: ed, range, props: item }: { editor: { chain(): { focus(): { deleteRange(r: { from: number; to: number }): { run(): void } } } }; range: { from: number; to: number }; props: SlashCommandItem }) => {
       ed.chain().focus().deleteRange(range).run()
-      if (item.id === 'action') {
+      if (item.id === 'action' || item.id === 'task:extract') {
         const bodyPlain = (editor.value?.getText()) ?? ''
         void extractAndInsertActions(
           ed as unknown as { chain(): { focus(): { insertContent(c: unknown): { run(): void } } } },
           bodyPlain
         )
+      } else if (item.id === 'task:blank') {
+        ;(ed as unknown as { chain(): { focus(): { insertContent(c: unknown): { run(): void } } } })
+          .chain().focus().insertContent({
+            type: 'taskList',
+            content: [{
+              type: 'taskItem',
+              attrs: { checked: false, actionId: null },
+              content: [{ type: 'paragraph' }],
+            }],
+          }).run()
       } else if (item.id === 'date') {
         openDatePicker()
       }
@@ -780,6 +874,7 @@ const editor = useEditor({
           ...this.parent?.(),
           actionId: {
             default: null,
+            keepOnSplit: false,
             parseHTML: (el) => el.getAttribute('data-action-id') ?? null,
             renderHTML: (attrs) => (attrs.actionId ? { 'data-action-id': attrs.actionId } : {}),
           },
@@ -1203,7 +1298,7 @@ function onInsertAutoMention(payload: {
 
 // Register the promote handler — called when the ActionTaskItem "Add to dashboard" button is clicked.
 // Uses the module-level store so the NodeView (which runs outside Vue's component tree) can call it.
-registerPromoteHandler(async (taskText: string, pos: number) => {
+registerPromoteHandler(async (taskText: string, pos: number, badgeRect: DOMRect) => {
   const created = (await window.api.invoke('action-items:create', {
     title: taskText,
     source_note_id: props.noteId,
@@ -1221,12 +1316,63 @@ registerPromoteHandler(async (taskText: string, pos: number) => {
   })
   view.dispatch(tr)
   scheduleSave()
+
+  // Fire-and-forget AI attribute derivation
+  derivingIds.add(created.id)
+  try {
+    const noteContext = editor.value?.getText() ?? ''
+    const derived = (await window.api.invoke('action-items:derive-attributes', {
+      taskText,
+      noteContext,
+      noteId: props.noteId,
+    })) as {
+      project_entity_id: string | null
+      project_name: string | null
+      assigned_entity_id: string | null
+      due_date: string | null
+      contexts: string[]
+      energy_level: 'low' | 'medium' | 'high' | null
+      is_waiting_for: boolean
+      waiting_for_entity_id: string | null
+      confidence: number
+    }
+
+    if (derived.confidence >= 0.5) {
+      await window.api.invoke('action-items:update', {
+        id: created.id,
+        project_entity_id: derived.project_entity_id,
+        assigned_entity_id: derived.assigned_entity_id,
+        due_date: derived.due_date,
+        contexts: derived.contexts,
+        energy_level: derived.energy_level,
+        is_waiting_for: derived.is_waiting_for ? 1 : 0,
+        waiting_for_entity_id: derived.waiting_for_entity_id,
+      })
+    }
+
+    // Update cache so the chip reflects derived attributes
+    taskDataCache.set(created.id, {
+      title: taskText,
+      status: 'open',
+      project_name: derived.confidence >= 0.5 ? derived.project_name : null,
+      due_date: derived.confidence >= 0.5 ? derived.due_date : null,
+    })
+
+    // Open inline detail popup so user can review (confidence >= 0.5) or fill in manually
+    popupTaskId.value = created.id
+    popupTaskAnchorRect.value = badgeRect
+  } finally {
+    derivingIds.delete(created.id)
+  }
 })
 
 // Sync task item checked state when an action item's status changes from the dashboard.
 const unsubscribeActionStatus = window.api.on('action:status-changed', (...args: unknown[]) => {
   const { actionId, status } = args[0] as { actionId: string; status: string }
   syncTaskItemChecked(actionId, status === 'done')
+  // Update cache so the chip reflects the new status immediately
+  const cached = taskDataCache.get(actionId)
+  if (cached) taskDataCache.set(actionId, { ...cached, status: status as typeof cached.status })
 })
 
 // Clear the actionId attribute on the linked task item when the action is deleted from the dashboard.
@@ -1250,9 +1396,8 @@ const unsubscribeActionUnlinked = window.api.on('action:unlinked', (...args: unk
   }
 })
 
-// Called after every loadNote to reconcile task-item checked states with the DB.
-// Handles the case where the user changed action statuses in the dashboard while
-// the note was not mounted (NoteEditor unmounted → push event was never received).
+// Called after every loadNote to reconcile task-item checked states with the DB
+// and populate taskDataCache so ActionTaskItem chips show live metadata.
 async function syncTaskItemsWithDB(): Promise<void> {
   if (!editor.value) return
   const linked: { pos: number; actionId: string; checked: boolean }[] = []
@@ -1263,9 +1408,26 @@ async function syncTaskItemsWithDB(): Promise<void> {
     return true
   })
   if (!linked.length) return
-  const statuses = (await window.api.invoke('action-items:get-statuses', {
-    ids: linked.map((l) => l.actionId),
-  })) as Record<string, string>
+
+  const [statuses, summaries] = await Promise.all([
+    window.api.invoke('action-items:get-statuses', {
+      ids: linked.map((l) => l.actionId),
+    }) as Promise<Record<string, string>>,
+    window.api.invoke('action-items:list', { source_note_id: props.noteId }) as Promise<Array<{
+      id: string; title: string; status: string; project_name: string | null; due_date: string | null
+    }>>,
+  ])
+
+  // Populate taskDataCache for the chips
+  for (const item of summaries) {
+    taskDataCache.set(item.id, {
+      title: item.title,
+      status: item.status as 'open' | 'in_progress' | 'done' | 'cancelled' | 'someday',
+      project_name: item.project_name,
+      due_date: item.due_date,
+    })
+  }
+
   const { state, view } = editor.value
   const tr = state.tr
   let changed = false
@@ -1786,6 +1948,15 @@ onBeforeUnmount(() => {
       :note-id="popupNoteId"
       :anchor-rect="popupNoteAnchorRect"
       @close="popupNoteId = null"
+      @open-note="emit('open-note', $event)"
+    />
+
+    <TaskInlineDetail
+      v-if="popupTaskId && popupTaskAnchorRect"
+      :key="`task-inline-${popupTaskId}`"
+      :action-id="popupTaskId"
+      :anchor-rect="popupTaskAnchorRect"
+      @close="popupTaskId = null"
       @open-note="emit('open-note', $event)"
     />
 

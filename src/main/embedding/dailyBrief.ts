@@ -31,6 +31,8 @@ type ActionRow = {
   assigned_entity_id: string | null
   assigned_entity_name: string | null
   assigned_entity_type_id: string | null
+  project_entity_id: string | null
+  project_name: string | null
   source_note_title: string | null
   source_note_id: string | null
 }
@@ -81,9 +83,11 @@ export async function generateDailyBrief(date: string): Promise<string> {
               COALESCE(ai.updated_at, ai.created_at) AS last_activity,
               ai.assigned_entity_id,
               e.name AS assigned_entity_name, e.type_id AS assigned_entity_type_id,
+              ai.project_entity_id, pe.name AS project_name,
               ai.source_note_id, n.title AS source_note_title
        FROM action_items ai
        LEFT JOIN entities e ON e.id = ai.assigned_entity_id AND e.trashed_at IS NULL
+       LEFT JOIN entities pe ON pe.id = ai.project_entity_id AND pe.trashed_at IS NULL
        LEFT JOIN notes n ON n.id = ai.source_note_id AND n.archived_at IS NULL
        WHERE ai.status IN ('open', 'in_progress')
        ORDER BY
@@ -94,29 +98,20 @@ export async function generateDailyBrief(date: string): Promise<string> {
     )
     .all() as ActionRow[]
 
-  // ── Follow-up intelligence: stale action items ───────────────────────────────
+  // ── Follow-up intelligence: stale action items (GTD-aware) ──────────────────
   const stalenessRaw = db
     .prepare("SELECT value FROM settings WHERE key = 'followup_staleness_days'")
     .get() as { value: string } | undefined
   const stalenessDays = Math.max(1, parseInt(stalenessRaw?.value ?? '7', 10))
 
-  const assigneeTypeRaw = db
-    .prepare("SELECT value FROM settings WHERE key = 'followup_assignee_entity_type_id'")
-    .get() as { value: string } | undefined
-  const assigneeTypeId = assigneeTypeRaw?.value || null
-
   const _staleCutoff = new Date(`${date}T12:00:00`)
   _staleCutoff.setDate(_staleCutoff.getDate() - stalenessDays)
   const staleCutoffStr = _staleCutoff.toISOString().slice(0, 10)
 
-  const staleFollowups = assigneeTypeId
-    ? actionItems.filter(
-        (a) =>
-          a.assigned_entity_type_id === assigneeTypeId &&
-          a.assigned_entity_name !== null &&
-          a.last_activity.slice(0, 10) < staleCutoffStr,
-      )
-    : []
+  // All open/in_progress items with no activity in the staleness window (not just assigned ones)
+  const staleItems = actionItems.filter(
+    (a) => a.last_activity.slice(0, 10) < staleCutoffStr,
+  )
 
   // ── Notes updated in the last 2 days ────────────────────────────────────────
   const recentNotes = db
@@ -199,6 +194,11 @@ export async function generateDailyBrief(date: string): Promise<string> {
 
   function fmtAction(a: ActionRow): string {
     let s = `- ${a.title}`
+    if (a.project_entity_id && a.project_name) {
+      s += ` [project: {{entity:${a.project_entity_id}:${a.project_name}}}]`
+    } else if (a.project_name) {
+      s += ` [project: ${a.project_name}]`
+    }
     if (a.assigned_entity_id && a.assigned_entity_name) {
       s += ` → {{entity:${a.assigned_entity_id}:${a.assigned_entity_name}}}`
     } else if (a.assigned_entity_name) {
@@ -249,19 +249,12 @@ export async function generateDailyBrief(date: string): Promise<string> {
   }
 
   let staleLines = ''
-  if (staleFollowups.length > 0) {
-    staleLines = staleFollowups
+  if (staleItems.length > 0) {
+    staleLines = staleItems
       .map((a) => {
         const days = daysSince(a.last_activity)
-        const entityRef = a.assigned_entity_id && a.assigned_entity_name
-          ? `{{entity:${a.assigned_entity_id}:${a.assigned_entity_name}}}`
-          : a.assigned_entity_name ?? '?'
-        let s = `- "${a.title}" → ${entityRef} (no updates in ${days} day${days !== 1 ? 's' : ''})`
-        if (a.source_note_id && a.source_note_title) {
-          s += ` — from: {{note:${a.source_note_id}:${a.source_note_title}}}`
-        } else if (a.source_note_title) {
-          s += ` — from: "${a.source_note_title}"`
-        }
+        let s = fmtAction(a)
+        s += ` (no updates in ${days} day${days !== 1 ? 's' : ''})`
         return s
       })
       .join('\n')
@@ -287,11 +280,11 @@ export async function generateDailyBrief(date: string): Promise<string> {
     `ACTION ITEMS:\n${actionLines}\n\n` +
     (notesLines ? `RECENT NOTES (last 2 days):\n${notesLines}\n\n` : '') +
     (histLines ? `HISTORICAL CONTEXT FOR 1:1s:\n${histLines}\n\n` : '') +
-    (staleLines ? `STALE FOLLOW-UPS (no updates in ${stalenessDays}+ days):\n${staleLines}\n\n` : '') +
+    (staleLines ? `STALE TASKS (no updates in ${stalenessDays}+ days):\n${staleLines}\n\n` : '') +
     `INSTRUCTIONS:\n` +
     `- Be specific — use real names, titles, and due dates from the data above.\n` +
     `- Flag overdue items prominently in "Needs Attention".\n` +
-    (staleLines ? `- Surface stale follow-ups in "Needs Attention" with the assignee name and days since last update.\n` : '') +
+    (staleLines ? `- Surface stale tasks in "Needs Attention" with their project (if any) and days since last update.\n` : '') +
     `- For 1:1 meetings, mention topics from the historical notes when available.\n` +
     `- Use - [ ] checkbox syntax for every action item line (not - or *).\n` +
     `- Keep the brief concise (aim for 300–600 words total).\n` +

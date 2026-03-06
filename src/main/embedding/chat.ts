@@ -40,6 +40,8 @@ export type ActionItemContext = {
   status: string
   due_date: string | null
   assigned_entity_name: string | null
+  project_entity_id: string | null
+  project_name: string | null
   source_note_id: string | null
   source_note_title: string | null
 }
@@ -163,6 +165,28 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
           type: 'string',
           description: 'Optional note ID this action item comes from',
         },
+        project_entity_id: {
+          type: 'string',
+          description: 'Optional entity ID of the Project this task belongs to',
+        },
+        contexts: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'GTD context tags, e.g. ["@computer", "@phone"]',
+        },
+        energy_level: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description: 'Energy level required for this task',
+        },
+        is_waiting_for: {
+          type: 'boolean',
+          description: 'True if this task is blocked waiting on someone else',
+        },
+        parent_id: {
+          type: 'string',
+          description: 'Optional parent action item ID (for sub-tasks)',
+        },
       },
       required: ['title'],
     },
@@ -178,11 +202,27 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
         title: { type: 'string' },
         status: {
           type: 'string',
-          enum: ['open', 'in_progress', 'done', 'cancelled'],
+          enum: ['open', 'in_progress', 'done', 'cancelled', 'someday'],
           description: 'New status',
         },
         due_date: { type: 'string', description: 'ISO 8601 date or null to clear' },
         assigned_entity_id: { type: 'string', description: 'Entity ID of assignee, or null to clear' },
+        project_entity_id: { type: 'string', description: 'Entity ID of project, or null to clear' },
+        contexts: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'GTD context tags, e.g. ["@computer"]',
+        },
+        energy_level: {
+          type: 'string',
+          enum: ['low', 'medium', 'high'],
+          description: 'Energy level required',
+        },
+        is_waiting_for: {
+          type: 'boolean',
+          description: 'True if blocked waiting on someone else',
+        },
+        parent_id: { type: 'string', description: 'Parent task ID for sub-tasks, or null to clear' },
       },
       required: ['id'],
     },
@@ -286,20 +326,41 @@ function executeTool(toolName: string, input: Record<string, unknown>): Executed
         due_date?: string
         assigned_entity_id?: string
         source_note_id?: string
+        project_entity_id?: string
+        contexts?: string[]
+        energy_level?: 'low' | 'medium' | 'high'
+        is_waiting_for?: boolean
+        parent_id?: string
       }
       const id = randomUUID()
       db.prepare(
-        `INSERT INTO action_items (id, title, source_note_id, assigned_entity_id, due_date, extraction_type, confidence)
-         VALUES (?, ?, ?, ?, ?, 'manual', 1.0)`,
-      ).run(id, inp.title, inp.source_note_id ?? null, inp.assigned_entity_id ?? null, inp.due_date ?? null)
+        `INSERT INTO action_items
+           (id, title, source_note_id, assigned_entity_id, due_date,
+            project_entity_id, contexts, energy_level, is_waiting_for, parent_id,
+            extraction_type, confidence)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', 1.0)`,
+      ).run(
+        id,
+        inp.title,
+        inp.source_note_id ?? null,
+        inp.assigned_entity_id ?? null,
+        inp.due_date ?? null,
+        inp.project_entity_id ?? null,
+        JSON.stringify(inp.contexts ?? []),
+        inp.energy_level ?? null,
+        inp.is_waiting_for ? 1 : 0,
+        inp.parent_id ?? null,
+      )
       const row = db
         .prepare(
-          `SELECT ai.id, ai.title, ai.status, ai.due_date, e.name AS assigned_entity_name
+          `SELECT ai.id, ai.title, ai.status, ai.due_date,
+                  e.name AS assigned_entity_name, pe.name AS project_name
            FROM action_items ai
            LEFT JOIN entities e ON e.id = ai.assigned_entity_id
+           LEFT JOIN entities pe ON pe.id = ai.project_entity_id
            WHERE ai.id = ?`,
         )
-        .get(id) as { id: string; title: string; status: string; due_date: string | null; assigned_entity_name: string | null }
+        .get(id) as { id: string; title: string; status: string; due_date: string | null; assigned_entity_name: string | null; project_name: string | null }
       return { type: 'created_action', payload: row }
     }
 
@@ -310,6 +371,11 @@ function executeTool(toolName: string, input: Record<string, unknown>): Executed
         status?: string
         due_date?: string | null
         assigned_entity_id?: string | null
+        project_entity_id?: string | null
+        contexts?: string[]
+        energy_level?: 'low' | 'medium' | 'high' | null
+        is_waiting_for?: boolean
+        parent_id?: string | null
       }
       const sets: string[] = []
       const params: unknown[] = []
@@ -325,6 +391,11 @@ function executeTool(toolName: string, input: Record<string, unknown>): Executed
       }
       if ('due_date' in updates) { sets.push('due_date = ?'); params.push(updates.due_date ?? null) }
       if ('assigned_entity_id' in updates) { sets.push('assigned_entity_id = ?'); params.push(updates.assigned_entity_id ?? null) }
+      if ('project_entity_id' in updates) { sets.push('project_entity_id = ?'); params.push(updates.project_entity_id ?? null) }
+      if ('contexts' in updates) { sets.push('contexts = ?'); params.push(JSON.stringify(updates.contexts ?? [])) }
+      if ('energy_level' in updates) { sets.push('energy_level = ?'); params.push(updates.energy_level ?? null) }
+      if ('is_waiting_for' in updates) { sets.push('is_waiting_for = ?'); params.push(updates.is_waiting_for ? 1 : 0) }
+      if ('parent_id' in updates) { sets.push('parent_id = ?'); params.push(updates.parent_id ?? null) }
       if (sets.length) {
         params.push(id)
         db.prepare(`UPDATE action_items SET ${sets.join(', ')} WHERE id = ?`)
@@ -332,12 +403,14 @@ function executeTool(toolName: string, input: Record<string, unknown>): Executed
       }
       const row = db
         .prepare(
-          `SELECT ai.id, ai.title, ai.status, ai.due_date, e.name AS assigned_entity_name
+          `SELECT ai.id, ai.title, ai.status, ai.due_date,
+                  e.name AS assigned_entity_name, pe.name AS project_name
            FROM action_items ai
            LEFT JOIN entities e ON e.id = ai.assigned_entity_id
+           LEFT JOIN entities pe ON pe.id = ai.project_entity_id
            WHERE ai.id = ?`,
         )
-        .get(id) as { id: string; title: string; status: string; due_date: string | null; assigned_entity_name: string | null } | undefined
+        .get(id) as { id: string; title: string; status: string; due_date: string | null; assigned_entity_name: string | null; project_name: string | null } | undefined
       if (!row) throw new Error(`Action item with id ${id} not found`)
       return { type: 'updated_action', payload: row }
     }
@@ -394,6 +467,7 @@ function formatCalendarEvent(ev: CalendarEventContext): string {
 
 function formatActionItem(item: ActionItemContext): string {
   let line = `- [id:${item.id}] [${item.status}] "${item.title}"`
+  if (item.project_name) line += ` [project: ${item.project_name}]`
   if (item.due_date) line += ` (due: ${item.due_date})`
   if (item.assigned_entity_name) line += ` → ${item.assigned_entity_name}`
   if (item.source_note_title) line += ` (from: "${item.source_note_title}")`

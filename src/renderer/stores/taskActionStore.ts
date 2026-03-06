@@ -7,7 +7,7 @@
  *   is clicked in an ActionTaskItem NodeView
  */
 
-type PromoteFn = (taskText: string, pos: number) => Promise<void>
+type PromoteFn = (taskText: string, pos: number, rect: DOMRect) => Promise<void>
 
 let _currentNoteId = ''
 let _promoteHandler: PromoteFn | null = null
@@ -24,6 +24,6 @@ export function registerPromoteHandler(fn: PromoteFn): void {
   _promoteHandler = fn
 }
 
-export function firePromote(taskText: string, pos: number): Promise<void> {
-  return _promoteHandler?.(taskText, pos) ?? Promise.resolve()
+export function firePromote(taskText: string, pos: number, rect: DOMRect): Promise<void> {
+  return _promoteHandler?.(taskText, pos, rect) ?? Promise.resolve()
 }
