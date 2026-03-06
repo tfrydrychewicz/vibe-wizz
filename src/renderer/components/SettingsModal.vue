@@ -1054,25 +1054,6 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-border) transparent;
-}
-
-.settings-pane::-webkit-scrollbar {
-  width: 6px;
-}
-
-.settings-pane::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.settings-pane::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
-}
-
-.settings-pane::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-muted);
 }
 
 /* ── Pane header with tabs ────────────────────────────────────────────────── */

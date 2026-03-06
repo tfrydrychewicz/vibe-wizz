@@ -545,8 +545,6 @@ async function save(): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-border) transparent;
 }
 
 /* ── Step 1: provider list ────────────────────────────────────────────────── */
@@ -891,7 +889,6 @@ async function save(): Promise<void> {
   overflow-x: auto;
   max-height: 200px;
   overflow-y: auto;
-  scrollbar-width: thin;
 }
 .script-pre code {
   font-family: 'SF Mono', 'Fira Code', monospace;
