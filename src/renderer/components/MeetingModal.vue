@@ -32,6 +32,7 @@ const emit = defineEmits<{
   deleted: []
   cancel: []
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
+  'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
 }>()
 
 // ── Attendee config ───────────────────────────────────────────────────────────
@@ -40,6 +41,9 @@ interface AttendeeItem {
   name: string
   email: string
   entity_id?: string
+  entity_type_id?: string
+  isTeam?: boolean
+  entityColor?: string | null
 }
 
 interface AttendeeConfig {
@@ -49,6 +53,7 @@ interface AttendeeConfig {
 }
 
 const attendeeConfig = ref<AttendeeConfig | null>(null)
+const teamConfig = ref<AttendeeConfig | null>(null)
 
 // ── Form state ────────────────────────────────────────────────────────────────
 
@@ -272,13 +277,19 @@ function populate(): void {
 
 onMounted(async () => {
   populate()
-  const [typeId, nameField, emailField] = await Promise.all([
+  const [typeId, nameField, emailField, teamTypeId, teamNameField, teamEmailField] = await Promise.all([
     window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_name_field' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_name_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_email_field' }) as Promise<string | null>,
   ])
   if (typeId && nameField && emailField) {
     attendeeConfig.value = { typeId, nameField, emailField }
+  }
+  if (teamTypeId && teamNameField && teamEmailField) {
+    teamConfig.value = { typeId: teamTypeId, nameField: teamNameField, emailField: teamEmailField }
   }
 })
 watch(() => props.event, populate)
@@ -315,6 +326,8 @@ interface EntitySearchResult {
   id: string
   name: string
   type_icon: string
+  type_color: string | null
+  isTeam?: boolean
 }
 
 const attendeeQuery = ref('')
@@ -332,16 +345,35 @@ function updateDropdownPos(): void {
 }
 
 watch(attendeeQuery, async (q) => {
-  if (!attendeeConfig.value || !q.trim()) {
+  if ((!attendeeConfig.value && !teamConfig.value) || !q.trim()) {
     attendeeResults.value = []
     showAttendeeDropdown.value = false
     return
   }
-  attendeeResults.value = (await window.api.invoke('entities:search', {
-    query: q,
-    type_id: attendeeConfig.value.typeId,
-  })) as EntitySearchResult[]
-  if (attendeeResults.value.length > 0) {
+  const searches: Promise<EntitySearchResult[]>[] = []
+  if (attendeeConfig.value) {
+    searches.push(
+      (window.api.invoke('entities:search', { query: q, type_id: attendeeConfig.value.typeId }) as Promise<EntitySearchResult[]>)
+        .then(res => res.map(r => ({ ...r, isTeam: false })))
+    )
+  }
+  if (teamConfig.value) {
+    searches.push(
+      (window.api.invoke('entities:search', { query: q, type_id: teamConfig.value.typeId }) as Promise<EntitySearchResult[]>)
+        .then(res => res.map(r => ({ ...r, isTeam: true })))
+    )
+  }
+  const batches = await Promise.all(searches)
+  // Interleave results: persons first, teams second; deduplicate by id
+  const seen = new Set<string>()
+  const merged: EntitySearchResult[] = []
+  for (const batch of batches) {
+    for (const r of batch) {
+      if (!seen.has(r.id)) { seen.add(r.id); merged.push(r) }
+    }
+  }
+  attendeeResults.value = merged
+  if (merged.length > 0) {
     updateDropdownPos()
     showAttendeeDropdown.value = true
   } else {
@@ -351,7 +383,7 @@ watch(attendeeQuery, async (q) => {
 })
 
 async function selectAttendeeEntity(result: EntitySearchResult): Promise<void> {
-  const cfg = attendeeConfig.value!
+  const cfg = result.isTeam ? teamConfig.value! : attendeeConfig.value!
   const res = (await window.api.invoke('entities:get', { id: result.id })) as {
     entity: { id: string; name: string; fields: string }
   } | null
@@ -361,7 +393,7 @@ async function selectAttendeeEntity(result: EntitySearchResult): Promise<void> {
   const name = cfg.nameField === '__name__' ? entity.name : (fields[cfg.nameField] ?? entity.name)
   const email = cfg.emailField === '__name__' ? entity.name : (fields[cfg.emailField] ?? '')
   if (!attendees.value.some(a => a.entity_id === entity.id)) {
-    attendees.value.push({ name, email, entity_id: entity.id })
+    attendees.value.push({ name, email, entity_id: entity.id, entity_type_id: result.type_id, isTeam: result.isTeam, entityColor: result.type_color })
   }
   attendeeQuery.value = ''
   showAttendeeDropdown.value = false
@@ -369,6 +401,12 @@ async function selectAttendeeEntity(result: EntitySearchResult): Promise<void> {
 
 function closeAttendeeDropdownDelayed(): void {
   window.setTimeout(() => { showAttendeeDropdown.value = false }, 150)
+}
+
+function openAttendeeEntity(e: MouseEvent, a: AttendeeItem): void {
+  if (!a.entity_id || !a.entity_type_id) return
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-entity', { entityId: a.entity_id, typeId: a.entity_type_id, mode })
 }
 
 function onAttendeeSearchKeydown(e: KeyboardEvent): void {
@@ -680,21 +718,36 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
         <div class="field">
           <label class="field-label">Attendees</label>
           <div v-if="attendees.length" class="attendee-list">
-            <div v-for="(a, idx) in attendees" :key="idx" class="attendee-chip">
-              <span class="attendee-name">{{ a.name || a.email }}</span>
+            <component
+              :is="a.entity_id ? 'button' : 'div'"
+              v-for="(a, idx) in attendees"
+              :key="idx"
+              class="attendee-chip"
+              :class="{ 'attendee-chip-clickable': !!a.entity_id }"
+              :style="a.entityColor ? {
+                borderColor: `${a.entityColor}55`,
+                background: `${a.entityColor}18`,
+              } : {}"
+              :title="a.entity_id ? a.email : undefined"
+              @click="a.entity_id ? openAttendeeEntity($event, a) : undefined"
+            >
+              <span
+                class="attendee-name"
+                :style="a.entityColor ? { color: a.entityColor } : {}"
+              >{{ a.name || a.email }}</span>
               <span v-if="a.name && a.email" class="attendee-email">{{ a.email }}</span>
-              <button class="btn-remove" @click="removeAttendee(idx)"><X :size="10" /></button>
-            </div>
+              <button class="btn-remove" @click.stop="removeAttendee(idx)"><X :size="10" /></button>
+            </component>
           </div>
 
-          <!-- Entity search mode -->
-          <template v-if="attendeeConfig">
+          <!-- Entity search mode (person and/or team config set) -->
+          <template v-if="attendeeConfig || teamConfig">
             <div class="attendee-search-wrap">
               <input
                 ref="attendeeSearchInputEl"
                 v-model="attendeeQuery"
                 class="field-input"
-                placeholder="Search entities…"
+                :placeholder="attendeeConfig && teamConfig ? 'Search people and teams…' : attendeeConfig ? 'Search entities…' : 'Search teams…'"
                 autocomplete="off"
                 @keydown="onAttendeeSearchKeydown"
                 @blur="closeAttendeeDropdownDelayed"
@@ -713,8 +766,18 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
                   :class="{ active: i === attendeeDropdownIdx }"
                   @mousedown.prevent="selectAttendeeEntity(r)"
                 >
-                  <LucideIcon :name="r.type_icon" :size="12" />
+                  <LucideIcon :name="r.type_icon" :size="12" :color="r.type_color ?? undefined" />
                   {{ r.name }}
+                  <span
+                    v-if="r.isTeam && r.type_color"
+                    class="attendee-team-badge"
+                    :style="{
+                      color: r.type_color,
+                      background: `${r.type_color}18`,
+                      borderColor: `${r.type_color}44`,
+                    }"
+                  >Team</span>
+                  <span v-else-if="r.isTeam" class="attendee-team-badge">Team</span>
                 </button>
               </div>
             </Teleport>
@@ -1012,6 +1075,20 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
   background: rgba(91, 141, 239, 0.12);
 }
 
+:global(.attendee-team-badge) {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
 /* Attendees */
 
 .attendee-list {
@@ -1031,6 +1108,16 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
   padding: 3px 8px 3px 10px;
   font-size: 12px;
   color: var(--color-text);
+  font-family: inherit;
+  text-align: left;
+}
+
+.attendee-chip-clickable {
+  cursor: pointer;
+}
+
+.attendee-chip-clickable:hover {
+  filter: brightness(1.15);
 }
 
 .attendee-name {

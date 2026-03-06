@@ -253,8 +253,8 @@ function onEntitySaved(entityId: string, name: string): void {
 }
 
 function onOpenEntity({ entityId, typeId, mode }: { entityId: string; typeId: string; mode: OpenMode }): void {
-  if (mode === 'default') {
-    // Switch sidebar to the entity type view on a plain open
+  // Always leave full-screen views (calendar, search, etc.) so the pane area is visible
+  if (mode === 'default' || FULL_SCREEN_VIEWS.has(activeView.value)) {
     activeView.value = typeId
   }
   const et = entityTypes.value.find((t) => t.id === typeId)
@@ -286,7 +286,7 @@ async function onChatOpenEntity({ entityId, mode }: { entityId: string; typeId?:
 }
 
 function onOpenNote({ noteId, title, mode }: { noteId: string; title: string; mode: OpenMode }): void {
-  if (mode === 'default') activeView.value = 'notes'
+  if (mode === 'default' || FULL_SCREEN_VIEWS.has(activeView.value)) activeView.value = 'notes'
   openContent('note', noteId, title, mode, undefined, 'file-text')
 }
 

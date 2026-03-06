@@ -777,7 +777,7 @@ export function registerDbIpcHandlers(): void {
   ipcMain.handle('entities:search', (_event, { query, type_id }: { query: string; type_id?: string }) => {
     const db = getDatabase()
     const params: unknown[] = [`%${query}%`]
-    let sql = `SELECT e.id, e.name, e.type_id, et.name AS type_name, et.icon AS type_icon
+    let sql = `SELECT e.id, e.name, e.type_id, et.name AS type_name, et.icon AS type_icon, et.color AS type_color
                FROM entities e
                JOIN entity_types et ON e.type_id = et.id
                WHERE e.name LIKE ? COLLATE NOCASE
@@ -964,7 +964,7 @@ export function registerDbIpcHandlers(): void {
    * entities:find-by-email — look up a non-trashed entity by an email field value.
    * Used by SyncedEventPopup to match attendee emails to entities.
    * Input:  { email: string, type_id: string, email_field: string }
-   * Returns: { id, name, type_id } or null
+   * Returns: { id, name, type_id, type_color } or null
    */
   ipcMain.handle(
     'entities:find-by-email',
@@ -974,11 +974,13 @@ export function registerDbIpcHandlers(): void {
       const path = `$.${email_field}`
       return db
         .prepare(
-          `SELECT id, name, type_id FROM entities
-           WHERE type_id = ? AND trashed_at IS NULL AND JSON_EXTRACT(fields, ?) = ?
+          `SELECT e.id, e.name, e.type_id, et.color AS type_color
+           FROM entities e
+           JOIN entity_types et ON e.type_id = et.id
+           WHERE e.type_id = ? AND e.trashed_at IS NULL AND JSON_EXTRACT(e.fields, ?) = ?
            LIMIT 1`,
         )
-        .get(type_id, path, email) as { id: string; name: string; type_id: string } | null ?? null
+        .get(type_id, path, email) as { id: string; name: string; type_id: string; type_color: string | null } | null ?? null
     },
   )
 

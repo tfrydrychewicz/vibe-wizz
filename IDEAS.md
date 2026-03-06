@@ -14,8 +14,7 @@ PROMPT
 
 For context read and @CLAUDE.md, @DESIGN.md.
 
-Design a new feature. 
-
+Design a new feature.
 
 
 Remember about reusability and consistency across whole app.

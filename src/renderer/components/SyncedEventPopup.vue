@@ -22,9 +22,9 @@ const emit = defineEmits<{
 const sourceName = ref<string | null>(null)
 
 // ── Attendee → entity resolution ─────────────────────────────────────────────
-// Maps attendee email → { id, name, type_id } when entity mapping is configured
+// Maps attendee email → { id, name, type_id, type_color, isTeam } for person + team lookups
 
-const attendeeEntityMap = ref<Map<string, { id: string; name: string; type_id: string }>>(new Map())
+const attendeeEntityMap = ref<Map<string, { id: string; name: string; type_id: string; type_color: string | null; isTeam: boolean }>>(new Map())
 
 // ── Note link state (mirrors event, but updates locally after linking) ────────
 
@@ -78,12 +78,14 @@ onMounted(async () => {
   setTimeout(() => document.addEventListener('mousedown', onClickOutside), 60)
 
   // Load source display name and entity mapping settings in parallel
-  const [sources, typeId, emailField] = await Promise.all([
+  const [sources, typeId, emailField, teamTypeId, teamEmailField] = await Promise.all([
     props.event.source_id
       ? (window.api.invoke('calendar-sources:list') as Promise<{ id: string; name: string }[]>)
       : Promise.resolve([]),
     window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_email_field' }) as Promise<string | null>,
   ])
 
   if (props.event.source_id && Array.isArray(sources)) {
@@ -91,24 +93,33 @@ onMounted(async () => {
     if (src) sourceName.value = src.name
   }
 
-  // Resolve attendees to entities if mapping is configured
-  if (typeId?.trim() && emailField?.trim()) {
+  // Resolve attendees to person/team entities via email lookup
+  const hasPersonMapping = typeId?.trim() && emailField?.trim()
+  const hasTeamMapping = teamTypeId?.trim() && teamEmailField?.trim()
+  if (hasPersonMapping || hasTeamMapping) {
     const parsed = attendees.value
-    const results = await Promise.all(
-      parsed.map(a =>
-        (window.api.invoke('entities:find-by-email', {
-          email: a.email,
-          type_id: typeId.trim(),
-          email_field: emailField.trim(),
-        }) as Promise<{ id: string; name: string; type_id: string } | null>)
-          .then(entity => ({ email: a.email, entity }))
-          .catch(() => ({ email: a.email, entity: null }))
-      )
+    const map = new Map<string, { id: string; name: string; type_id: string; isTeam: boolean }>()
+    await Promise.all(
+      parsed.map(async a => {
+        // Person lookup takes priority; fall back to team lookup
+        if (hasPersonMapping) {
+          const entity = await (window.api.invoke('entities:find-by-email', {
+            email: a.email,
+            type_id: typeId!.trim(),
+            email_field: emailField!.trim(),
+          }) as Promise<{ id: string; name: string; type_id: string; type_color: string | null } | null>).catch(() => null)
+          if (entity) { map.set(a.email, { ...entity, isTeam: false }); return }
+        }
+        if (hasTeamMapping) {
+          const entity = await (window.api.invoke('entities:find-by-email', {
+            email: a.email,
+            type_id: teamTypeId!.trim(),
+            email_field: teamEmailField!.trim(),
+          }) as Promise<{ id: string; name: string; type_id: string; type_color: string | null } | null>).catch(() => null)
+          if (entity) map.set(a.email, { ...entity, isTeam: true })
+        }
+      })
     )
-    const map = new Map<string, { id: string; name: string; type_id: string }>()
-    for (const { email, entity } of results) {
-      if (entity) map.set(email, entity)
-    }
     attendeeEntityMap.value = map
   }
 })
@@ -216,6 +227,11 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
           <button
             v-if="attendeeEntityMap.get(a.email)"
             class="sp-attendee-chip sp-attendee-entity"
+            :style="attendeeEntityMap.get(a.email)!.type_color ? {
+              color: attendeeEntityMap.get(a.email)!.type_color!,
+              background: `${attendeeEntityMap.get(a.email)!.type_color}18`,
+              borderColor: `${attendeeEntityMap.get(a.email)!.type_color}55`,
+            } : {}"
             :title="a.email"
             @click="openEntity($event, attendeeEntityMap.get(a.email)!)"
           >{{ attendeeEntityMap.get(a.email)!.name }}</button>
@@ -405,15 +421,11 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 }
 
 .sp-attendee-entity {
-  color: var(--color-accent);
-  background: rgba(91, 141, 239, 0.1);
-  border-color: rgba(91, 141, 239, 0.25);
   cursor: pointer;
 }
 
 .sp-attendee-entity:hover {
-  background: rgba(91, 141, 239, 0.18);
-  border-color: rgba(91, 141, 239, 0.45);
+  filter: brightness(1.15);
 }
 
 /* ── Linked note ─────────────────────────────────────────────────────────── */

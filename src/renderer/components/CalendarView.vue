@@ -935,6 +935,7 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
       @deleted="onModalDeleted"
       @cancel="showModal = false"
       @open-note="emit('open-note', $event)"
+      @open-entity="emit('open-entity', $event)"
     />
 
     <!-- Synced event info popup (read-only) -->

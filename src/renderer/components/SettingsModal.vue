@@ -258,30 +258,44 @@ const entityTypes = ref<EntityTypeRow[]>([])
 const attendeeEntityTypeId = ref('')
 const attendeeNameField = ref('')
 const attendeeEmailField = ref('')
+const teamEntityTypeId = ref('')
+const teamNameField = ref('')
+const teamEmailField = ref('')
 
-const selectedEntityFields = computed<FieldDef[]>(() => {
-  if (!attendeeEntityTypeId.value) return []
-  const et = entityTypes.value.find(t => t.id === attendeeEntityTypeId.value)
+function entityFieldsFor(typeId: string): FieldDef[] {
+  if (!typeId) return []
+  const et = entityTypes.value.find(t => t.id === typeId)
   if (!et) return []
   try { return (JSON.parse(et.schema) as { fields: FieldDef[] }).fields ?? [] } catch { return [] }
-})
+}
 
-const nameFieldOptions = computed(() => [
-  { value: '__name__', label: 'Entity Name (primary)' },
-  ...selectedEntityFields.value
-    .filter(f => f.type === 'text' || f.type === 'email')
-    .map(f => ({ value: f.name, label: f.name })),
-])
+const selectedEntityFields = computed<FieldDef[]>(() => entityFieldsFor(attendeeEntityTypeId.value))
+const selectedTeamEntityFields = computed<FieldDef[]>(() => entityFieldsFor(teamEntityTypeId.value))
 
-const emailFieldOptions = computed(() =>
-  selectedEntityFields.value
-    .filter(f => f.type === 'text' || f.type === 'email')
-    .map(f => ({ value: f.name, label: f.name }))
-)
+function nameOptionsFor(fields: FieldDef[]) {
+  return [
+    { value: '__name__', label: 'Entity Name (primary)' },
+    ...fields.filter(f => f.type === 'text' || f.type === 'email').map(f => ({ value: f.name, label: f.name })),
+  ]
+}
+
+function emailOptionsFor(fields: FieldDef[]) {
+  return fields.filter(f => f.type === 'text' || f.type === 'email').map(f => ({ value: f.name, label: f.name }))
+}
+
+const nameFieldOptions = computed(() => nameOptionsFor(selectedEntityFields.value))
+const emailFieldOptions = computed(() => emailOptionsFor(selectedEntityFields.value))
+const teamNameFieldOptions = computed(() => nameOptionsFor(selectedTeamEntityFields.value))
+const teamEmailFieldOptions = computed(() => emailOptionsFor(selectedTeamEntityFields.value))
 
 watch(attendeeEntityTypeId, () => {
   attendeeNameField.value = ''
   attendeeEmailField.value = ''
+})
+
+watch(teamEntityTypeId, () => {
+  teamNameField.value = ''
+  teamEmailField.value = ''
 })
 
 // ── Load & Save ───────────────────────────────────────────────────────────────
@@ -289,7 +303,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes] = await Promise.all([
+  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, teamTypeId, teamNameFieldVal, teamEmailFieldVal, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes] = await Promise.all([
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'deepgram_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'transcription_model' }) as Promise<string | null>,
@@ -301,6 +315,9 @@ onMounted(async () => {
     window.api.invoke('settings:get', { key: 'attendee_entity_type_id' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_name_field' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'attendee_email_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_entity_type_id' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_name_field' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'team_email_field' }) as Promise<string | null>,
     window.api.invoke('entity-types:list') as Promise<EntityTypeRow[]>,
     window.api.invoke('settings:get', { key: 'save_debug_audio' }) as Promise<string | null>,
     window.api.invoke('debug:get-audio-folder') as Promise<string>,
@@ -320,6 +337,7 @@ onMounted(async () => {
   meetingNoteTitleTemplate.value = noteTitleTemplate ?? '{date} - {title}'
   entityTypes.value = etList ?? []
   attendeeEntityTypeId.value = attTypeId ?? ''
+  teamEntityTypeId.value = teamTypeId ?? ''
   saveDebugAudio.value = debugAudio === 'true'
   debugAudioFolder.value = folder ?? ''
   followupStalenessDays.value = parseInt(followupDays ?? '7', 10)
@@ -330,6 +348,8 @@ onMounted(async () => {
   await nextTick()
   attendeeNameField.value = attNameField ?? ''
   attendeeEmailField.value = attEmailField ?? ''
+  teamNameField.value = teamNameFieldVal ?? ''
+  teamEmailField.value = teamEmailFieldVal ?? ''
 
   // Subscribe to background sync push events so the source list updates live
   _syncUnsubs.push(
@@ -382,6 +402,9 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'attendee_entity_type_id', value: attendeeEntityTypeId.value }),
     window.api.invoke('settings:set', { key: 'attendee_name_field', value: attendeeNameField.value }),
     window.api.invoke('settings:set', { key: 'attendee_email_field', value: attendeeEmailField.value }),
+    window.api.invoke('settings:set', { key: 'team_entity_type_id', value: teamEntityTypeId.value }),
+    window.api.invoke('settings:set', { key: 'team_name_field', value: teamNameField.value }),
+    window.api.invoke('settings:set', { key: 'team_email_field', value: teamEmailField.value }),
     window.api.invoke('settings:set', { key: 'save_debug_audio', value: saveDebugAudio.value ? 'true' : 'false' }),
     window.api.invoke('settings:set', { key: 'followup_staleness_days', value: String(followupStalenessDays.value) }),
     window.api.invoke('settings:set', { key: 'followup_assignee_entity_type_id', value: followupAssigneeEntityTypeId.value }),
@@ -817,6 +840,35 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                       <select v-model="attendeeEmailField" class="modal-input modal-select">
                         <option value="">— select field —</option>
                         <option v-for="f in emailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                      </select>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <div class="field-group">
+                <label class="field-label">Team Entity</label>
+                <p class="field-hint">
+                  Optionally also link meeting attendees to team entities (e.g. a team distribution email). Matched teams appear alongside individual attendees in meeting popups and can be searched when adding attendees.
+                </p>
+                <select v-model="teamEntityTypeId" class="modal-input modal-select">
+                  <option value="">None</option>
+                  <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
+                </select>
+                <template v-if="teamEntityTypeId">
+                  <div class="attendee-field-row">
+                    <div class="attendee-field-col">
+                      <label class="field-label">Name Field</label>
+                      <select v-model="teamNameField" class="modal-input modal-select">
+                        <option value="">— select field —</option>
+                        <option v-for="f in teamNameFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                      </select>
+                    </div>
+                    <div class="attendee-field-col">
+                      <label class="field-label">Email Field</label>
+                      <select v-model="teamEmailField" class="modal-input modal-select">
+                        <option value="">— select field —</option>
+                        <option v-for="f in teamEmailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
                       </select>
                     </div>
                   </div>
