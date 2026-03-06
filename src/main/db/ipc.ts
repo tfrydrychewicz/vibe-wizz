@@ -13,6 +13,7 @@ import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProces
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { parseQuery } from '../entity-query/parser'
 import { evalQuery } from '../entity-query/evaluator'
+import { getEntityNerAliases } from '../utils/entityFields'
 import {
   generateOccurrences,
   applyRecurrenceUpdate,
@@ -555,7 +556,7 @@ export function registerDbIpcHandlers(): void {
    */
   ipcMain.handle('notes:get-auto-detections', (_event, { id }: { id: string }) => {
     const db = getDatabase()
-    return db
+    const rows = db
       .prepare(
         `SELECT
            em.entity_id,
@@ -564,7 +565,9 @@ export function registerDbIpcHandlers(): void {
            et.name       AS type_name,
            et.icon       AS type_icon,
            et.color      AS type_color,
-           em.confidence
+           em.confidence,
+           e.fields      AS entity_fields,
+           et.schema     AS entity_schema
          FROM entity_mentions em
          JOIN entities    e  ON em.entity_id = e.id
          JOIN entity_types et ON e.type_id    = et.id
@@ -572,7 +575,22 @@ export function registerDbIpcHandlers(): void {
            AND em.mention_type   = 'auto_detected'
            AND e.trashed_at IS NULL`
       )
-      .all(id)
+      .all(id) as {
+        entity_id: string; entity_name: string; type_id: string
+        type_name: string; type_icon: string; type_color: string | null
+        confidence: number; entity_fields: string | null; entity_schema: string
+      }[]
+
+    return rows.map((r) => ({
+      entity_id: r.entity_id,
+      entity_name: r.entity_name,
+      type_id: r.type_id,
+      type_name: r.type_name,
+      type_icon: r.type_icon,
+      type_color: r.type_color,
+      confidence: r.confidence,
+      aliases: getEntityNerAliases(r.entity_fields, r.entity_schema),
+    }))
   })
 
   // ─── Entity Types ───────────────────────────────────────────────────────────

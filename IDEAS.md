@@ -5,7 +5,7 @@
 - [ ] daily review with a note template
 - [ ] note editor mentions `@` support entity names with spaces in it
 - [ ] add https://github.com/md2docx/tiptap-extension-mermaid/ and ensure AI can generate these graphs. It should be good enough to tell ai that it can return mermaid (https://mermaid.js.org/) graph in a code block, it should know what mermaid is.
-- [ ] support for openai models, alongside claude models
+- [x] support for openai models, alongside claude models
 - [x] entity list allow grouping by entity field and sorting by [name, date created, date updated] in both direction [increment, decrement]
 - [ ] automated daily review generation (morning and evening)
 - [x] recurring summary for an entity type - configurable in entity type settings
@@ -15,7 +15,6 @@ PROMPT
 For context read and @CLAUDE.md, @DESIGN.md.
 
 Design a new feature.
-
 
 Remember about reusability and consistency across whole app.
 

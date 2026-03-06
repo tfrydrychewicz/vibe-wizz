@@ -27,11 +27,14 @@ export interface NerDetection {
  * Detect which known entities are mentioned in a note body.
  * Returns entity IDs with confidence scores (0.0–1.0), filtered to >= MIN_CONFIDENCE.
  * Throws on API error — callers should handle and treat as a non-fatal pipeline failure.
+ *
+ * @param entities - candidate entities; optional `aliases` are additional field values
+ *                   (e.g. email, nickname) that the AI should also match against.
  */
 export async function detectEntityMentions(
   noteTitle: string,
   bodyPlain: string,
-  entities: { id: string; name: string }[],
+  entities: { id: string; name: string; aliases?: string[] }[],
 ): Promise<NerDetection[]> {
   if (!entities.length || !bodyPlain.trim()) return []
 
@@ -40,7 +43,14 @@ export async function detectEntityMentions(
     bodyPlain.length > MAX_BODY_CHARS ? bodyPlain.slice(0, MAX_BODY_CHARS) + '…' : bodyPlain
 
   const entitySubset = entities.slice(0, MAX_ENTITIES)
-  const entityList = entitySubset.map((e) => JSON.stringify({ id: e.id, name: e.name })).join('\n')
+  const hasAliases = entitySubset.some((e) => e.aliases?.length)
+  const entityList = entitySubset
+    .map((e) => {
+      const obj: Record<string, unknown> = { id: e.id, name: e.name }
+      if (e.aliases?.length) obj.also_known_as = e.aliases
+      return JSON.stringify(obj)
+    })
+    .join('\n')
 
   return callWithFallback('ner', db, async (model) => {
     const result = await model.adapter.chat(
@@ -53,7 +63,7 @@ export async function detectEntityMentions(
             content:
               `Today is ${getCurrentDateString()}.\n\n` +
               'Analyze the following note and identify which known entities are mentioned or clearly ' +
-              'referenced in it (by name, pronoun, or unambiguous implication).\n\n' +
+              `referenced in it (by name, ${hasAliases ? 'alias (also_known_as field), ' : ''}pronoun, or unambiguous implication).\n\n` +
               `Known entities (JSON, one per line):\n${entityList}\n\n` +
               `Note title: ${noteTitle}\n\nNote content:\n${truncated}\n\n` +
               'Respond with ONLY a JSON array. Each element must have:\n' +

@@ -8,6 +8,8 @@ export type AutoDetection = {
   typeIcon: string
   typeColor: string | null
   confidence: number
+  /** Field values with ner_search:true — used by the decoration to also underline alias text. */
+  aliases?: string[]
 }
 
 export type HoveredAutoDetection = AutoDetection & {

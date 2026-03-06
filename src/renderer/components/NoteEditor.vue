@@ -547,6 +547,7 @@ type AutoDetectionRow = {
   type_icon: string
   type_color: string | null
   confidence: number
+  aliases: string[]
 }
 
 let savedFrom = 0
@@ -1053,6 +1054,7 @@ async function fetchAndSetAutoDetections(noteId: string): Promise<void> {
     typeIcon: r.type_icon,
     typeColor: r.type_color,
     confidence: r.confidence,
+    aliases: r.aliases.length > 0 ? r.aliases : undefined,
   }))
   editor.value.commands.setAutoDetections(detections)
 }

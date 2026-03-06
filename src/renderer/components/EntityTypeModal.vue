@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { Plus, Trash2, X, Wand2, GripVertical } from 'lucide-vue-next'
+import { Plus, Trash2, X, Wand2, GripVertical, Radar } from 'lucide-vue-next'
 import IconPicker from './IconPicker.vue'
 import QueryFieldEditor from './QueryFieldEditor.vue'
 
@@ -15,12 +15,16 @@ type FieldType =
   | 'note_ref'
   | 'computed'
 
+// Field types whose values are meaningful text that NER can match against
+const NER_ELIGIBLE_TYPES: FieldType[] = ['text', 'email', 'text_list']
+
 type FieldDef = {
   name: string
   type: FieldType
   options: string     // comma-separated, only for 'select'
   entity_type: string // only for entity_ref / entity_ref_list
   query: string       // WQL source, only for 'computed'
+  ner_search: boolean // if true, NER will also match entities by this field's value
 }
 
 type StoredFieldDef = {
@@ -29,6 +33,7 @@ type StoredFieldDef = {
   options?: string[]
   entity_type?: string
   query?: string
+  ner_search?: boolean
 }
 
 type ExistingType = {
@@ -198,7 +203,7 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
 ]
 
 function addField(): void {
-  fields.value.push({ name: '', type: 'text', options: '', entity_type: '', query: '' })
+  fields.value.push({ name: '', type: 'text', options: '', entity_type: '', query: '', ner_search: false })
 }
 
 function removeField(index: number): void {
@@ -257,6 +262,9 @@ function buildSchema(): string {
       }
       if (f.type === 'computed') {
         def.query = f.query.trim()
+      }
+      if (f.ner_search && NER_ELIGIBLE_TYPES.includes(f.type)) {
+        def.ner_search = true
       }
       return def
     })
@@ -332,6 +340,7 @@ onMounted(async () => {
         options: Array.isArray(f.options) ? f.options.join(', ') : '',
         entity_type: f.entity_type ?? '',
         query: f.query ?? '',
+        ner_search: f.ner_search === true,
       }))
     } catch {
       fields.value = []
@@ -456,6 +465,19 @@ onMounted(async () => {
                     {{ et.name }}
                   </option>
                 </select>
+
+                <!-- NER search toggle — only for text-family fields -->
+                <button
+                  v-if="NER_ELIGIBLE_TYPES.includes(field.type)"
+                  class="field-ner-btn"
+                  :class="{ 'field-ner-btn--active': field.ner_search }"
+                  :title="field.ner_search
+                    ? 'Entity detection (NER) will also match by this field — click to disable'
+                    : 'Enable: entity detection (NER) also matches by this field value'"
+                  @click="field.ner_search = !field.ner_search"
+                >
+                  <Radar :size="13" />
+                </button>
 
                 <button class="field-remove-btn" title="Remove field" @click="removeField(i)">
                   <Trash2 :size="13" />
@@ -857,6 +879,32 @@ onMounted(async () => {
   flex: 0 0 180px;
 }
 
+
+.field-ner-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.field-ner-btn:hover {
+  opacity: 1;
+  color: var(--color-accent);
+}
+
+.field-ner-btn--active {
+  opacity: 1;
+  color: var(--color-accent);
+  background: rgba(91, 141, 239, 0.1);
+  border-color: rgba(91, 141, 239, 0.3);
+}
 
 .field-remove-btn {
   background: transparent;

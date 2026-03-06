@@ -34,26 +34,43 @@ interface PluginState {
 
 const pluginKey = new PluginKey<PluginState>('autoMentionDecoration')
 
-/** Return all text-level document spans where entityName appears (case-insensitive). */
+/**
+ * Return all text-level document spans where any of the search terms appear
+ * (case-insensitive). Deduplicates by exact from:to position so overlapping
+ * matches from aliases vs entity name are not double-decorated.
+ */
 function findEntitySpans(
   doc: ProseMirrorNode,
-  entityName: string
+  entityName: string,
+  aliases?: string[],
 ): { from: number; to: number }[] {
   const spans: { from: number; to: number }[] = []
-  const searchLower = entityName.toLowerCase()
-  const searchLen = entityName.length
+  const seen = new Set<string>()
 
-  doc.descendants((node, pos) => {
-    if (!node.isText || !node.text) return
-    const textLower = node.text.toLowerCase()
-    let idx = 0
-    while (true) {
-      const found = textLower.indexOf(searchLower, idx)
-      if (found === -1) break
-      spans.push({ from: pos + found, to: pos + found + searchLen })
-      idx = found + 1
-    }
-  })
+  const searchTerms = [entityName, ...(aliases ?? [])].filter(Boolean)
+
+  for (const term of searchTerms) {
+    const searchLower = term.toLowerCase()
+    const searchLen = term.length
+
+    doc.descendants((node, pos) => {
+      if (!node.isText || !node.text) return
+      const textLower = node.text.toLowerCase()
+      let idx = 0
+      while (true) {
+        const found = textLower.indexOf(searchLower, idx)
+        if (found === -1) break
+        const from = pos + found
+        const to = pos + found + searchLen
+        const key = `${from}:${to}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          spans.push({ from, to })
+        }
+        idx = found + 1
+      }
+    })
+  }
 
   return spans
 }
@@ -70,7 +87,7 @@ function buildDecorations(doc: ProseMirrorNode, detections: AutoDetection[]): De
   const decos: Decoration[] = []
 
   for (const detection of detections) {
-    const spans = findEntitySpans(doc, detection.entityName)
+    const spans = findEntitySpans(doc, detection.entityName, detection.aliases)
     for (const { from, to } of spans) {
       decos.push(
         Decoration.inline(from, to, {

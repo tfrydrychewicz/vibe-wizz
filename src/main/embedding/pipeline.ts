@@ -15,6 +15,7 @@ import { embedTexts } from './embedder'
 import { summarizeNote } from './summarizer'
 import { detectEntityMentions, type NerDetection } from './ner'
 import { pushToRenderer } from '../push'
+import { getEntityNerAliases } from '../utils/entityFields'
 
 /** Fire-and-forget: full pipeline (NER + L1+L2). Used by postProcessor.ts after transcription. */
 export function scheduleEmbedding(noteId: string): void {
@@ -244,18 +245,29 @@ async function runL2Summary(
   console.log(`[Embedding] Stored L2 summary for note ${noteId}`)
 }
 
+
 async function runNer(
   noteId: string,
   title: string,
   bodyPlain: string,
   db: ReturnType<typeof getDatabase>,
 ): Promise<void> {
-  // Get all non-trashed entities to scan for
+  // Get all non-trashed entities (with type_id and field values for alias enrichment)
   const entities = db
-    .prepare('SELECT id, name FROM entities WHERE trashed_at IS NULL ORDER BY name COLLATE NOCASE')
-    .all() as { id: string; name: string }[]
+    .prepare(
+      'SELECT id, name, type_id, fields FROM entities WHERE trashed_at IS NULL ORDER BY name COLLATE NOCASE'
+    )
+    .all() as { id: string; name: string; type_id: string; fields: string | null }[]
 
   if (!entities.length) return
+
+  // Build a map of type_id → field names that have ner_search: true
+  const entityTypeRows = db
+    .prepare('SELECT id, schema FROM entity_types')
+    .all() as { id: string; schema: string }[]
+
+  // Build a map of type_id → schema string (for alias resolution)
+  const schemaByType = new Map(entityTypeRows.map((et) => [et.id, et.schema]))
 
   // Exclude entities already manually tagged in this note — no need to double-detect them
   const manualRows = db
@@ -264,7 +276,16 @@ async function runNer(
     )
     .all(noteId) as { entity_id: string }[]
   const manualIds = new Set(manualRows.map((r) => r.entity_id))
-  const candidates = entities.filter((e) => !manualIds.has(e.id))
+
+  // Build enriched candidates: attach aliases from ner_search-enabled fields
+  const candidates = entities
+    .filter((e) => !manualIds.has(e.id))
+    .map((e) => {
+      const schema = schemaByType.get(e.type_id)
+      if (!schema) return { id: e.id, name: e.name }
+      const aliases = getEntityNerAliases(e.fields, schema)
+      return aliases.length > 0 ? { id: e.id, name: e.name, aliases } : { id: e.id, name: e.name }
+    })
 
   if (!candidates.length) return
 
