@@ -120,7 +120,7 @@ export function renderActionChip(id: string, title: string): string {
   return (
     `<button class="${ACTION_CHIP_CLASS}" data-action-id="${escapeHtml(id)}" ` +
     `data-action-title="${escapeHtml(title)}" title="${escapeHtml(title)}">` +
-    `${CHECK_CIRCLE_SVG}${escapeHtml(title)}` +
+    `${CHECK_CIRCLE_SVG}<span class="${ACTION_CHIP_CLASS}__label">${escapeHtml(title)}</span>` +
     `</button>`
   )
 }
@@ -134,7 +134,7 @@ export function renderEventChip(id: string | number, label: string): string {
   return (
     `<button class="${EVENT_CHIP_CLASS}" data-event-id="${escapeHtml(String(id))}" ` +
     `data-event-label="${escapeHtml(label)}" title="${escapeHtml(label)}">` +
-    `${CALENDAR_CHIP_SVG}${escapeHtml(label)}` +
+    `${CALENDAR_CHIP_SVG}<span class="${EVENT_CHIP_CLASS}__label">${escapeHtml(label)}</span>` +
     `</button>`
   )
 }

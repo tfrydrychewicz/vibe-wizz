@@ -1487,10 +1487,8 @@ body {
   font-weight: 500;
   cursor: pointer;
   margin: 0 1px;
-  max-width: 280px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;          /* fit container rather than overflow it */
+  min-width: 0;             /* allow shrinking as a flex child */
   vertical-align: middle;
   font-family: inherit;
   line-height: 1.4;
@@ -1498,6 +1496,13 @@ body {
 }
 .wizz-action-chip:hover { background: rgba(234, 88, 12, 0.18); }
 .wizz-action-chip svg { flex-shrink: 0; }
+/* text-overflow lives here — text-overflow on inline-flex itself doesn't work */
+.wizz-action-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 
 /* ── Calendar event chip (.wizz-event-chip) ────────────────────────────────── */
 .wizz-event-chip {
@@ -1513,10 +1518,8 @@ body {
   font-weight: 500;
   cursor: pointer;
   margin: 0 1px;
-  max-width: 280px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;          /* fit container rather than overflow it */
+  min-width: 0;             /* allow shrinking as a flex child */
   vertical-align: middle;
   font-family: inherit;
   line-height: 1.4;
@@ -1524,6 +1527,12 @@ body {
 }
 .wizz-event-chip:hover { background: rgba(99, 102, 241, 0.18); }
 .wizz-event-chip svg { flex-shrink: 0; }
+.wizz-event-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 
 /* ── Note selection attachment chip (input areas: ChatSidebar, AIPromptModal) ──
  * Shown when the user pastes a copied note selection into an AI input.
