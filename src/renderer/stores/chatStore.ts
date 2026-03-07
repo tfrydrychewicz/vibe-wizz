@@ -18,6 +18,7 @@ export interface ExecutedAction {
     | 'deleted_action'
     | 'created_note'
     | 'created_entity'
+    | 'updated_entity'
     | 'ensured_action_created'   // ensure_action_item_for_task — new row inserted
     | 'ensured_action_found'     // ensure_action_item_for_task — existing row found
   payload: {

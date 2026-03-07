@@ -7,7 +7,8 @@ import { pendingNoteJump } from '../stores/noteJumpStore'
 import type { OpenMode } from '../stores/tabStore'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
 import { useEntityChips } from '../composables/useEntityChips'
-import { renderEntityChip, renderNoteChip, renderWebLinkChip, renderSelectionChip, escapeHtml } from '../utils/markdown'
+import { renderEntityChip, renderNoteChip, renderWebLinkChip, renderSelectionChip, renderActionChip, renderEventChip, escapeHtml } from '../utils/markdown'
+import { fireShowInlineDetail } from '../stores/taskInlineDetailStore'
 import AttachmentBar from './AttachmentBar.vue'
 import RichTextInput from './RichTextInput.vue'
 import ModelSelect from './ModelSelect.vue'
@@ -22,6 +23,7 @@ const emit = defineEmits<{
   'open-entity': [{ entityId: string; typeId?: string; mode: OpenMode }]
   'open-view': [view: string]
   'note-created': []
+  'navigate-to-event': [{ eventId: number; clientX: number; clientY: number }]
 }>()
 
 const messagesContainerRef = ref<HTMLElement | null>(null)
@@ -297,7 +299,7 @@ function formatActionPayload(action: ExecutedAction): string {
   return parts.join(' · ')
 }
 
-/** Event delegation — handles clicks on note-ref, entity-ref, and web-link chips rendered inside v-html */
+/** Event delegation — handles clicks on note-ref, entity-ref, web-link, action, and event chips rendered inside v-html */
 function onBubbleClick(e: MouseEvent, _msg: ChatMessage): void {
   const target = e.target as HTMLElement
 
@@ -306,6 +308,20 @@ function onBubbleClick(e: MouseEvent, _msg: ChatMessage): void {
     e.preventDefault()
     const url = webChip.dataset.webUrl
     if (url) void window.api.invoke('shell:open-external', { url })
+    return
+  }
+
+  const actionChip = target.closest('[data-action-id]') as HTMLElement | null
+  if (actionChip) {
+    const id = actionChip.dataset.actionId
+    if (id) fireShowInlineDetail(id, new DOMRect(e.clientX, e.clientY, 0, 0))
+    return
+  }
+
+  const eventChip = target.closest('[data-event-id]') as HTMLElement | null
+  if (eventChip) {
+    const id = eventChip.dataset.eventId
+    if (id) emit('navigate-to-event', { eventId: Number(id), clientX: e.clientX, clientY: e.clientY })
     return
   }
 
@@ -420,11 +436,31 @@ function renderMessage(
   // 1f. Swap out Markdown links [label](https://...) before marked sees them,
   //     so they render as web chips rather than plain <a> tags.
   const webLinkItems: { title: string; url: string }[] = []
-  const withAllPlaceholders = withNoteRefPlaceholders.replace(
+  const withWebLinkPlaceholders = withNoteRefPlaceholders.replace(
     /\[([^\]]{1,300})\]\((https?:\/\/[^)]{1,2000})\)/g,
     (_match, label: string, url: string) => {
       webLinkItems.push({ title: label.trim(), url: url.trim() })
       return `WIZZURL${webLinkItems.length - 1}WIZZURL`
+    },
+  )
+
+  // 1g. Swap out {{action:UUID:Title}} tokens → action chip placeholders
+  const actionChipItems: { id: string; title: string }[] = []
+  const withActionPlaceholders = withWebLinkPlaceholders.replace(
+    /\{\{action:([0-9a-fA-F-]{36}):([^}]*)\}\}/g,
+    (_m, id: string, title: string) => {
+      actionChipItems.push({ id, title: title.trim() })
+      return `WIZZACT${actionChipItems.length - 1}WIZZACT`
+    },
+  )
+
+  // 1h. Swap out {{event:ID:Label}} tokens → event chip placeholders
+  const eventChipItems: { id: string; label: string }[] = []
+  const withAllPlaceholders = withActionPlaceholders.replace(
+    /\{\{event:(\d+):([^}]*)\}\}/g,
+    (_m, id: string, label: string) => {
+      eventChipItems.push({ id, label: label.trim() })
+      return `WIZZEVT${eventChipItems.length - 1}WIZZEVT`
     },
   )
 
@@ -459,6 +495,20 @@ function renderMessage(
     const item = webLinkItems[Number(idxStr)]
     if (!item) return ''
     return renderWebLinkChip(item.title, item.url)
+  })
+
+  // 3e. Action item chips (from step 1g)
+  result = result.replace(/WIZZACT(\d+)WIZZACT/g, (_m, idxStr: string) => {
+    const item = actionChipItems[Number(idxStr)]
+    if (!item) return ''
+    return renderActionChip(item.id, item.title)
+  })
+
+  // 3f. Calendar event chips (from step 1h)
+  result = result.replace(/WIZZEVT(\d+)WIZZEVT/g, (_m, idxStr: string) => {
+    const item = eventChipItems[Number(idxStr)]
+    if (!item) return ''
+    return renderEventChip(item.id, item.label)
   })
 
   // 3e. Convert any remaining <a href="https://..."> tags that marked emitted

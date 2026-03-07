@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, RefreshCw, Sparkles } from 'lucide-vue-next'
 import type { OpenMode } from '../stores/tabStore'
 import { markdownToHtml } from '../utils/markdown'
 import { useEntityChips } from '../composables/useEntityChips'
+import { fireShowInlineDetail } from '../stores/taskInlineDetailStore'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -20,6 +21,7 @@ interface DailyBrief {
 const emit = defineEmits<{
   'open-entity': [{ entityId: string; typeId?: string; mode: OpenMode }]
   'open-note':   [{ noteId: string; title: string; mode: OpenMode }]
+  'navigate-to-event': [{ eventId: number; clientX: number; clientY: number }]
 }>()
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -151,6 +153,20 @@ async function onBriefClick(e: MouseEvent): Promise<void> {
     e.preventDefault()
     const url = webChip.dataset.webUrl
     if (url) void window.api.invoke('shell:open-external', { url })
+    return
+  }
+
+  const actionChip = target.closest('[data-action-id]') as HTMLElement | null
+  if (actionChip) {
+    const id = actionChip.dataset.actionId
+    if (id) fireShowInlineDetail(id, new DOMRect(e.clientX, e.clientY, 0, 0))
+    return
+  }
+
+  const eventChip = target.closest('[data-event-id]') as HTMLElement | null
+  if (eventChip) {
+    const id = eventChip.dataset.eventId
+    if (id) emit('navigate-to-event', { eventId: Number(id), clientX: e.clientX, clientY: e.clientY })
     return
   }
 

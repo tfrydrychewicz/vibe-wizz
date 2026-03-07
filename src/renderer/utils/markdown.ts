@@ -35,6 +35,12 @@ export const NOTE_CHIP_CLASS = 'wizz-note-chip'
 /** CSS class for all inline web-link chips rendered via v-html. */
 export const WEB_LINK_CHIP_CLASS = 'wizz-web-chip'
 
+/** CSS class for all inline action-item chips rendered via v-html. */
+export const ACTION_CHIP_CLASS = 'wizz-action-chip'
+
+/** CSS class for all inline calendar-event chips rendered via v-html. */
+export const EVENT_CHIP_CLASS = 'wizz-event-chip'
+
 /** CSS class for note-selection chips rendered via v-html (mirrors NoteSelectionChip.vue). */
 export const SELECTION_CHIP_CLASS = 'wizz-note-selection-chip'
 
@@ -84,6 +90,52 @@ export function renderSelectionChip(noteId: string, noteTitle: string, blockStar
     `<span class="${SELECTION_CHIP_CLASS}__title">${escapeHtml(noteTitle)}</span>` +
     `<span class="${SELECTION_CHIP_CLASS}__range">(blocks ${blockStart}–${blockEnd})</span>` +
     `</span>`
+  )
+}
+
+/** Lucide-style check-circle SVG (11×11) for action item chips. */
+const CHECK_CIRCLE_SVG =
+  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<circle cx="12" cy="12" r="10"/>' +
+  '<path d="M9 12l2 2 4-4"/>' +
+  '</svg>'
+
+/** Lucide-style calendar SVG (11×11) for calendar event chips. */
+const CALENDAR_CHIP_SVG =
+  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>' +
+  '<line x1="16" y1="2" x2="16" y2="6"/>' +
+  '<line x1="8" y1="2" x2="8" y2="6"/>' +
+  '<line x1="3" y1="10" x2="21" y2="10"/>' +
+  '</svg>'
+
+/**
+ * Returns the HTML for a single action-item chip.
+ * @param id    Action item UUID — used for click delegation.
+ * @param title Human-readable task title displayed in the chip.
+ */
+export function renderActionChip(id: string, title: string): string {
+  return (
+    `<button class="${ACTION_CHIP_CLASS}" data-action-id="${escapeHtml(id)}" ` +
+    `data-action-title="${escapeHtml(title)}" title="${escapeHtml(title)}">` +
+    `${CHECK_CIRCLE_SVG}${escapeHtml(title)}` +
+    `</button>`
+  )
+}
+
+/**
+ * Returns the HTML for a single calendar-event chip.
+ * @param id    Calendar event numeric ID — used for click delegation.
+ * @param label Human-readable label (title + optional time) displayed in the chip.
+ */
+export function renderEventChip(id: string | number, label: string): string {
+  return (
+    `<button class="${EVENT_CHIP_CLASS}" data-event-id="${escapeHtml(String(id))}" ` +
+    `data-event-label="${escapeHtml(label)}" title="${escapeHtml(label)}">` +
+    `${CALENDAR_CHIP_SVG}${escapeHtml(label)}` +
+    `</button>`
   )
 }
 
@@ -191,8 +243,28 @@ export function renderInline(raw: string): string {
     },
   )
 
+  // Pass 1g: {{action:UUID:Title}} — backend-resolved action item tokens
+  const actionItems2: { id: string; title: string }[] = []
+  const withActionPlaceholders = withBareUrlPlaceholders.replace(
+    /\{\{action:([0-9a-fA-F-]{36}):([^}]*)\}\}/g,
+    (_m, id: string, title: string) => {
+      actionItems2.push({ id, title: title.trim() })
+      return `WIZZACT${actionItems2.length - 1}WIZZACT`
+    },
+  )
+
+  // Pass 1h: {{event:ID:Label}} — backend-resolved calendar event tokens
+  const eventItems: { id: string; label: string }[] = []
+  const withEventPlaceholders = withActionPlaceholders.replace(
+    /\{\{event:(\d+):([^}]*)\}\}/g,
+    (_m, id: string, label: string) => {
+      eventItems.push({ id, label: label.trim() })
+      return `WIZZEVT${eventItems.length - 1}WIZZEVT`
+    },
+  )
+
   // Pass 2: standard inline markdown on the HTML-escaped remainder
-  const safe = escapeHtml(withBareUrlPlaceholders)
+  const safe = escapeHtml(withEventPlaceholders)
   let result = safe
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -216,6 +288,16 @@ export function renderInline(raw: string): string {
     const item = webLinkItems[Number(idxStr)]
     if (!item) return ''
     return renderWebLinkChip(item.title, item.url)
+  })
+  result = result.replace(/WIZZACT(\d+)WIZZACT/g, (_m, idxStr: string) => {
+    const item = actionItems2[Number(idxStr)]
+    if (!item) return ''
+    return renderActionChip(item.id, item.title)
+  })
+  result = result.replace(/WIZZEVT(\d+)WIZZEVT/g, (_m, idxStr: string) => {
+    const item = eventItems[Number(idxStr)]
+    if (!item) return ''
+    return renderEventChip(item.id, item.label)
   })
 
   return result

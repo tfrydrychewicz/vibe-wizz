@@ -9,6 +9,7 @@
 import { callWithFallback } from '../ai/modelRouter'
 import { getPersonalizationPreamble } from '../ai/personalization'
 import { getDatabase } from '../db/index'
+import { resolveActionEventTokens } from '../utils/tokenFormat'
 
 const MAX_NOTES_CHARS = 5000
 
@@ -168,7 +169,7 @@ export async function generateDailyBrief(date: string): Promise<string> {
     todayEvents.length > 0
       ? todayEvents
           .map((ev) => {
-            let line = `- ${formatTime(ev.start_at)}–${formatTime(ev.end_at)}: ${ev.title}`
+            let line = `- [event:${ev.id}] ${formatTime(ev.start_at)}–${formatTime(ev.end_at)}: ${ev.title}`
             try {
               const att = JSON.parse(ev.attendees) as { name?: string; email?: string }[]
               if (att.length > 0) line += ` (${att.map((a) => a.name || a.email || '?').join(', ')})`
@@ -194,7 +195,7 @@ export async function generateDailyBrief(date: string): Promise<string> {
   const noDueDateItems = actionItems.filter((a) => !a.due_date)
 
   function fmtAction(a: ActionRow): string {
-    let s = `- ${a.title}`
+    let s = `- [task:${a.id}] ${a.title}`
     if (a.project_entity_id && a.project_name) {
       s += ` [project: {{entity:${a.project_entity_id}:${a.project_name}}}]`
     } else if (a.project_name) {
@@ -297,6 +298,8 @@ export async function generateDailyBrief(date: string): Promise<string> {
     `- Write only the markdown content, no preamble or meta-commentary.\n` +
     `- When referencing an entity from the data, preserve the {{entity:uuid:Name}} token exactly.\n` +
     `- When referencing a note from the data, preserve the {{note:uuid:Name}} token exactly.\n` +
+    `- When referencing an action item from the data, preserve the [task:UUID] token exactly.\n` +
+    `- When referencing a calendar event from the data, preserve the [event:ID] token exactly.\n` +
     `- These tokens render as interactive chips in the UI — do not rewrite them as plain text.`
 
   try {
@@ -309,7 +312,13 @@ export async function generateDailyBrief(date: string): Promise<string> {
         },
         model.apiKey,
       )
-      return result.text.trim()
+      const raw = result.text.trim()
+      // Resolve [task:UUID] and [event:ID] tokens into embedded-label chip tokens
+      return resolveActionEventTokens(
+        raw,
+        actionItems.map((a) => ({ id: a.id, title: a.title })),
+        todayEvents.map((e) => ({ id: e.id, title: e.title, start_at: e.start_at })),
+      )
     })
   } catch (err) {
     console.error('[DailyBrief] Generation failed:', err)

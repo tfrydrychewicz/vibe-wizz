@@ -59,6 +59,7 @@ const emit = defineEmits<{
   trashed: [entityId: string]
   'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
+  'navigate-to-event': [{ eventId: number; clientX: number; clientY: number }]
 }>()
 
 const nameInputRef = ref<HTMLInputElement | null>(null)
@@ -709,6 +710,7 @@ watch(() => props.entityId, async (id) => {
         :review-enabled="reviewEnabled"
         @open-note="emit('open-note', $event)"
         @open-entity="emit('open-entity', $event)"
+        @navigate-to-event="emit('navigate-to-event', $event)"
       />
     </template>
   </div>

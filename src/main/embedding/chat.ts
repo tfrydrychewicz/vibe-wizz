@@ -12,7 +12,7 @@ import { getDatabase } from '../db/index'
 import { getGeneratedImageDir } from '../ai/imageStorage'
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
 import { scheduleEmbedding } from './pipeline'
-import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
+import { ENTITY_TOKEN_RE, resolveActionEventTokens } from '../utils/tokenFormat'
 import { getCurrentDateString } from '../utils/date'
 import { callWithFallback } from '../ai/modelRouter'
 import { getPersonalizationPreamble } from '../ai/personalization'
@@ -804,7 +804,7 @@ function formatCalendarEvent(ev: CalendarEventContext): string {
   const dateStr = start.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
   const startTime = start.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })
   const endTime = end.toLocaleTimeString('en', { hour: 'numeric', minute: '2-digit' })
-  let line = `- [id:${ev.id}] "${ev.title}" on ${dateStr} ${startTime}–${endTime}`
+  let line = `- [event:${ev.id}] "${ev.title}" on ${dateStr} ${startTime}–${endTime}`
   try {
     const attendees = JSON.parse(ev.attendees) as { name?: string; email?: string }[]
     if (attendees.length > 0) {
@@ -818,7 +818,7 @@ function formatCalendarEvent(ev: CalendarEventContext): string {
 }
 
 function formatActionItem(item: ActionItemContext): string {
-  let line = `- [id:${item.id}] [${item.status}] "${item.title}"`
+  let line = `- [task:${item.id}] [${item.status}] "${item.title}"`
   if (item.project_name) {
     const ref = item.project_entity_id ? `{{entity:${item.project_entity_id}:${item.project_name}}}` : item.project_name
     line += ` [project: ${ref}]`
@@ -1254,7 +1254,8 @@ export async function sendChatMessage(
     const evLines = calendarEvents.map(formatCalendarEvent).join('\n')
     systemPrompt +=
       '\n\nHere are the user\'s upcoming and recent calendar events (past 7 days + next 30 days). ' +
-      'Each entry includes its ID in [id:N] — use the ID when calling calendar tools:\n' +
+      'Each entry includes its ID as [event:N] — use the numeric ID when calling calendar tools. ' +
+      'When referencing a calendar event in prose, write [event:N] so it renders as a clickable chip:\n' +
       evLines
   }
 
@@ -1262,7 +1263,8 @@ export async function sendChatMessage(
     const itemLines = actionItems.map(formatActionItem).join('\n')
     systemPrompt +=
       '\n\nHere are the user\'s open and in-progress action items. ' +
-      'Each entry includes its ID in [id:...] — use the ID when calling action item tools:\n' +
+      'Each entry includes its ID as [task:UUID] — use the UUID when calling action item tools. ' +
+      'When referencing an action item in prose, write [task:UUID] so it renders as a clickable chip:\n' +
       itemLines
   }
 
@@ -1414,7 +1416,10 @@ export async function sendChatMessage(
       if (id && name && !entityRefsMap.has(id)) entityRefsMap.set(id, { id, name })
     }
 
-    return { content: finalText, actions, entityRefs: Array.from(entityRefsMap.values()) }
+    // Resolve [task:UUID] and [event:ID] tokens into embedded-label chip tokens
+    const resolvedText = resolveActionEventTokens(finalText, actionItems, calendarEvents)
+
+    return { content: resolvedText, actions, entityRefs: Array.from(entityRefsMap.values()) }
   }, overrideModelId, (from, to) => {
     fallbackWarning = `Used ${to} — primary model (${from}) unavailable`
   })

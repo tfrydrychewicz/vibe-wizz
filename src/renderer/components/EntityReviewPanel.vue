@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, RefreshCw, Trash2, ClipboardList } from 'luc
 import { markdownToHtml } from '../utils/markdown'
 import type { OpenMode } from '../stores/tabStore'
 import { useEntityChips } from '../composables/useEntityChips'
+import { fireShowInlineDetail } from '../stores/taskInlineDetailStore'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
   'open-entity': [{ entityId: string; typeId: string; mode: OpenMode }]
+  'navigate-to-event': [{ eventId: number; clientX: number; clientY: number }]
 }>()
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -197,6 +199,20 @@ async function onBodyClick(e: MouseEvent): Promise<void> {
     e.preventDefault()
     const url = webChip.dataset.webUrl
     if (url) void window.api.invoke('shell:open-external', { url })
+    return
+  }
+
+  const actionChip = target.closest('[data-action-id]') as HTMLElement | null
+  if (actionChip) {
+    const id = actionChip.dataset.actionId
+    if (id) fireShowInlineDetail(id, new DOMRect(e.clientX, e.clientY, 0, 0))
+    return
+  }
+
+  const eventChip = target.closest('[data-event-id]') as HTMLElement | null
+  if (eventChip) {
+    const id = eventChip.dataset.eventId
+    if (id) emit('navigate-to-event', { eventId: Number(id), clientX: e.clientX, clientY: e.clientY })
     return
   }
 

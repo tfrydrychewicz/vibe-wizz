@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { Plus, Pencil, X, Loader2 } from 'lucide-vue-next'
 import NoteEditor from './components/NoteEditor.vue'
 import NoteList from './components/NoteList.vue'
@@ -16,7 +16,11 @@ import LucideIcon from './components/LucideIcon.vue'
 import TabBar from './components/TabBar.vue'
 import ChatSidebar from './components/ChatSidebar.vue'
 import TaskDetailPanel from './components/TaskDetailPanel.vue'
+import TaskInlineDetail from './components/TaskInlineDetail.vue'
 import CalendarView from './components/CalendarView.vue'
+import MeetingModal from './components/MeetingModal.vue'
+import SyncedEventPopup from './components/SyncedEventPopup.vue'
+import type { CalendarEvent } from './components/MeetingModal.vue'
 import TodayView from './components/TodayView.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import TranscriptionRecoveryBanner, { type RecoveryMeta } from './components/TranscriptionRecoveryBanner.vue'
@@ -36,6 +40,7 @@ import {
 import type { OpenMode } from './stores/tabStore'
 import { pendingAutoStartNoteId, processingTranscriptionNoteId, processingStep } from './stores/transcriptionStore'
 import { registerOpenDetailHandler } from './stores/taskDetailStore'
+import { registerShowInlineDetailHandler } from './stores/taskInlineDetailStore'
 import { registerEntityTypes } from './stores/entityTypeStore'
 
 type NavItem = {
@@ -77,6 +82,7 @@ const activeView = ref<string>('today')
 const noteListRef = ref<InstanceType<typeof NoteList> | null>(null)
 const entityListRef = ref<InstanceType<typeof EntityList> | null>(null)
 const templateListRef = ref<InstanceType<typeof TemplateList> | null>(null)
+const calendarViewRef = ref<InstanceType<typeof CalendarView> | null>(null)
 
 // Template state
 const activeTemplateId = ref<string | null>(null)
@@ -96,8 +102,18 @@ const showChat = ref(false)
 const showTaskDetail = ref(false)
 const activeTaskDetailId = ref<string | null>(null)
 
+// Task inline detail popup (floating, same as in note editor)
+const globalTaskInlineId = ref<string | null>(null)
+const globalTaskInlineRect = ref<DOMRect | null>(null)
+
 // Command palette
 const showCommandPalette = ref(false)
+
+// Global event modal (opened from chips in chat/brief/reviews without navigating to calendar)
+const globalMeetingModalEvent = ref<CalendarEvent | null>(null)
+const showGlobalMeetingModal = ref(false)
+const globalSyncedPopupEvent = ref<CalendarEvent | null>(null)
+const globalSyncedPopupPos = ref({ x: 0, y: 0 })
 
 // Quit-time embedding flush overlay
 const quitEmbeddingsCount = ref(0)
@@ -225,6 +241,33 @@ async function onNavClick(id: string): Promise<void> {
 function onChatOpenView(view: string): void {
   activeView.value = view
   showChat.value = false
+}
+
+async function onNavigateToEvent({ eventId, clientX, clientY }: { eventId: number; clientX: number; clientY: number }): Promise<void> {
+  // Find or fetch the event without navigating away from the current view
+  let ev: CalendarEvent | undefined
+  try {
+    const wide = new Date()
+    const start = new Date(wide); start.setMonth(start.getMonth() - 3)
+    const end   = new Date(wide); end.setMonth(end.getMonth() + 3)
+    const fetched = await window.api.invoke('calendar-events:list', {
+      start_at: start.toISOString(),
+      end_at: end.toISOString(),
+    }) as CalendarEvent[]
+    ev = fetched.find((e) => e.id === eventId)
+  } catch { /* non-critical */ }
+
+  if (!ev) return
+
+  if (ev.source_id !== null) {
+    // Synced (read-only) → SyncedEventPopup positioned near the click
+    globalSyncedPopupEvent.value = ev
+    globalSyncedPopupPos.value = { x: clientX, y: clientY }
+  } else {
+    // Local event → MeetingModal for editing
+    globalMeetingModalEvent.value = ev
+    showGlobalMeetingModal.value = true
+  }
 }
 
 function onCalendarNavClick(e: MouseEvent): void {
@@ -463,6 +506,11 @@ onMounted(() => {
   registerOpenDetailHandler((taskId: string) => {
     activeTaskDetailId.value = taskId
     showTaskDetail.value = true
+  })
+
+  registerShowInlineDetailHandler((id: string, rect: DOMRect) => {
+    globalTaskInlineId.value = id
+    globalTaskInlineRect.value = rect
   })
 
   unsubTranscriptionOpenNote = window.api.on('transcription:open-note', (...args: unknown[]) => {
@@ -708,11 +756,13 @@ onBeforeUnmount(() => {
                   @trashed="onEntityTrashed"
                   @open-entity="onOpenEntity"
                   @open-note="onOpenNote"
+                  @navigate-to-event="onNavigateToEvent"
                 />
                 <CalendarView
                   v-else-if="pane.type === 'calendar'"
                   @open-note="onOpenNote"
                   @open-entity="onOpenEntity"
+                  @navigate-to-event="onNavigateToEvent"
                 />
               </div>
             </div>
@@ -777,7 +827,12 @@ onBeforeUnmount(() => {
 
       <!-- Calendar view -->
       <template v-else-if="activeView === 'calendar'">
-        <CalendarView @open-note="onOpenNote" @open-entity="onOpenEntity" />
+        <CalendarView
+          ref="calendarViewRef"
+          @open-note="onOpenNote"
+          @open-entity="onOpenEntity"
+          @navigate-to-event="onNavigateToEvent"
+        />
       </template>
 
       <!-- Search view -->
@@ -795,6 +850,7 @@ onBeforeUnmount(() => {
         <TodayView
           @open-entity="onChatOpenEntity"
           @open-note="onOpenNote"
+          @navigate-to-event="onNavigateToEvent"
         />
       </template>
 
@@ -854,6 +910,7 @@ onBeforeUnmount(() => {
       @open-entity="onChatOpenEntity"
       @open-view="onChatOpenView"
       @note-created="noteListRef?.refresh()"
+      @navigate-to-event="onNavigateToEvent"
     />
 
     <!-- Task detail panel -->
@@ -864,6 +921,36 @@ onBeforeUnmount(() => {
       @open-note="onOpenNote"
       @open-actions="activeView = 'actions'; showTaskDetail = false"
       @deleted="showTaskDetail = false"
+    />
+
+    <!-- Task inline detail popup — global, same popup as in note editor -->
+    <TaskInlineDetail
+      v-if="globalTaskInlineId && globalTaskInlineRect"
+      :key="`task-inline-${globalTaskInlineId}`"
+      :action-id="globalTaskInlineId"
+      :anchor-rect="globalTaskInlineRect"
+      @close="globalTaskInlineId = null"
+      @open-note="onOpenNote"
+    />
+
+    <!-- Global meeting modal — opened from event chips without navigating to calendar -->
+    <MeetingModal
+      v-if="showGlobalMeetingModal && globalMeetingModalEvent"
+      :event="globalMeetingModalEvent"
+      :default-start="globalMeetingModalEvent.start_at"
+      @saved="showGlobalMeetingModal = false; calendarViewRef?.loadEvents()"
+      @deleted="showGlobalMeetingModal = false; calendarViewRef?.loadEvents()"
+      @cancel="showGlobalMeetingModal = false"
+      @open-note="onOpenNote"
+    />
+
+    <!-- Global synced event popup — opened from event chips without navigating to calendar -->
+    <SyncedEventPopup
+      v-if="globalSyncedPopupEvent"
+      :event="globalSyncedPopupEvent"
+      :position="globalSyncedPopupPos"
+      @close="globalSyncedPopupEvent = null"
+      @open-note="onOpenNote($event); globalSyncedPopupEvent = null"
     />
 
     <!-- Quit-time / debug re-embed overlay -->

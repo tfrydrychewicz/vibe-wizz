@@ -750,6 +750,69 @@ function onModalDeleted(): void {
 // ── Hours list ────────────────────────────────────────────────────────────────
 
 const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START + i)
+
+// ── Highlighted event (set by focusEvent for chip navigation) ─────────────────
+
+const highlightedEventId = ref<number | null>(null)
+
+/** Shared helper: find or fetch a calendar event by ID. */
+async function findOrFetchEvent(eventId: number): Promise<CalendarEvent | undefined> {
+  let ev = events.value.find((e) => e.id === eventId)
+  if (!ev) {
+    const wide = new Date()
+    const start = new Date(wide); start.setMonth(start.getMonth() - 3)
+    const end   = new Date(wide); end.setMonth(end.getMonth() + 3)
+    try {
+      const fetched = await window.api.invoke('calendar-events:list', {
+        start_at: start.toISOString(),
+        end_at: end.toISOString(),
+      }) as typeof events.value
+      ev = fetched.find((e) => e.id === eventId)
+    } catch { /* non-critical */ }
+  }
+  return ev
+}
+
+/**
+ * Open the appropriate modal for an event by ID without navigating the calendar.
+ * Local events open MeetingModal; synced events open SyncedEventPopup at (x, y).
+ * Falls back to a centred position when coordinates are not provided.
+ */
+async function openEvent(eventId: number, x?: number, y?: number): Promise<void> {
+  const ev = await findOrFetchEvent(eventId)
+  if (!ev) return
+  if (isSourced(ev)) {
+    const px = x ?? window.innerWidth / 2
+    const py = y ?? window.innerHeight / 2
+    openSyncedPopup(ev, { x: px, y: py })
+  } else {
+    openEditModal(ev)
+  }
+}
+
+/**
+ * Navigate the calendar to the event's date, scroll to its hour, and briefly highlight it.
+ */
+async function focusEvent(eventId: number): Promise<void> {
+  const ev = await findOrFetchEvent(eventId)
+  if (!ev) return
+
+  const evDate = new Date(ev.start_at)
+  currentDate.value = evDate
+
+  await nextTick()
+
+  if (gridScrollRef.value && viewMode.value !== 'month') {
+    const startHour = evDate.getHours()
+    const scrollTarget = (startHour - HOUR_START) * hourHeight.value - 40
+    gridScrollRef.value.scrollTop = Math.max(0, scrollTarget)
+  }
+
+  highlightedEventId.value = eventId
+  setTimeout(() => { highlightedEventId.value = null }, 2000)
+}
+
+defineExpose({ focusEvent, openEvent, loadEvents })
 </script>
 
 <template>
@@ -868,7 +931,7 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
               v-for="ev in eventsForDay(col)"
               :key="ev.id"
               class="event-block"
-              :class="{ 'is-synced': isSourced(ev) }"
+              :class="{ 'is-synced': isSourced(ev), 'is-highlighted': highlightedEventId === ev.id }"
               :style="getEventDisplayStyle(ev)"
               :title="eventTooltip(ev)"
               @mousedown.prevent.stop="onEventMouseDown(ev, $event)"
@@ -910,7 +973,7 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
                 v-for="ev in eventsForDay(day)"
                 :key="ev.id"
                 class="month-event-chip"
-                :class="{ 'is-synced': isSourced(ev) }"
+                :class="{ 'is-synced': isSourced(ev), 'is-highlighted': highlightedEventId === ev.id }"
                 :title="eventTooltip(ev)"
                 @click.stop="isSourced(ev) ? openSyncedPopup(ev, { x: $event.clientX, y: $event.clientY }) : openEditModal(ev)"
               >
@@ -1228,6 +1291,19 @@ const hours = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START
 
 .event-block.is-synced:hover {
   background: rgba(74, 222, 128, 0.18);
+}
+
+@keyframes event-highlight-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.6); }
+  50%  { box-shadow: 0 0 0 5px rgba(99, 102, 241, 0.2); }
+  100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+}
+
+.event-block.is-highlighted,
+.month-event-chip.is-highlighted {
+  animation: event-highlight-pulse 0.7s ease 2;
+  border-color: rgba(99, 102, 241, 0.7);
+  z-index: 10;
 }
 
 .event-synced-icon {

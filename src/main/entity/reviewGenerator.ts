@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto'
 import Database from 'better-sqlite3'
 import { callWithFallback } from '../ai/modelRouter'
 import { getPersonalizationPreamble } from '../ai/personalization'
+import { resolveActionEventTokens } from '../utils/tokenFormat'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -136,6 +137,10 @@ interface EntityContext {
   noteCount: number
   /** All entity refs (id + name) that appeared in the context — used to post-process the AI output */
   entityRefs: { id: string; name: string }[]
+  /** Raw action items for [task:UUID] token resolution */
+  rawActionItems: { id: string; title: string }[]
+  /** Raw calendar events for [event:ID] token resolution */
+  rawCalendarEvents: { id: number; title: string; start_at: string }[]
 }
 
 export function buildEntityContext(
@@ -208,7 +213,7 @@ export function buildEntityContext(
     .all(entity.id, entity.id) as ActionRow[]
 
   function fmtAction(a: ActionRow): string {
-    let s = `- ${a.title}`
+    let s = `- [task:${a.id}] ${a.title}`
     if (a.project_entity_id && a.project_name) {
       s += ` [project: {{entity:${a.project_entity_id}:${a.project_name}}}]`
     } else if (a.project_name) {
@@ -302,7 +307,7 @@ export function buildEntityContext(
           calendarLines = events
             .map((ev) => {
               const date = ev.start_at.slice(0, 10)
-              let line = `- ${date}: ${ev.title}`
+              let line = `- [event:${ev.id}] ${date}: ${ev.title}`
               if (ev.linked_note_title) line += ` [notes: "${ev.linked_note_title}"]`
               return line
             })
@@ -317,6 +322,31 @@ export function buildEntityContext(
   const fallbackGuidance = `summarise activity relevant to a ${type.name}`
   const reviewGuidance = (type.review_guidance ?? '').trim() || fallbackGuidance
 
+  // Collect raw calendar events for token resolution (fetched inside the try above)
+  let rawCalendarEvents: { id: number; title: string; start_at: string }[] = []
+  try {
+    const emailFieldSetting2 = db
+      .prepare("SELECT value FROM settings WHERE key = 'attendee_email_field'")
+      .get() as { value: string } | undefined
+    const attendeeTypeSetting2 = db
+      .prepare("SELECT value FROM settings WHERE key = 'attendee_entity_type_id'")
+      .get() as { value: string } | undefined
+    const emailField2 = emailFieldSetting2?.value?.trim() ?? ''
+    const attendeeTypeId2 = attendeeTypeSetting2?.value?.trim() ?? ''
+    if (emailField2 && attendeeTypeId2 && entity.type_id === attendeeTypeId2) {
+      const entityFields2 = JSON.parse(entity.fields) as Record<string, unknown>
+      const email2 = typeof entityFields2[emailField2] === 'string' ? (entityFields2[emailField2] as string).trim() : ''
+      if (email2) {
+        rawCalendarEvents = (db
+          .prepare(
+            `SELECT id, title, start_at FROM calendar_events
+             WHERE start_at >= ? AND start_at <= ? AND attendees LIKE ? LIMIT 20`,
+          )
+          .all(periodStartTs, periodEndTs, `%${email2}%`) as { id: number; title: string; start_at: string }[])
+      }
+    }
+  } catch { /* non-critical */ }
+
   return {
     entityName: entity.name,
     typeName: type.name,
@@ -329,6 +359,8 @@ export function buildEntityContext(
     waitingActionsLines,
     calendarLines,
     entityRefs,
+    rawActionItems: allActions.map((a) => ({ id: a.id, title: a.title })),
+    rawCalendarEvents,
   }
 }
 
@@ -367,7 +399,9 @@ function buildPrompt(ctx: EntityContext, periodStart: string, periodEnd: string,
     `- **Follow-ups** — items that may need attention\n\n` +
     `IMPORTANT: When citing a specific note inline, copy its token verbatim from the note header above ` +
     `(e.g. \`{{note:uuid-here:Note Title}}\`). This makes the reference clickable in the UI. ` +
-    `Do not alter the UUID or title inside the token.\n\n` +
+    `Do not alter the UUID or title inside the token.\n` +
+    `When referencing an action item from the data, preserve the [task:UUID] token exactly.\n` +
+    `When referencing a calendar event from the data, preserve the [event:ID] token exactly.\n\n` +
     `Write only the Markdown content. No preamble or meta-commentary.`
   )
 }
@@ -465,6 +499,8 @@ export async function generateEntityReview(
     })
     // Deterministically re-inject entity tokens the AI may have stripped
     content = injectEntityTokens(content, ctx.entityRefs)
+    // Resolve [task:UUID] and [event:ID] tokens into embedded-label chip tokens
+    content = resolveActionEventTokens(content, ctx.rawActionItems, ctx.rawCalendarEvents)
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     // Distinguish "no model configured" from other failures

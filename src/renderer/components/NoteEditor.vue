@@ -51,9 +51,8 @@ import { MAX_FILE_SIZE } from '../composables/useFileAttachment'
 import { TaskList } from '@tiptap/extension-task-list'
 import { TaskItem } from '@tiptap/extension-task-item'
 import ActionTaskItem from './ActionTaskItem.vue'
-import TaskInlineDetail from './TaskInlineDetail.vue'
 import { setCurrentNoteId, registerPromoteHandler } from '../stores/taskActionStore'
-import { taskDataCache, derivingIds, registerShowInlineDetailHandler, registerUnlinkHandler } from '../stores/taskInlineDetailStore'
+import { taskDataCache, derivingIds, fireShowInlineDetail, registerUnlinkHandler } from '../stores/taskInlineDetailStore'
 import ToolbarDropdown from './ToolbarDropdown.vue'
 import AutoMentionPopup from './AutoMentionPopup.vue'
 import { AutoMentionDecoration } from '../extensions/AutoMentionDecoration'
@@ -575,9 +574,6 @@ const popupAnchorRect = ref<DOMRect | null>(null)
 const popupNoteId = ref<string | null>(null)
 const popupNoteAnchorRect = ref<DOMRect | null>(null)
 
-const popupTaskId = ref<string | null>(null)
-const popupTaskAnchorRect = ref<DOMRect | null>(null)
-
 registerMentionClickHandler((id, rect) => {
   popupEntityId.value = id
   popupAnchorRect.value = rect
@@ -586,11 +582,6 @@ registerMentionClickHandler((id, rect) => {
 registerNoteLinkClickHandler((id, rect) => {
   popupNoteId.value = id
   popupNoteAnchorRect.value = rect
-})
-
-registerShowInlineDetailHandler((id, rect) => {
-  popupTaskId.value = id
-  popupTaskAnchorRect.value = rect
 })
 
 registerUnlinkHandler((actionId) => {
@@ -611,7 +602,6 @@ registerUnlinkHandler((actionId) => {
     scheduleSave()
   }
   taskDataCache.delete(actionId)
-  popupTaskId.value = null
 })
 
 /**
@@ -1498,8 +1488,7 @@ registerPromoteHandler(async (taskText: string, pos: number, badgeRect: DOMRect)
     })
 
     // Open inline detail popup so user can review (confidence >= 0.5) or fill in manually
-    popupTaskId.value = created.id
-    popupTaskAnchorRect.value = badgeRect
+    fireShowInlineDetail(created.id, badgeRect)
   } finally {
     derivingIds.delete(created.id)
   }
@@ -2115,14 +2104,6 @@ onBeforeUnmount(() => {
       @open-note="emit('open-note', $event)"
     />
 
-    <TaskInlineDetail
-      v-if="popupTaskId && popupTaskAnchorRect"
-      :key="`task-inline-${popupTaskId}`"
-      :action-id="popupTaskId"
-      :anchor-rect="popupTaskAnchorRect"
-      @close="popupTaskId = null"
-      @open-note="emit('open-note', $event)"
-    />
 
     <AutoMentionPopup
       v-if="hoveredAutoDetection"
