@@ -92,6 +92,8 @@ import { useEntityChips } from '../composables/useEntityChips'
 import { renderEntityChip, escapeHtml } from '../utils/markdown'
 import { buildNoteSelectionAttachment } from '../utils/noteSelection'
 import { NOTE_SELECTION_MIME } from '../types/noteSelection'
+import { pendingNoteJump } from '../stores/noteJumpStore'
+import { jumpToNoteBlocks } from '../utils/noteSelection'
 import {
   pendingAutoStartNoteId,
   activeTranscriptionNoteId,
@@ -1644,9 +1646,27 @@ watch(
       pendingAutoStartNoteId.value = null
       void startTranscription()
     }
+    // Jump to copied block range if triggered by clicking a note-selection chip
+    if (pendingNoteJump.value?.noteId === newId) {
+      const jump = pendingNoteJump.value
+      pendingNoteJump.value = null
+      // setTimeout gives TipTap a full paint cycle to settle after setContent
+      setTimeout(() => {
+        if (editor.value) jumpToNoteBlocks(editor.value, jump.blockStart, jump.blockEnd)
+      }, 50)
+    }
   },
   { immediate: true }
 )
+
+// Handle the case where the target note is already open when the chip is clicked
+watch(pendingNoteJump, (jump) => {
+  if (!jump || jump.noteId !== props.noteId || !editor.value) return
+  pendingNoteJump.value = null
+  setTimeout(() => {
+    if (editor.value) jumpToNoteBlocks(editor.value, jump.blockStart, jump.blockEnd)
+  }, 50)
+})
 
 watch(title, scheduleSave)
 

@@ -1424,9 +1424,12 @@ body {
   border-color: var(--color-border);
   padding: 1px 7px;
   max-width: none;
-  cursor: default;
+  cursor: pointer;
   vertical-align: middle;
   margin: 0 1px;
+}
+.chat-bubble-user .wizz-note-selection-chip:hover .wizz-note-selection-chip__title {
+  text-decoration: underline;
 }
 .chat-bubble-user .wizz-note-selection-chip__title {
   color: var(--color-text);

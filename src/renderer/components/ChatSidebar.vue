@@ -3,6 +3,7 @@ import { ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 import { Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText, X, Globe } from 'lucide-vue-next'
 import { messages, isLoading, clearMessages, selectedModelId, type ChatMessage, type ExecutedAction } from '../stores/chatStore'
+import { pendingNoteJump } from '../stores/noteJumpStore'
 import type { OpenMode } from '../stores/tabStore'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
 import { useEntityChips } from '../composables/useEntityChips'
@@ -314,11 +315,26 @@ function onBubbleClick(e: MouseEvent, _msg: ChatMessage): void {
     if (entityId) openEntity(e, entityId)
     return
   }
+
   const noteBtn = target.closest('[data-note-id]') as HTMLElement | null
   if (!noteBtn) return
   const noteId = noteBtn.dataset.noteId
+  if (!noteId) return
+
+  // Selection chip — open note AND jump to the copied block range
+  if (noteBtn.dataset.blockStart !== undefined) {
+    const blockStart = Number(noteBtn.dataset.blockStart)
+    const blockEnd   = Number(noteBtn.dataset.blockEnd)
+    pendingNoteJump.value = { noteId, blockStart, blockEnd }
+    const titleEl = noteBtn.querySelector(`.wizz-note-selection-chip__title`)
+    const title = titleEl?.textContent ?? ''
+    openNote(e, noteId, title)
+    return
+  }
+
+  // Plain note chip
   const noteTitle = noteBtn.dataset.noteTitle ?? ''
-  if (noteId) openNote(e, noteId, noteTitle)
+  openNote(e, noteId, noteTitle)
 }
 
 /**
@@ -512,7 +528,7 @@ function renderUserMessage(msg: ChatMessage): string {
   // Substitute selection chip markers inline at their original cursor positions
   result = result.replace(/WIZZSEL(\d+)WIZZSEL/g, (_m, idxStr: string) => {
     const sel = (msg.noteSelections ?? [])[Number(idxStr)]
-    return sel ? renderSelectionChip(sel.noteTitle, sel.blockStart, sel.blockEnd) : ''
+    return sel ? renderSelectionChip(sel.noteId, sel.noteTitle, sel.blockStart, sel.blockEnd) : ''
   })
 
   return result

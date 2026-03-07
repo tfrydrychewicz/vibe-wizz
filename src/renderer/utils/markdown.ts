@@ -71,11 +71,15 @@ const ALIGN_LEFT_SVG =
 
 /**
  * Returns the HTML for a note-selection chip (non-removable, for history display).
- * Mirrors the visual of NoteSelectionChip.vue without requiring a Vue component.
+ * Rendered as a <button> so clicks can navigate to the note and re-select the blocks.
+ * @param noteId     UUID of the source note — attached as data-note-id for click delegation.
+ * @param noteTitle  Human-readable title shown in the chip.
+ * @param blockStart 1-based index of the first overlapping top-level block.
+ * @param blockEnd   1-based index of the last overlapping top-level block.
  */
-export function renderSelectionChip(noteTitle: string, blockStart: number, blockEnd: number): string {
+export function renderSelectionChip(noteId: string, noteTitle: string, blockStart: number, blockEnd: number): string {
   return (
-    `<span class="${SELECTION_CHIP_CLASS}">` +
+    `<span class="${SELECTION_CHIP_CLASS}" data-note-id="${escapeHtml(noteId)}" data-block-start="${blockStart}" data-block-end="${blockEnd}">` +
     ALIGN_LEFT_SVG +
     `<span class="${SELECTION_CHIP_CLASS}__title">${escapeHtml(noteTitle)}</span>` +
     `<span class="${SELECTION_CHIP_CLASS}__range">(blocks ${blockStart}–${blockEnd})</span>` +

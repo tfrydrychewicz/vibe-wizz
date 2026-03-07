@@ -65,8 +65,9 @@ const BLOCK_NODE_TYPES = new Set([
 /**
  * Walk the top-level children of `doc` (depth=1 children of the root doc node),
  * treating each as one "block line".  Returns the list in order.
+ * Exported so consumers (e.g. NoteEditor jump-to-blocks) can reuse the same logic.
  */
-function collectTopLevelBlocks(doc: ProseMirrorNode): Array<{ node: ProseMirrorNode; from: number; to: number }> {
+export function collectTopLevelBlocks(doc: ProseMirrorNode): Array<{ node: ProseMirrorNode; from: number; to: number }> {
   const blocks: Array<{ node: ProseMirrorNode; from: number; to: number }> = []
   doc.forEach((node, offset) => {
     // offset is the position of the node's opening token inside the doc.
@@ -227,6 +228,28 @@ export function buildNoteSelectionAttachment(
 export function formatNoteSelectionForPrompt(attachment: NoteSelectionAttachment): string {
   const header = `--- Note Selection: "${attachment.noteTitle}" (blocks ${attachment.blockStart}–${attachment.blockEnd}) ---`
   return `${header}\n${attachment.selectedText}\n---`
+}
+
+/**
+ * Focus the editor, select the content of top-level blocks [blockStart, blockEnd]
+ * (1-based) and scroll them into view.  Mirrors the indexing used by
+ * `buildNoteSelectionAttachment` so clicking a chip re-selects the original range.
+ *
+ * Must be called AFTER the editor has received new content (e.g. inside a
+ * nextTick / setTimeout callback following setContent).
+ */
+export function jumpToNoteBlocks(editor: Editor, blockStart: number, blockEnd: number): void {
+  const blocks = collectTopLevelBlocks(editor.state.doc)
+  const start = blocks[blockStart - 1]
+  const end   = blocks[blockEnd   - 1]
+  if (!start || !end) return
+  // chain: focus first so the selection is visible, then select + scroll
+  editor
+    .chain()
+    .focus()
+    .setTextSelection({ from: start.from + 1, to: end.to - 1 })
+    .scrollIntoView()
+    .run()
 }
 
 /**
