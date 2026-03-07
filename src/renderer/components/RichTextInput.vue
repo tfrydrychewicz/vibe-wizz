@@ -13,8 +13,17 @@ interface NoteResult {
 
 export interface RichInputContent {
   text: string
+  /**
+   * Display-only version of text that keeps selection chips inline via `WIZZSELnWIZZSEL`
+   * positional markers (index into `selections`).  Never sent to the AI — use `text` for that.
+   */
+  displayContent: string
   mentionedEntityIds: string[]
+  /** Full entity objects (id + name) for each unique mentioned entity, in order of first appearance. */
+  mentionedEntities: { id: string; name: string }[]
   mentionedNoteIds: string[]
+  /** Full note objects (id + title) for each unique linked note, in order of first appearance. */
+  mentionedNotes: { id: string; title: string }[]
   selections: NoteSelectionAttachment[]
 }
 
@@ -399,11 +408,14 @@ function onBlur(): void {
  */
 function getContent(): RichInputContent {
   const el = editorRef.value
-  if (!el) return { text: '', mentionedEntityIds: [], mentionedNoteIds: [], selections: [] }
+  if (!el) return { text: '', displayContent: '', mentionedEntityIds: [], mentionedEntities: [], mentionedNoteIds: [], mentionedNotes: [], selections: [] }
 
   let text = ''
+  let displayContent = ''
   const mentionedEntityIds: string[] = []
+  const mentionedEntities: { id: string; name: string }[] = []
   const mentionedNoteIds: string[] = []
+  const mentionedNotes: { id: string; title: string }[] = []
   const selections: NoteSelectionAttachment[] = []
   const seenEntityIds = new Set<string>()
   const seenNoteIds = new Set<string>()
@@ -411,31 +423,43 @@ function getContent(): RichInputContent {
   function walk(node: Node): void {
     if (node.nodeType === Node.TEXT_NODE) {
       // Normalize non-breaking spaces inserted after chips to regular spaces
-      text += (node.textContent ?? '').replace(/\u00A0/g, ' ')
+      const t = (node.textContent ?? '').replace(/\u00A0/g, ' ')
+      text += t
+      displayContent += t
     } else if (node.nodeType === Node.ELEMENT_NODE) {
       const el = node as HTMLElement
       if (el.dataset.entityId) {
-        // Entity chip — add @Name to text, record ID (no recursion into children)
-        text += `@${el.dataset.entityName ?? ''}`
+        // Entity chip — add @Name to both strings, record ID + name (no recursion into children)
+        const token = `@${el.dataset.entityName ?? ''}`
+        text += token
+        displayContent += token
         if (!seenEntityIds.has(el.dataset.entityId)) {
           seenEntityIds.add(el.dataset.entityId)
           mentionedEntityIds.push(el.dataset.entityId)
+          mentionedEntities.push({ id: el.dataset.entityId, name: el.dataset.entityName ?? '' })
         }
       } else if (el.dataset.noteId) {
-        // Note chip
-        text += `[[${el.dataset.noteTitle ?? ''}]]`
+        // Note chip — add [[title]] to both strings
+        const token = `[[${el.dataset.noteTitle ?? ''}]]`
+        text += token
+        displayContent += token
         if (!seenNoteIds.has(el.dataset.noteId)) {
           seenNoteIds.add(el.dataset.noteId)
           mentionedNoteIds.push(el.dataset.noteId)
+          mentionedNotes.push({ id: el.dataset.noteId, title: el.dataset.noteTitle ?? '' })
         }
       } else if (el.dataset.selectionId) {
-        // Note selection chip — add attachment, no text representation
+        // Selection chip — no text for AI, but inject a positional marker in displayContent
         const att = selectionStore.get(el.dataset.selectionId)
-        if (att) selections.push(att)
+        if (att) {
+          displayContent += `WIZZSEL${selections.length}WIZZSEL`
+          selections.push(att)
+        }
       } else if (el.tagName === 'BR') {
         text += '\n'
+        displayContent += '\n'
       } else if (el.tagName === 'DIV' || el.tagName === 'P') {
-        if (text.length > 0 && !text.endsWith('\n')) text += '\n'
+        if (text.length > 0 && !text.endsWith('\n')) { text += '\n'; displayContent += '\n' }
         for (const child of Array.from(el.childNodes)) walk(child)
       } else {
         // Recurse into other elements (spans without chip data-attrs, etc.)
@@ -446,7 +470,7 @@ function getContent(): RichInputContent {
 
   for (const child of Array.from(el.childNodes)) walk(child)
 
-  return { text: text.trim(), mentionedEntityIds, mentionedNoteIds, selections }
+  return { text: text.trim(), displayContent: displayContent.trim(), mentionedEntityIds, mentionedEntities, mentionedNoteIds, mentionedNotes, selections }
 }
 
 function clear(): void {

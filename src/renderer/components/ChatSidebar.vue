@@ -6,9 +6,8 @@ import { messages, isLoading, clearMessages, selectedModelId, type ChatMessage, 
 import type { OpenMode } from '../stores/tabStore'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
 import { useEntityChips } from '../composables/useEntityChips'
-import { renderEntityChip, renderNoteChip, renderWebLinkChip, escapeHtml } from '../utils/markdown'
+import { renderEntityChip, renderNoteChip, renderWebLinkChip, renderSelectionChip, escapeHtml } from '../utils/markdown'
 import AttachmentBar from './AttachmentBar.vue'
-import NoteSelectionChip from './NoteSelectionChip.vue'
 import RichTextInput from './RichTextInput.vue'
 import ModelSelect from './ModelSelect.vue'
 import AgentStepProgress from './AgentStepProgress.vue'
@@ -155,7 +154,7 @@ function onClear(): void {
 
 async function send(): Promise<void> {
   if (!richInputRef.value || isLoading.value) return
-  const { text, mentionedEntityIds, mentionedNoteIds, selections }: RichInputContent = richInputRef.value.getContent()
+  const { text, displayContent, mentionedEntityIds, mentionedEntities, mentionedNoteIds, mentionedNotes, selections }: RichInputContent = richInputRef.value.getContent()
 
   const hasFiles = attachedImages.value.length > 0 || attachedFiles.value.length > 0
   const hasContext = selections.length > 0 || mentionedEntityIds.length > 0 || mentionedNoteIds.length > 0
@@ -177,9 +176,12 @@ async function send(): Promise<void> {
   const userMsg: ChatMessage = {
     role: 'user',
     content: text,
+    displayContent: displayContent !== text ? displayContent : undefined,
     images: imagesToSend.length > 0 ? imagesToSend.map(({ dataUrl }) => ({ dataUrl })) : undefined,
     files: fileNamesForDisplay.length > 0 ? fileNamesForDisplay : undefined,
     noteSelections: selectionsToSend.length > 0 ? selectionsToSend : undefined,
+    mentionedEntities: mentionedEntities.length > 0 ? mentionedEntities.map((e) => ({ ...e })) : undefined,
+    mentionedNotes: mentionedNotes.length > 0 ? mentionedNotes.map((n) => ({ ...n })) : undefined,
   }
   messages.value.push(userMsg)
 
@@ -452,6 +454,69 @@ function renderMessage(
 
   return result
 }
+
+/**
+ * Render a user message's content as HTML with @mention and [[note-link]] chips
+ * substituted inline — mirroring how they appear in the RichTextInput editor.
+ */
+function renderUserMessage(msg: ChatMessage): string {
+  // Use displayContent (which has positional WIZZSEL markers) when available,
+  // otherwise fall back to plain content.
+  const content = msg.displayContent ?? msg.content
+  if (!content) return ''
+
+  // Build lookup maps keyed by lowercase name/title
+  const entityByName = new Map<string, { id: string; name: string }>()
+  for (const e of msg.mentionedEntities ?? []) entityByName.set(e.name.toLowerCase(), e)
+
+  const noteByTitle = new Map<string, { id: string; title: string }>()
+  for (const n of msg.mentionedNotes ?? []) noteByTitle.set(n.title.toLowerCase(), n)
+
+  const entityItems: { id: string; name: string }[] = []
+  const noteItems: Array<{ id: string; title: string } | null> = []
+
+  // Replace [[Title]] patterns before escaping
+  let result = content.replace(/\[\[([^\]]+)\]\]/g, (_m, title: string) => {
+    const note = noteByTitle.get(title.trim().toLowerCase()) ?? { id: '', title: title.trim() }
+    noteItems.push(note)
+    return `WIZZULINK${noteItems.length - 1}WIZZULINK`
+  })
+
+  // Replace @Name patterns — longest name first to avoid prefix shadowing
+  const sortedEntities = [...(msg.mentionedEntities ?? [])].sort((a, b) => b.name.length - a.name.length)
+  for (const entity of sortedEntities) {
+    const escaped = entity.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    result = result.replace(new RegExp(`@${escaped}`, 'g'), () => {
+      entityItems.push(entity)
+      return `WIZZUENT${entityItems.length - 1}WIZZUENT`
+    })
+  }
+
+  // HTML-escape the plain text, then convert newlines
+  result = escapeHtml(result).replace(/\n/g, '<br>')
+
+  // Substitute entity placeholders back as chips
+  result = result.replace(/WIZZUENT(\d+)WIZZUENT/g, (_m, idxStr: string) => {
+    const entity = entityItems[Number(idxStr)]
+    return entity ? renderEntityChip(entity.id, entity.name) : ''
+  })
+
+  // Substitute note placeholders back as chips
+  result = result.replace(/WIZZULINK(\d+)WIZZULINK/g, (_m, idxStr: string) => {
+    const note = noteItems[Number(idxStr)]
+    if (!note) return ''
+    if (note.id) return renderNoteChip(note.id, note.title)
+    return `<span class="wizz-note-chip-plain">[[${escapeHtml(note.title)}]]</span>`
+  })
+
+  // Substitute selection chip markers inline at their original cursor positions
+  result = result.replace(/WIZZSEL(\d+)WIZZSEL/g, (_m, idxStr: string) => {
+    const sel = (msg.noteSelections ?? [])[Number(idxStr)]
+    return sel ? renderSelectionChip(sel.noteTitle, sel.blockStart, sel.blockEnd) : ''
+  })
+
+  return result
+}
 </script>
 
 <template>
@@ -517,16 +582,12 @@ function renderMessage(
               <FileText :size="11" />{{ f.name }}
             </span>
           </div>
-          <!-- Note selection chips in history — non-removable -->
-          <div v-if="msg.noteSelections && msg.noteSelections.length > 0" class="chat-msg-selections">
-            <NoteSelectionChip
-              v-for="(sel, si) in msg.noteSelections"
-              :key="si"
-              :attachment="sel"
-              :removable="false"
-            />
-          </div>
-          <div v-if="msg.content" class="chat-bubble chat-bubble-user">{{ msg.content }}</div>
+          <div
+            v-if="msg.content || (msg.noteSelections && msg.noteSelections.length > 0)"
+            class="chat-bubble chat-bubble-user"
+            v-html="renderUserMessage(msg)"
+            @click="onBubbleClick($event, msg)"
+          />
         </template>
 
         <!-- Assistant bubble: Markdown + inline note chips via v-html + event delegation -->

@@ -42,6 +42,15 @@ export interface ChatMessage {
   files?: { name: string }[]
   /** Note selection attachments pasted from the editor; stored for history display */
   noteSelections?: import('../types/noteSelection').NoteSelectionAttachment[]
+  /**
+   * Display-only version of `content` with `WIZZSELnWIZZSEL` positional markers
+   * substituted in for note-selection chips.  Never sent to the AI.
+   */
+  displayContent?: string
+  /** Entity mentions in the user message (id + name), used to render inline chips in the history bubble. */
+  mentionedEntities?: { id: string; name: string }[]
+  /** Note links in the user message (id + title), used to render inline chips in the history bubble. */
+  mentionedNotes?: { id: string; title: string }[]
   references?: { id: string; title: string }[]
   entityRefs?: { id: string; name: string }[]
   actions?: ExecutedAction[]

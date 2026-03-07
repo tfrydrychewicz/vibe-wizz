@@ -41,7 +41,11 @@ function applyColor(btn: HTMLButtonElement, color: string): void {
   const rgb = hexToRgb(color)
   if (!rgb) return
   const [r, g, b] = rgb
-  btn.style.background = `rgba(${r},${g},${b},0.12)`
+  // Skip the inline background inside a user bubble — CSS overrides it with the dark
+  // surface color, and inline styles would win over class rules otherwise.
+  if (!btn.closest('.chat-bubble-user')) {
+    btn.style.background = `rgba(${r},${g},${b},0.12)`
+  }
   btn.style.color = color
   btn.style.borderColor = `rgba(${r},${g},${b},0.3)`
 }

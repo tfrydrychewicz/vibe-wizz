@@ -35,6 +35,9 @@ export const NOTE_CHIP_CLASS = 'wizz-note-chip'
 /** CSS class for all inline web-link chips rendered via v-html. */
 export const WEB_LINK_CHIP_CLASS = 'wizz-web-chip'
 
+/** CSS class for note-selection chips rendered via v-html (mirrors NoteSelectionChip.vue). */
+export const SELECTION_CHIP_CLASS = 'wizz-note-selection-chip'
+
 // ── Chip HTML generators (shared by renderInline + renderMessage) ─────────────
 
 /**
@@ -55,6 +58,29 @@ export function renderEntityChip(id: string | undefined, name: string): string {
 export function renderNoteChip(id: string | undefined, title: string): string {
   const idAttr = id ? ` data-note-id="${escapeHtml(id)}"` : ''
   return `<button class="${NOTE_CHIP_CLASS}"${idAttr} data-note-title="${escapeHtml(title)}">${escapeHtml(title)}</button>`
+}
+
+/** Lucide AlignLeft SVG (12×12) inlined for note-selection chips. */
+const ALIGN_LEFT_SVG =
+  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<line x1="21" x2="3" y1="6" y2="6"/>' +
+  '<line x1="15" x2="3" y1="12" y2="12"/>' +
+  '<line x1="17" x2="3" y1="18" y2="18"/>' +
+  '</svg>'
+
+/**
+ * Returns the HTML for a note-selection chip (non-removable, for history display).
+ * Mirrors the visual of NoteSelectionChip.vue without requiring a Vue component.
+ */
+export function renderSelectionChip(noteTitle: string, blockStart: number, blockEnd: number): string {
+  return (
+    `<span class="${SELECTION_CHIP_CLASS}">` +
+    ALIGN_LEFT_SVG +
+    `<span class="${SELECTION_CHIP_CLASS}__title">${escapeHtml(noteTitle)}</span>` +
+    `<span class="${SELECTION_CHIP_CLASS}__range">(blocks ${blockStart}–${blockEnd})</span>` +
+    `</span>`
+  )
 }
 
 /** Lucide-style globe SVG (16×16) inlined for zero runtime icon lookup. */
