@@ -130,12 +130,31 @@ export async function callWithFallback<T>(
 ): Promise<T> {
   const chain = resolveChain(featureSlot, db)
 
-  // If a specific model is requested, move it to the front of the chain
-  // so it is tried first while remaining models serve as fallbacks.
+  // If a specific model is requested, ensure it is at the front of the chain.
+  // If it is already present, move it; if not (e.g. the user selects a model that
+  // isn't part of the configured feature chain), resolve it from the DB and prepend it.
   if (overrideModelId) {
-    const idx = chain.findIndex((m) => m.modelId === overrideModelId)
-    if (idx > 0) {
-      chain.unshift(...chain.splice(idx, 1))
+    const existingIdx = chain.findIndex((m) => m.modelId === overrideModelId)
+    if (existingIdx > 0) {
+      chain.unshift(...chain.splice(existingIdx, 1))
+    } else if (existingIdx === -1) {
+      const row = db
+        .prepare(
+          `SELECT m.provider_id, p.api_key
+           FROM ai_models    m
+           JOIN ai_providers p ON p.id = m.provider_id
+           WHERE m.id = ? AND m.enabled = 1 AND p.enabled = 1 AND p.api_key != ''`,
+        )
+        .get(overrideModelId) as { provider_id: string; api_key: string } | undefined
+
+      if (row) {
+        try {
+          const adapter = getAdapter(row.provider_id)
+          chain.unshift({ modelId: overrideModelId, providerId: row.provider_id, apiKey: row.api_key, adapter })
+        } catch {
+          // Unknown provider — fall through to existing chain
+        }
+      }
     }
   }
 

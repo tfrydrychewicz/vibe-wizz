@@ -71,13 +71,20 @@ interface GeminiContent {
   parts: GeminiPart[]
 }
 
-interface GeminiTool {
+interface GeminiFunctionTool {
   functionDeclarations: Array<{
     name: string
     description: string
     parameters: Record<string, unknown>
   }>
 }
+
+/** Google Search grounding tool — Gemini executes searches server-side. */
+interface GeminiGoogleSearchTool {
+  googleSearch: Record<string, never>
+}
+
+type GeminiTool = GeminiFunctionTool | GeminiGoogleSearchTool
 
 interface GeminiCandidate {
   content: GeminiContent
@@ -185,15 +192,26 @@ export const geminiAdapter: ProviderAdapter = {
       body['systemInstruction'] = { parts: [{ text: params.system }] }
     }
 
+    const geminiTools: GeminiTool[] = []
+
     if (params.tools && params.tools.length > 0) {
-      const gTool: GeminiTool = {
+      geminiTools.push({
         functionDeclarations: params.tools.map((t) => ({
           name: t.name,
           description: t.description,
           parameters: t.inputSchema,
         })),
-      }
-      body['tools'] = [gTool]
+      })
+    }
+
+    // Google Search grounding — Gemini executes searches server-side and returns
+    // a final answer in a single turn. No client-side looping required.
+    if (params.webSearch) {
+      geminiTools.push({ googleSearch: {} })
+    }
+
+    if (geminiTools.length > 0) {
+      body['tools'] = geminiTools
     }
 
     body['generationConfig'] = { maxOutputTokens: params.maxTokens }

@@ -44,6 +44,9 @@ const SKIP_RE = /^(whisper|tts|babbage|davinci|curie|ada|text-davinci|text-moder
 /** Patterns that identify image generation models. */
 const IMAGE_RE = /^(dall-e|gpt-image)/i
 
+/** Models that support the web_search_options parameter (search-enabled variants). */
+const SEARCH_RE = /search/i
+
 export const openaiAdapter: ProviderAdapter = {
   async fetchModels(apiKey: string): Promise<ModelDef[]> {
     const client = new OpenAI({ apiKey })
@@ -148,11 +151,21 @@ export const openaiAdapter: ProviderAdapter = {
       },
     }))
 
+    // Reasoning models (o-series, gpt-5+) only accept max_completion_tokens;
+    // older models accept both but max_tokens is deprecated.
+    // max_completion_tokens is the unified successor that works for all current models.
+    //
+    // Search-specific model variants (e.g. gpt-4o-search-preview) have a split personality:
+    //   - They support web_search_options (server-side search, no looping required).
+    //   - They do NOT support tools (function calling) — sending it returns a 404.
+    // Regular models are the opposite: tools ✓, web_search_options ✗.
+    const isSearchModel = SEARCH_RE.test(params.model)
     const response = await client.chat.completions.create({
       model: params.model,
-      max_tokens: params.maxTokens,
+      max_completion_tokens: params.maxTokens,
       messages,
-      ...(tools ? { tools, tool_choice: 'auto' } : {}),
+      ...(!isSearchModel && tools ? { tools, tool_choice: 'auto' } : {}),
+      ...(params.webSearch && isSearchModel ? { web_search_options: {} } : {}),
     })
 
     const choice = response.choices[0]

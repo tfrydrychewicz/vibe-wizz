@@ -1426,7 +1426,7 @@ export function registerDbIpcHandlers(): void {
       let inlineNeedsWebSearch = false
       if (prompt.trim()) {
         try {
-          const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(prompt)
+          const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(prompt, undefined, overrideModelId)
           inlineNeedsWebSearch = webSearch
           if (keywords.length > 0) {
             const ftsQuery = keywords
@@ -1918,9 +1918,9 @@ export function registerDbIpcHandlers(): void {
       const seen = new Set<string>()
       let needsWebSearch = false
       if (query.trim()) {
-        // Pass prior messages so Haiku can resolve follow-ups ("a kiedy to bylo?" → "Bifrost")
+        // Pass prior messages so the model can resolve follow-ups ("a kiedy to bylo?" → "Bifrost")
         // Also classifies whether web search is needed for this question
-        const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(query, messages.slice(0, -1))
+        const { keywords, needsWebSearch: webSearch } = await extractSearchKeywords(query, messages.slice(0, -1), overrideModelId)
         needsWebSearch = webSearch
 
         if (keywords.length > 0) {

@@ -66,6 +66,13 @@ export interface ChatParams {
   messages: ChatMessage[]
   maxTokens: number
   tools?: ToolDef[]
+  /**
+   * Enable web search if the provider supports it.
+   * Adapters that support server-side web search (e.g. Anthropic) handle the
+   * search loop internally and return only when a final answer or a client-side
+   * tool call is ready. Adapters without web search support ignore this flag.
+   */
+  webSearch?: boolean
 }
 
 export interface ToolCall {

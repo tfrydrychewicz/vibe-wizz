@@ -5,7 +5,6 @@
  * Lazy singleton — instantiated on first use, replaced when the API key changes.
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import { getDatabase } from '../db/index'
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
@@ -13,13 +12,7 @@ import { scheduleEmbedding } from './pipeline'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { getCurrentDateString } from '../utils/date'
 import { callWithFallback } from '../ai/modelRouter'
-
-// Anthropic built-in web search tool — executed server-side, no client implementation needed
-const WEB_SEARCH_TOOL: Anthropic.Messages.WebSearchTool20260209 = {
-  type: 'web_search_20260209',
-  name: 'web_search',
-  max_uses: 5,
-}
+import type { ChatMessage, ContentBlock, ToolDef, ImageBlock, ToolResultBlock } from '../ai/providers/types'
 
 const MAX_CONTEXT_CHARS = 8000
 const MAX_TOOL_ITERATIONS = 10
@@ -161,7 +154,7 @@ function fieldToJsonSchema(field: StoredFieldDef): Record<string, unknown> | nul
  * Returns both the tool definitions and a slug→typeId map for execution.
  */
 function buildEntityTools(db: ReturnType<typeof getDatabase>): {
-  tools: Anthropic.Tool[]
+  tools: ToolDef[]
   slugToTypeId: Map<string, string>
   slugToTypeName: Map<string, string>
 } {
@@ -171,7 +164,7 @@ function buildEntityTools(db: ReturnType<typeof getDatabase>): {
     schema: string
   }[]
 
-  const tools: Anthropic.Tool[] = []
+  const tools: ToolDef[] = []
   const slugToTypeId = new Map<string, string>()
   const slugToTypeName = new Map<string, string>()
 
@@ -198,7 +191,7 @@ function buildEntityTools(db: ReturnType<typeof getDatabase>): {
     tools.push({
       name: `create_${slug}`,
       description: `Create a new ${row.name} entity in the knowledge base.`,
-      input_schema: {
+      inputSchema: {
         type: 'object',
         properties,
         required: ['name'],
@@ -218,7 +211,7 @@ function buildEntityTools(db: ReturnType<typeof getDatabase>): {
         `Update an existing ${row.name} entity. ` +
         `Resolve the entity ID from the context provided before calling this. ` +
         `Only supply the fields you want to change; omitted fields are left unchanged.`,
-      input_schema: {
+      inputSchema: {
         type: 'object',
         properties: editProperties,
         required: ['id'],
@@ -231,11 +224,11 @@ function buildEntityTools(db: ReturnType<typeof getDatabase>): {
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
 
-const WIZZ_TOOLS: Anthropic.Tool[] = [
+const WIZZ_TOOLS: ToolDef[] = [
   {
     name: 'create_calendar_event',
     description: 'Create a new calendar event.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Event title' },
@@ -260,7 +253,7 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
     name: 'update_calendar_event',
     description:
       'Update fields on an existing calendar event. Resolve the event ID from the calendar context provided before calling this.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'number', description: 'Calendar event ID (integer)' },
@@ -279,7 +272,7 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
     name: 'delete_calendar_event',
     description:
       'Delete a calendar event permanently. ALWAYS describe what you are about to delete in your response text and ask the user to confirm before calling this tool.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'number', description: 'Calendar event ID (integer)' },
@@ -290,7 +283,7 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
   {
     name: 'create_action_item',
     description: 'Create a new action item / task.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Action item title' },
@@ -333,7 +326,7 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
     name: 'update_action_item',
     description:
       'Update an existing action item. Resolve the item ID from the action items context provided before calling this.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Action item ID (UUID)' },
@@ -369,7 +362,7 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
     name: 'delete_action_item',
     description:
       'Delete an action item permanently. ALWAYS describe what you are about to delete in your response text and ask the user to confirm before calling this tool.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Action item ID (UUID)' },
@@ -385,7 +378,7 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
       'When the note selection contains multiple tasks, call this tool once per task (with its individual task_text) ' +
       'and then call update_action_item for each returned action_item_id — do not skip any task. ' +
       'Returns { action_item_id, created, title } — use action_item_id as the id parameter for update_action_item.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         task_text: {
@@ -407,7 +400,7 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
       'Format the content as Markdown: ## for headings, - for bullets, - [ ] for task checkboxes, **bold**, *italic*, `code`, ' +
       'and GFM tables (| Col | Col |\\n| --- | --- |\\n| cell | cell |) for structured data. ' +
       'The note will be rendered with full rich-text formatting in the editor.',
-    input_schema: {
+    inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Note title — short and descriptive' },
@@ -756,6 +749,7 @@ function formatActionItem(item: ActionItemContext): string {
 export async function extractSearchKeywords(
   question: string,
   recentHistory?: { role: 'user' | 'assistant'; content: string }[],
+  overrideModelId?: string,
 ): Promise<{ keywords: string[]; needsWebSearch: boolean }> {
   const fallbackKeywords = question.split(/\s+/).filter((w) => w.length >= 3)
   const db = getDatabase()
@@ -811,7 +805,7 @@ export async function extractSearchKeywords(
         .filter((w) => w.length >= 2)
 
       return { keywords: keywords.length > 0 ? keywords : fallbackKeywords, needsWebSearch }
-    })
+    }, overrideModelId)
   } catch {
     return { keywords: fallbackKeywords, needsWebSearch: false }
   }
@@ -997,72 +991,35 @@ export async function generateInlineContent(
   }
 
   return callWithFallback('inline_ai', db, async (m) => {
-    const anthropic = new Anthropic({ apiKey: m.apiKey })
-
-    // When images or files are provided, build a multipart content array; otherwise use plain string
     const hasImages = images && images.length > 0
     const hasFiles = files && files.length > 0
-    const userContent: Anthropic.MessageParam['content'] =
+
+    // Build normalized user message content
+    const userContent: string | ContentBlock[] =
       hasImages || hasFiles
         ? [
-            ...(hasImages ? images.map((img): Anthropic.ImageBlockParam => ({
+            ...(hasImages ? images!.map((img): ImageBlock => ({
               type: 'image',
-              source: {
-                type: 'base64',
-                media_type: img.mimeType,
-                data: img.dataUrl.includes(',') ? img.dataUrl.split(',')[1] : img.dataUrl,
-              },
+              mediaType: img.mimeType as ImageBlock['mediaType'],
+              data: img.dataUrl.includes(',') ? img.dataUrl.split(',')[1] : img.dataUrl,
             })) : []),
-            ...(hasFiles ? files.map((f) => ({
-              type: 'document' as const,
-              source: f.mimeType === 'application/pdf'
-                ? { type: 'base64' as const, media_type: 'application/pdf' as const, data: f.content }
-                : { type: 'text' as const, media_type: 'text/plain' as const, data: f.content },
+            ...(hasFiles ? files!.map((f): ContentBlock => ({
+              type: 'text',
+              text: `[File: ${f.name}]\n${f.content}`,
             })) : []),
-            { type: 'text' as const, text: userText },
+            { type: 'text', text: userText },
           ]
         : userText
 
-    // When web search is not needed, use a simple single-turn call (no tool loop overhead)
-    if (!useWebSearch) {
-      const response = await anthropic.messages.create({
-        model: m.modelId,
-        max_tokens: 1500,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userContent }],
-      })
-      const block = response.content[0]
-      return block.type === 'text' ? block.text.trim() : ''
-    }
+    const result = await m.adapter.chat({
+      model: m.modelId,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userContent }],
+      maxTokens: 1500,
+      webSearch: useWebSearch,
+    }, m.apiKey)
 
-    // Web search enabled: run a tool-use loop (max 5 iterations).
-    // The web search tool is server-side — Anthropic executes it and embeds both
-    // ServerToolUseBlock + WebSearchToolResultBlock in the assistant turn.
-    // We just push the assistant turn and continue; no client-side tool execution needed.
-    const loopMessages: Anthropic.MessageParam[] = [{ role: 'user', content: userContent }]
-    const inlineTools: Anthropic.Messages.ToolUnion[] = [WEB_SEARCH_TOOL]
-    const MAX_INLINE_ITERATIONS = 5
-
-    for (let i = 0; i < MAX_INLINE_ITERATIONS; i++) {
-      const response = await anthropic.messages.create({
-        model: m.modelId,
-        max_tokens: 1500,
-        system: systemPrompt,
-        tools: inlineTools,
-        messages: loopMessages,
-      })
-
-      if (response.stop_reason !== 'tool_use') {
-        const block = response.content.find((b) => b.type === 'text')
-        return block?.type === 'text' ? block.text.trim() : ''
-      }
-
-      // Append assistant turn (contains server_tool_use + web_search_tool_result blocks)
-      // No user tool_result turn needed — results are already embedded in the assistant content
-      loopMessages.push({ role: 'assistant', content: response.content })
-    }
-
-    return ''
+    return result.text.trim()
   }, overrideModelId)
 }
 
@@ -1239,103 +1196,72 @@ export async function sendChatMessage(
   const lastUserIndex = [...messages].map((msg) => msg.role).lastIndexOf('user')
 
   const chatResult = await callWithFallback('chat', db, async (m) => {
-    const anthropic = new Anthropic({ apiKey: m.apiKey })
-
-    // Build a mutable message list for the tool loop.
-    // The loop may append assistant tool-use blocks and user tool-result blocks.
-    // If images, files, or note selections are provided, attach them to the last
-    // user message as content blocks / prepended text.
     const noteSelectionsPrefix = formatNoteSelectionsBlock(noteSelections)
-    const loopMessages: Anthropic.MessageParam[] = messages.map((msg, i) => {
-      const hasImages = images && images.length > 0
-      const hasFiles = files && files.length > 0
-      const hasSelections = noteSelectionsPrefix.length > 0
+    const hasImages = images && images.length > 0
+    const hasFiles = files && files.length > 0
+    const hasSelections = noteSelectionsPrefix.length > 0
+
+    // Build normalized message list — attach images/files/selections to the last user message
+    const loopMessages: ChatMessage[] = messages.map((msg, i) => {
       if (i === lastUserIndex && (hasImages || hasFiles || hasSelections)) {
-        // Prepend note selections to the user text so the model sees structured
-        // context first, then the user's typed message.
         const userText = hasSelections
           ? noteSelectionsPrefix + (msg.content || '')
           : msg.content || '(see attached file)'
-        return {
-          role: 'user' as const,
-          content: [
-            ...(hasImages ? images.map((img) => ({
-              type: 'image' as const,
-              source: {
-                type: 'base64' as const,
-                media_type: img.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-                data: img.dataUrl.includes(',') ? img.dataUrl.split(',')[1] : img.dataUrl,
-              },
-            })) : []),
-            ...(hasFiles ? files.map((f) => ({
-              type: 'document' as const,
-              source: f.mimeType === 'application/pdf'
-                ? { type: 'base64' as const, media_type: 'application/pdf' as const, data: f.content }
-                : { type: 'text' as const, media_type: 'text/plain' as const, data: f.content },
-            })) : []),
-            { type: 'text' as const, text: userText },
-          ],
-        }
+        const content: ContentBlock[] = [
+          ...(hasImages ? images!.map((img): ImageBlock => ({
+            type: 'image',
+            mediaType: img.mimeType as ImageBlock['mediaType'],
+            data: img.dataUrl.includes(',') ? img.dataUrl.split(',')[1] : img.dataUrl,
+          })) : []),
+          ...(hasFiles ? files!.map((f): ContentBlock => ({
+            type: 'text',
+            text: `[File: ${f.name}]\n${f.content}`,
+          })) : []),
+          { type: 'text', text: userText },
+        ]
+        return { role: 'user' as const, content }
       }
       return { role: msg.role as 'user' | 'assistant', content: msg.content }
     })
 
-    const allWizzTools: Anthropic.Tool[] = [...WIZZ_TOOLS, ...entityTools]
-    const tools: Anthropic.Messages.ToolUnion[] = useWebSearch
-      ? [...allWizzTools, WEB_SEARCH_TOOL]
-      : allWizzTools
-
+    const allTools: ToolDef[] = [...WIZZ_TOOLS, ...entityTools]
     const actions: ExecutedAction[] = []
     let finalText = ''
 
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-      const response = await anthropic.messages.create({
+      const result = await m.adapter.chat({
         model: m.modelId,
-        max_tokens: 4000,
         system: systemPrompt,
-        tools,
         messages: loopMessages,
-      })
+        maxTokens: 4000,
+        tools: allTools,
+        webSearch: useWebSearch,
+      }, m.apiKey)
 
-      if (response.stop_reason !== 'tool_use') {
-        // Terminal response — extract text content
-        const textBlock = response.content.find((b) => b.type === 'text')
-        finalText = textBlock?.type === 'text' ? textBlock.text.trim() : ''
+      if (result.stopReason !== 'tool_use') {
+        finalText = result.text.trim()
         break
       }
 
-      // Append assistant turn (may include text + tool_use + server_tool_use + web_search_tool_result blocks)
-      loopMessages.push({ role: 'assistant', content: response.content })
+      // Append normalized assistant turn for re-feeding into next iteration
+      loopMessages.push({ role: 'assistant', content: result.rawBlocks })
 
-      // Execute custom tool_use blocks; skip server_tool_use (web search handled server-side,
-      // results are already embedded in the assistant content above)
-      const toolResults: Anthropic.ToolResultBlockParam[] = []
-      for (const block of response.content) {
-        if (block.type !== 'tool_use') continue
-
+      // Execute client-side WIZZ tools and collect results
+      const toolResults: ToolResultBlock[] = []
+      for (const tc of result.toolCalls) {
         let resultContent: string
         let isError = false
         try {
-          const action = executeTool(block.name, block.input as Record<string, unknown>, slugToTypeId, slugToTypeName)
+          const action = executeTool(tc.name, tc.input, slugToTypeId, slugToTypeName)
           actions.push(action)
           resultContent = JSON.stringify(action.payload)
         } catch (err) {
           isError = true
           resultContent = err instanceof Error ? err.message : String(err)
         }
-
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: resultContent,
-          is_error: isError,
-        })
+        toolResults.push({ type: 'tool_result', toolCallId: tc.id, toolName: tc.name, content: resultContent, isError })
       }
 
-      // Only add a user turn when there are custom tool results to report.
-      // For server-tool-only turns (web search), results are already in the assistant content —
-      // the next loop iteration calls the API with the assistant turn as the last message,
-      // letting Claude read the search results and produce the final answer.
       if (toolResults.length > 0) {
         loopMessages.push({ role: 'user', content: toolResults })
       }
@@ -1344,13 +1270,11 @@ export async function sendChatMessage(
     // Scan final response for {{entity:uuid:Name}} tokens — ID is embedded directly.
     const entityRefsMap = new Map<string, { id: string; name: string }>()
     for (const match of finalText.matchAll(new RegExp(ENTITY_TOKEN_RE.source, 'g'))) {
-      const id   = match[1]
-      const name = match[2].trim()
+      const id = match[1]; const name = match[2].trim()
       if (id && name && !entityRefsMap.has(id)) entityRefsMap.set(id, { id, name })
     }
-    const entityRefs = Array.from(entityRefsMap.values())
 
-    return { content: finalText, actions, entityRefs }
+    return { content: finalText, actions, entityRefs: Array.from(entityRefsMap.values()) }
   }, overrideModelId, (from, to) => {
     fallbackWarning = `Used ${to} — primary model (${from}) unavailable`
   })
