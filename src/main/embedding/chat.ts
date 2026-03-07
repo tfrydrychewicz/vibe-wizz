@@ -15,6 +15,8 @@ import { scheduleEmbedding } from './pipeline'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { getCurrentDateString } from '../utils/date'
 import { callWithFallback } from '../ai/modelRouter'
+import { searchAndRead } from '../web/index'
+import { pushToRenderer } from '../push'
 import type { ChatMessage, ContentBlock, ToolDef, ImageBlock, ToolResultBlock } from '../ai/providers/types'
 
 const MAX_CONTEXT_CHARS = 8000
@@ -223,6 +225,55 @@ function buildEntityTools(db: ReturnType<typeof getDatabase>): {
   }
 
   return { tools, slugToTypeId, slugToTypeName }
+}
+
+// ── Web search tool ───────────────────────────────────────────────────────────
+
+/** Tool definition for the free local DuckDuckGo web search (added to allTools when enabled). */
+const WEB_SEARCH_TOOL: ToolDef = {
+  name: 'web_search',
+  description:
+    'Search the web for current, public information not available in the personal knowledge base. ' +
+    'Use for: recent news, software release notes, public documentation, prices, live data. ' +
+    'Do NOT use for personal notes, meetings, tasks, or entities — those are already in the context. ' +
+    'After calling this tool, always cite the sources you used with Markdown links: [Title](url).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'The search query — be specific and include relevant keywords.',
+      },
+      max_results: {
+        type: 'number',
+        description: 'Number of pages to fetch and read (1–5, default 3).',
+      },
+    },
+    required: ['query'],
+  },
+}
+
+/**
+ * Execute a web search and return formatted results as a string to be injected
+ * back into the model's context as a tool_result content block.
+ */
+async function executeWebSearchTool(query: string, maxResults = 3): Promise<string> {
+  const results = await searchAndRead(query, Math.min(maxResults, 5))
+  if (results.length === 0) {
+    return `No web results found for: "${query}". The search may have been blocked or returned no matches.`
+  }
+
+  const sections = results.map((r, i) => {
+    const header = `[${i + 1}] ${r.title}\nURL: ${r.url}`
+    const body = r.content ?? r.snippet
+    return `${header}\n\n${body}`
+  })
+
+  return (
+    `Web search results for "${query}":\n\n` +
+    sections.join('\n\n---\n\n') +
+    '\n\nWhen citing these sources in your response, use Markdown links: [Source Title](url)'
+  )
 }
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
@@ -1126,6 +1177,8 @@ export async function sendChatMessage(
   useWebSearch = false,
   overrideModelId?: string,
   noteSelections: NoteSelectionAttachment[] = [],
+  /** When true, adds the local `web_search` WIZZ_TOOL and disables Anthropic's paid server search. */
+  localWebSearchEnabled = false,
 ): Promise<{ content: string; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[]; fallbackWarning?: string }> {
   const db = getDatabase()
   let fallbackWarning: string | undefined
@@ -1238,6 +1291,14 @@ export async function sendChatMessage(
       noteBlocks
   }
 
+  if (localWebSearchEnabled) {
+    systemPrompt +=
+      '\n\nYou have access to a `web_search` tool for real-time public information. ' +
+      'Use it when the user asks about current events, software versions, public documentation, ' +
+      'or anything not covered by their personal notes. ' +
+      'Always cite sources using Markdown links: [Source Title](https://...).'
+  }
+
   // Pre-compute lastUserIndex (no model needed)
   const lastUserIndex = [...messages].map((msg) => msg.role).lastIndexOf('user')
 
@@ -1270,7 +1331,12 @@ export async function sendChatMessage(
       return { role: msg.role as 'user' | 'assistant', content: msg.content }
     })
 
-    const allTools: ToolDef[] = [...WIZZ_TOOLS, ...entityTools]
+    // Include web_search tool when local search is enabled
+    const allTools: ToolDef[] = [
+      ...(localWebSearchEnabled ? [WEB_SEARCH_TOOL] : []),
+      ...WIZZ_TOOLS,
+      ...entityTools,
+    ]
     const actions: ExecutedAction[] = []
     let finalText = ''
 
@@ -1281,7 +1347,8 @@ export async function sendChatMessage(
         messages: loopMessages,
         maxTokens: 4000,
         tools: allTools,
-        webSearch: useWebSearch,
+        // Disable Anthropic's paid server-side search when local search is active
+        webSearch: localWebSearchEnabled ? false : useWebSearch,
       }, m.apiKey)
 
       if (result.stopReason !== 'tool_use') {
@@ -1292,19 +1359,33 @@ export async function sendChatMessage(
       // Append normalized assistant turn for re-feeding into next iteration
       loopMessages.push({ role: 'assistant', content: result.rawBlocks })
 
-      // Execute client-side WIZZ tools and collect results
+      // Execute tools and collect results
       const toolResults: ToolResultBlock[] = []
       for (const tc of result.toolCalls) {
         let resultContent: string
         let isError = false
-        try {
-          const action = executeTool(tc.name, tc.input, slugToTypeId, slugToTypeName)
-          actions.push(action)
-          resultContent = JSON.stringify(action.payload)
-        } catch (err) {
-          isError = true
-          resultContent = err instanceof Error ? err.message : String(err)
+
+        if (tc.name === 'web_search' && localWebSearchEnabled) {
+          // Async special case — network fetch, not a DB mutation
+          const { query, max_results } = tc.input as { query: string; max_results?: number }
+          pushToRenderer('web-search:performed', { query })
+          try {
+            resultContent = await executeWebSearchTool(query, max_results ?? 3)
+          } catch (err) {
+            isError = true
+            resultContent = err instanceof Error ? err.message : String(err)
+          }
+        } else {
+          try {
+            const action = executeTool(tc.name, tc.input, slugToTypeId, slugToTypeName)
+            actions.push(action)
+            resultContent = JSON.stringify(action.payload)
+          } catch (err) {
+            isError = true
+            resultContent = err instanceof Error ? err.message : String(err)
+          }
         }
+
         toolResults.push({ type: 'tool_result', toolCallId: tc.id, toolName: tc.name, content: resultContent, isError })
       }
 

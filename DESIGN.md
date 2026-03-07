@@ -1098,6 +1098,18 @@ Full feature spec: [`features/ENTITY_RECURRING_REVIEWS.md`](features/ENTITY_RECU
 - [x] **Phase I — Settings AI Features**: `entity_review` slot auto-appears via `FEATURE_SLOTS` iteration in `ai-feature-models:list`; `DEFAULT_CHAINS` fallback to Haiku; no additional code required
 - [x] **Phase J — Documentation**: `CLAUDE.md` updated with new IPC channels, push event, AI slot, migration, schema, components, scheduler; `DESIGN.md` updated with this phase checklist
 
+### Phase 8 — Local Web Search
+
+Full feature spec: [`features/WEB_SEARCH.md`](features/WEB_SEARCH.md)
+
+- [x] **Phase A — Core Pipeline**: `src/main/web/` module — `searcher.ts` (direct DDG Lite HTML fetch + linkedom parse, no API key), `fetcher.ts` (8s timeout, 512 KB cap, browser UA), `extractor.ts` (linkedom + Readability + Turndown, 4000 char cap), `pipeline.ts` (`searchAndRead()` orchestrates all three in parallel), `index.ts` (re-exports public API); `duck-duck-scrape` replaced by direct `html.duckduckgo.com/html/` fetch with browser headers to avoid anti-bot blocking; `linkedom` used instead of `jsdom` to avoid `ERR_REQUIRE_ESM` crash from jsdom's `html-encoding-sniffer → @exodus/bytes` ESM dependency
+- [x] **Phase B — WIZZ_TOOL Integration**: `web_search` tool definition added to `chat.ts`; `sendChatMessage()` extended with `localWebSearchEnabled` param; async tool handler in the tool-use loop calls `searchAndRead()` + `executeWebSearchTool()` + pushes `web-search:performed` event; Anthropic's paid `webSearch` flag forced to `false` when local search is on; `AgentContext` extended with `localWebSearchEnabled`; `runAgent` and `executor` propagate the flag; `chat:send` IPC reads `web_search_enabled` setting
+- [x] **Phase C — Web Link Chip Rendering**: `renderWebLinkChip(title, url)` added to `markdown.ts`; `WEB_LINK_CHIP_CLASS` (`'wizz-web-chip'`) constant; `renderInline()` handles Markdown links and bare URLs via `WIZZURL` placeholder substitution; `ChatSidebar.vue` `renderMessage()` extended with pre/post-marked processing for link chips + `<a>` tag conversion; `shell:open-external` IPC handler registered; click delegates wired in `ChatSidebar`, `TodayView`, `EntityReviewPanel`; `.wizz-web-chip` CSS in `style.css`
+- [x] **Phase D — Progress Indicator**: `WebSearchIndicator.vue` — pulsing globe SVG + "Searching the web for '…'" text; mounted in `ChatSidebar` loading bubble; `webSearchQuery` ref driven by `web-search:performed` push, cleared on `isLoading → false`; CSS (`web-search-indicator`, `web-search-pulse` keyframe) in `style.css`
+- [x] **Phase E — Settings UI**: `web_search_enabled` toggle in `SettingsModal.vue` LLM Providers tab (top of tab, above provider cards); `webSearchEnabled` ref loaded on mount, saved in `save()`; blue hint text when enabled; globe icon badge in `ChatSidebar.vue` header (visible when `webSearchEnabled`, clicking emits `open-view('__settings__')`)
+- [x] **Phase F — Electron Packaging**: runtime packages (`duck-duck-scrape` removed; `linkedom`, `@mozilla/readability`, `turndown` in `dependencies`); `@types/jsdom` and `@types/turndown` moved to `devDependencies`; no `asarUnpack` needed (zero `.node` native binaries); `electron-vite build` exits 0
+- [x] **Phase G — Documentation**: `CLAUDE.md` updated (web pipeline, settings key, push events, IPC handlers, chip helpers, constants, CSS class, `WebSearchIndicator`, updated `SettingsModal`/`ChatSidebar` bullets, Inline Reference Chip Rule table); `DESIGN.md` updated with this phase checklist
+
 ---
 
 ## Risks & Mitigations

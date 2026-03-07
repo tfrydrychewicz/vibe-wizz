@@ -41,6 +41,7 @@ async function delegateToChat(context: AgentContext): Promise<AgentResult> {
     context.useWebSearch,
     context.overrideModelId,
     context.noteSelections,
+    context.localWebSearchEnabled ?? false,
   )
   return {
     content: result.content,
@@ -81,7 +82,7 @@ export async function runAgent(
 
   let plan: AgentPlan
   try {
-    plan = await planPrompt(lastUserMsg, db)
+    plan = await planPrompt(lastUserMsg, db, context.localWebSearchEnabled ?? false)
   } catch (err) {
     console.warn('[agent] Planning failed, falling back to sendChatMessage:', err)
     pushPhase('done')

@@ -146,6 +146,14 @@ async function onBriefClick(e: MouseEvent): Promise<void> {
   const target = e.target as HTMLElement
   const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
 
+  const webChip = target.closest('[data-web-url]') as HTMLElement | null
+  if (webChip) {
+    e.preventDefault()
+    const url = webChip.dataset.webUrl
+    if (url) void window.api.invoke('shell:open-external', { url })
+    return
+  }
+
   // Entity: prefer embedded ID ({{entity:uuid:Name}} tokens), fall back to name search
   const entityBtn = target.closest('[data-entity-name]') as HTMLElement | null
   if (entityBtn) {

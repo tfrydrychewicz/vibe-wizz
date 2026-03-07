@@ -55,10 +55,10 @@ export async function needsAgentPlanning(prompt: string, db: Database.Database):
 
 // ── Planning prompt ───────────────────────────────────────────────────────────
 
-const PLANNING_SYSTEM_PROMPT = `You are a task planner for Wizz, a knowledge management desktop app. Your job is to analyze the user's request and decompose it into an ordered list of execution steps.
+const PLANNING_SYSTEM_PROMPT_BASE = `You are a task planner for Wizz, a knowledge management desktop app. Your job is to analyze the user's request and decompose it into an ordered list of execution steps.
 
 Available step types:
-- "text_generation": Generate text content using an LLM. Use for writing, summarizing, listing, drafting.
+- "text_generation": Generate text content using an LLM from its training knowledge only — no tools, no live data. Use for writing, summarizing, formatting, listing things the model already knows well.
 - "image_generation": Generate an image from a text description. Use ONLY when the user explicitly asks for a picture, illustration, image, photo, drawing, or similar visual content.
 - "tool_call": Execute a Wizz tool to create, update, or delete something (notes, calendar events, action items, entities). The tool_call step receives the full conversation context and available tools — write its prompt as a natural-language instruction describing what to create/modify and how to incorporate outputs from earlier steps.
 
@@ -66,9 +66,11 @@ Rules:
 1. Each step has: "id" (number, starting at 1), "type", "label" (short ≤6-word description shown to the user), "prompt" (the full instruction), and "depends_on" (array of step IDs whose output this step needs).
 2. A step can reference the output of an earlier step using {{step_N}} in its prompt — this will be replaced with the actual result at execution time.
 3. For image_generation steps, {{step_N}} is replaced with the LOCAL FILE PATH of the saved image. Use it in markdown image syntax: ![description]({{step_N}})
-4. If two steps don't depend on each other, give them independent depends_on arrays so they can run in parallel.
+4. Parallelism: steps run in parallel when their outputs are TRULY INDEPENDENT. Ask yourself: "does step B need to know A's output to do its job correctly?" If yes → B depends_on A. If no → they can run in parallel.
+   - Independent example: generate a list of plays + generate a generic theater photo — neither affects the other.
+   - Dependent example: search current weather → generate a photo SHOWING those weather conditions — the image prompt needs the weather data to depict rain vs sunshine accurately.
 5. The final step MUST be a "tool_call" when the user wants something created or changed in Wizz.
-6. For image_generation steps, write a detailed visual description as the prompt — do NOT just repeat the user's words. Describe style, composition, colors, mood.
+6. For image_generation steps, write a detailed visual description as the prompt — do NOT just repeat the user's words. Describe style, composition, colors, mood. If the image should reflect data from a prior step, use {{step_N}} in the prompt and list that step in depends_on.
 7. Keep plans minimal — use the fewest steps necessary. Most requests need only 1-3 steps.
 8. If the request doesn't need image generation at all, return a single tool_call step.
 
@@ -79,12 +81,37 @@ Examples:
 
 User: "Create a note with a list of Shakespeare dramas and a relevant picture in the header"
 {"steps": [{"id": 1, "type": "text_generation", "label": "Shakespeare dramas list", "prompt": "Generate a comprehensive markdown list of all Shakespeare dramas (tragedies, comedies, histories) with brief one-line descriptions for each play.", "depends_on": []}, {"id": 2, "type": "image_generation", "label": "Theater stage illustration", "prompt": "A dramatic Renaissance theater stage with rich red velvet curtains, warm candlelight illumination, ornate gilded columns, and a single spotlight on center stage. Oil painting style, classical composition, warm golden tones.", "depends_on": []}, {"id": 3, "type": "tool_call", "label": "Create Shakespeare note", "prompt": "Create a note titled 'Shakespeare Dramas'. Put the image ![Shakespeare theater]({{step_2}}) at the top, then {{step_1}} as the body content.", "depends_on": [1, 2]}]}
+(Steps 1 and 2 are parallel: the theater image looks the same regardless of which plays are listed — neither output affects the other.)
 
 User: "Schedule a meeting for Friday at 3pm"
 {"steps": [{"id": 1, "type": "tool_call", "label": "Schedule Friday meeting", "prompt": "Schedule a meeting for Friday at 3pm", "depends_on": []}]}
 
 User: "Create a project summary note for Project Alpha with a cover image"
-{"steps": [{"id": 1, "type": "text_generation", "label": "Project Alpha summary", "prompt": "Write a professional project summary for Project Alpha covering objectives, current status, key milestones, team members, and next steps. Use markdown formatting with headers and bullet points.", "depends_on": []}, {"id": 2, "type": "image_generation", "label": "Project cover illustration", "prompt": "A modern, clean abstract illustration representing project management and teamwork. Geometric shapes in blue and teal tones forming an upward trajectory, with interconnected nodes suggesting collaboration. Flat design style, professional, minimalist.", "depends_on": []}, {"id": 3, "type": "tool_call", "label": "Create Project Alpha note", "prompt": "Create a note titled 'Project Alpha — Summary'. Put the image ![Project Alpha cover]({{step_2}}) at the top, then {{step_1}} as the body.", "depends_on": [1, 2]}]}`
+{"steps": [{"id": 1, "type": "text_generation", "label": "Project Alpha summary", "prompt": "Write a professional project summary for Project Alpha covering objectives, current status, key milestones, team members, and next steps. Use markdown formatting with headers and bullet points.", "depends_on": []}, {"id": 2, "type": "image_generation", "label": "Project cover illustration", "prompt": "A modern, clean abstract illustration representing project management and teamwork. Geometric shapes in blue and teal tones forming an upward trajectory, with interconnected nodes suggesting collaboration. Flat design style, professional, minimalist.", "depends_on": []}, {"id": 3, "type": "tool_call", "label": "Create Project Alpha note", "prompt": "Create a note titled 'Project Alpha — Summary'. Put the image ![Project Alpha cover]({{step_2}}) at the top, then {{step_1}} as the body.", "depends_on": [1, 2]}]}]}`
+
+/** Appended to the base planning prompt when local web search is enabled. */
+const WEB_SEARCH_PLANNING_ADDENDUM = `
+
+IMPORTANT — Web Search is available:
+The "tool_call" step type has access to a "web_search" tool that searches DuckDuckGo and reads web pages in real time. Use a "tool_call" step (NOT "text_generation") whenever the request needs:
+- Current or live data: weather, news, sports scores, stock prices, recent events
+- Recently updated information: latest software versions, recent releases, current prices
+- Any fact the model cannot answer reliably from training data
+
+"text_generation" steps have NO tools and cannot search the web — using them for live-data research will produce outdated or hallucinated answers. Always use "tool_call" for research.
+
+Additional example with web search:
+
+User: "Create a note with today's weather in Warsaw and a city photo in the header"
+{"steps": [{"id": 1, "type": "tool_call", "label": "Search Warsaw weather", "prompt": "Use web_search to find current weather in Warsaw, Poland today. Return structured markdown: temperature, sky conditions (sunny/cloudy/rainy/snowy), wind, hourly forecast.", "depends_on": []}, {"id": 2, "type": "image_generation", "label": "Warsaw city photo", "prompt": "A realistic photo of Warsaw city center reflecting today's weather conditions: {{step_1}}. Palace of Culture and Science visible, Vistula River in background. Match the sky, lighting, and atmosphere exactly to the reported conditions (dark overcast clouds if rainy, bright blue sky if sunny, snow on rooftops if snowing). Photorealistic, wide angle.", "depends_on": [1]}, {"id": 3, "type": "tool_call", "label": "Create weather note", "prompt": "Create a note titled 'Warsaw weather today'. Put the image ![Warsaw]({{step_2}}) at the top, then include this weather data:\\n\\n{{step_1}}", "depends_on": [1, 2]}]}
+
+Note in this example: step 2 (image) depends on step 1 (weather search) because the image must show the ACTUAL weather conditions — rainy, sunny, snowy etc. The image and weather search cannot run in parallel because the image prompt needs the real weather data to be accurate.`
+
+function buildPlanningSystemPrompt(localWebSearchEnabled: boolean): string {
+  return localWebSearchEnabled
+    ? PLANNING_SYSTEM_PROMPT_BASE + WEB_SEARCH_PLANNING_ADDENDUM
+    : PLANNING_SYSTEM_PROMPT_BASE
+}
 
 // ── Plan parsing & validation ─────────────────────────────────────────────────
 
@@ -174,16 +201,23 @@ function validatePlan(raw: unknown): AgentPlan {
  *
  * The last user message is extracted from the messages array and sent to the
  * planner LLM. The planner returns a structured JSON plan.
+ *
+ * When `localWebSearchEnabled` is true the planning prompt is extended to
+ * guide the model to use "tool_call" steps (which have the web_search tool)
+ * for any research that requires live or current data.
  */
 export async function planPrompt(
   userPrompt: string,
   db: Database.Database,
+  localWebSearchEnabled = false,
 ): Promise<AgentPlan> {
+  const systemPrompt = buildPlanningSystemPrompt(localWebSearchEnabled)
+
   const plan = await callWithFallback('chat', db, async (model) => {
     const result = await model.adapter.chat(
       {
         model: model.modelId,
-        system: PLANNING_SYSTEM_PROMPT,
+        system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
         maxTokens: 1024,
       },

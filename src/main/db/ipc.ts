@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, shell } from 'electron'
 import { randomUUID } from 'crypto'
 import { getDatabase, isVecLoaded } from './index'
 import { scheduleNer, scheduleEmbeddingOnly, processAllNotes } from '../embedding/pipeline'
@@ -1718,7 +1718,11 @@ export function registerDbIpcHandlers(): void {
 
   // ─── Settings ────────────────────────────────────────────────────────────────
 
-  /** settings:get — returns the stored value for a key, or null if unset. */
+  /**
+   * settings:get — returns the stored value for a key, or null if unset.
+   * Known keys (in addition to those in CLAUDE.md): `web_search_enabled` ('true'|'false') —
+   * enables local DuckDuckGo web search as a WIZZ_TOOL available to the AI chat agent.
+   */
   ipcMain.handle('settings:get', (_event, { key }: { key: string }) => {
     const db = getDatabase()
     const row = db
@@ -2259,6 +2263,11 @@ export function registerDbIpcHandlers(): void {
       let responseWarning: string | undefined
       let generatedImages: { path: string; prompt: string }[] = []
       try {
+        const webSearchSetting = db
+          .prepare('SELECT value FROM settings WHERE key = ?')
+          .get('web_search_enabled') as { value: string } | undefined
+        const localWebSearchEnabled = webSearchSetting?.value === 'true'
+
         const result = await runAgent(
           {
             messages,
@@ -2274,6 +2283,7 @@ export function registerDbIpcHandlers(): void {
             useWebSearch: needsWebSearch,
             overrideModelId,
             noteSelections: noteSelections ?? [],
+            localWebSearchEnabled,
           },
           db,
         )
@@ -2995,6 +3005,20 @@ export function registerDbIpcHandlers(): void {
       await runClusterBatchNow()
     } finally {
       pushToRenderer('app:reembed-done', {})
+    }
+    return { ok: true }
+  })
+
+  // ── Shell utilities ──────────────────────────────────────────────────────────
+
+  /**
+   * shell:open-external — open a URL in the user's default browser.
+   * Used by web citation chips rendered in v-html content.
+   * Input: { url: string }
+   */
+  ipcMain.handle('shell:open-external', async (_event, { url }: { url: string }) => {
+    if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
+      await shell.openExternal(url)
     }
     return { ok: true }
   })

@@ -192,6 +192,14 @@ async function onBodyClick(e: MouseEvent): Promise<void> {
   const target = e.target as HTMLElement
   const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
 
+  const webChip = target.closest('[data-web-url]') as HTMLElement | null
+  if (webChip) {
+    e.preventDefault()
+    const url = webChip.dataset.webUrl
+    if (url) void window.api.invoke('shell:open-external', { url })
+    return
+  }
+
   const noteBtn = target.closest('[data-note-title]') as HTMLElement | null
   if (noteBtn) {
     const noteId = noteBtn.dataset.noteId

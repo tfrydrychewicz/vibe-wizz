@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { X, Eye, EyeOff, BrainCircuit, CalendarDays, CheckSquare, Bug, Plus, RefreshCw, Pencil, Trash2, AlertCircle, Loader2 } from 'lucide-vue-next'
+import { X, Eye, EyeOff, BrainCircuit, CalendarDays, CheckSquare, Bug, Plus, RefreshCw, Pencil, Trash2, AlertCircle, Loader2, Globe } from 'lucide-vue-next'
 import CalendarSourceModal from './CalendarSourceModal.vue'
 import AIProviderCard from './AIProviderCard.vue'
 import FeatureChainEditor from './FeatureChainEditor.vue'
@@ -208,6 +208,7 @@ async function deleteSource(id: string): Promise<void> {
 const elevenLabsKey = ref('')
 const showElevenLabsKey = ref(false)
 const elevenLabsDiarize = ref(false)
+const webSearchEnabled = ref(false)
 const deepgramKey = ref('')
 const showDeepgramKey = ref(false)
 const transcriptionModel = ref<'elevenlabs' | 'deepgram' | 'macos'>('macos')
@@ -306,7 +307,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, teamTypeId, teamNameFieldVal, teamEmailFieldVal, teamMembersFieldVal, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes] = await Promise.all([
+  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, teamTypeId, teamNameFieldVal, teamEmailFieldVal, teamMembersFieldVal, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes, webSearch] = await Promise.all([
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'deepgram_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'transcription_model' }) as Promise<string | null>,
@@ -330,6 +331,7 @@ onMounted(async () => {
     window.api.invoke('calendar-sources:list') as Promise<CalendarSource[]>,
     window.api.invoke('ai-providers:list') as Promise<ProviderRow[]>,
     window.api.invoke('ai-feature-models:list') as Promise<FeatureChain[]>,
+    window.api.invoke('settings:get', { key: 'web_search_enabled' }) as Promise<string | null>,
   ])
   elevenLabsKey.value = elevenlabs ?? ''
   deepgramKey.value = deepgram ?? ''
@@ -349,6 +351,7 @@ onMounted(async () => {
   calendarSources.value = sources ?? []
   providers.value = providersRes ?? []
   featureChains.value = chainsRes ?? []
+  webSearchEnabled.value = webSearch === 'true'
   await nextTick()
   attendeeNameField.value = attNameField ?? ''
   attendeeEmailField.value = attEmailField ?? ''
@@ -414,6 +417,7 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'save_debug_audio', value: saveDebugAudio.value ? 'true' : 'false' }),
     window.api.invoke('settings:set', { key: 'followup_staleness_days', value: String(followupStalenessDays.value) }),
     window.api.invoke('settings:set', { key: 'followup_assignee_entity_type_id', value: followupAssigneeEntityTypeId.value }),
+    window.api.invoke('settings:set', { key: 'web_search_enabled', value: webSearchEnabled.value ? 'true' : 'false' }),
   ])
   saving.value = false
   savedFeedback.value = true
@@ -472,6 +476,26 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 
             <!-- LLM Providers tab -->
             <template v-if="selectedAiTab === 'llm'">
+              <!-- Web Search toggle -->
+              <div class="field-group web-search-setting">
+                <label class="field-label">
+                  <Globe :size="13" style="margin-right: 5px; vertical-align: middle;" />
+                  Web Search
+                </label>
+                <label class="toggle-row">
+                  <input v-model="webSearchEnabled" type="checkbox" class="toggle-checkbox" />
+                  <span class="toggle-label">Enable local web search for AI chat</span>
+                </label>
+                <p class="field-hint">
+                  <span v-if="webSearchEnabled" class="web-search-enabled-hint">
+                    The AI assistant can search DuckDuckGo and read web pages to answer questions about current events, documentation, or anything not in your notes. No API key required — searches run locally on your device.
+                  </span>
+                  <span v-else>
+                    When enabled, the AI can use DuckDuckGo to find up-to-date information. All searches run locally — no external API key needed.
+                  </span>
+                </p>
+              </div>
+
               <AIProviderCard
                 v-for="p in providers"
                 :key="p.id"
@@ -1204,6 +1228,16 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 .toggle-label {
   font-size: 13px;
   color: var(--color-text);
+}
+
+/* ── Web Search setting ───────────────────────────────────────────────────── */
+.web-search-setting {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 16px;
+  margin-bottom: 4px;
+}
+.web-search-enabled-hint {
+  color: var(--color-primary, #4f6ef7);
 }
 
 /* ── Model picker (same visual style as slot picker) ─────────────────────── */

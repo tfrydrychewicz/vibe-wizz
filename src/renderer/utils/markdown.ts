@@ -32,6 +32,9 @@ export const ENTITY_CHIP_CLASS = 'wizz-entity-chip'
 /** CSS class for all inline note-link chips rendered via v-html. */
 export const NOTE_CHIP_CLASS = 'wizz-note-chip'
 
+/** CSS class for all inline web-link chips rendered via v-html. */
+export const WEB_LINK_CHIP_CLASS = 'wizz-web-chip'
+
 // ── Chip HTML generators (shared by renderInline + renderMessage) ─────────────
 
 /**
@@ -52,6 +55,31 @@ export function renderEntityChip(id: string | undefined, name: string): string {
 export function renderNoteChip(id: string | undefined, title: string): string {
   const idAttr = id ? ` data-note-id="${escapeHtml(id)}"` : ''
   return `<button class="${NOTE_CHIP_CLASS}"${idAttr} data-note-title="${escapeHtml(title)}">${escapeHtml(title)}</button>`
+}
+
+/** Lucide-style globe SVG (16×16) inlined for zero runtime icon lookup. */
+const GLOBE_SVG =
+  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<circle cx="12" cy="12" r="10"/>' +
+  '<line x1="2" y1="12" x2="22" y2="12"/>' +
+  '<path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>' +
+  '</svg>'
+
+/**
+ * Returns the HTML for a web citation chip.
+ * Clicking it calls `shell:open-external` to open the URL in the default browser.
+ *
+ * @param title  Link label shown in the chip.
+ * @param url    The target URL — must start with http:// or https://.
+ */
+export function renderWebLinkChip(title: string, url: string): string {
+  return (
+    `<a href="#" class="${WEB_LINK_CHIP_CLASS}" ` +
+    `data-web-url="${escapeHtml(url)}" title="${escapeHtml(url)}">` +
+    `${GLOBE_SVG}${escapeHtml(title)}` +
+    `</a>`
+  )
 }
 
 // ── Inline renderer ───────────────────────────────────────────────────────────
@@ -110,8 +138,31 @@ export function renderInline(raw: string): string {
     },
   )
 
+  // Pass 1e: Markdown links [label](https://...) → web chip placeholders.
+  // Must run before HTML escaping so brackets/parens are still raw.
+  const webLinkItems: { title: string; url: string }[] = []
+  const withWebLinkPlaceholders = withNoteLinkPlaceholders.replace(
+    /\[([^\]]{1,300})\]\((https?:\/\/[^)]{1,2000})\)/g,
+    (_m, label: string, url: string) => {
+      webLinkItems.push({ title: label.trim(), url: url.trim() })
+      return `WIZZURL${webLinkItems.length - 1}WIZZURL`
+    },
+  )
+
+  // Pass 1f: bare https?:// URLs not already captured in a [label](url) link.
+  // The negative lookbehind on `(` avoids matching inside already-processed links.
+  const withBareUrlPlaceholders = withWebLinkPlaceholders.replace(
+    /(?<!\()https?:\/\/[^\s<>"')\],]{4,}/g,
+    (url: string) => {
+      // Use hostname as display label
+      const label = url.replace(/^https?:\/\//, '').split('/')[0].split('?')[0]
+      webLinkItems.push({ title: label, url })
+      return `WIZZURL${webLinkItems.length - 1}WIZZURL`
+    },
+  )
+
   // Pass 2: standard inline markdown on the HTML-escaped remainder
-  const safe = escapeHtml(withNoteLinkPlaceholders)
+  const safe = escapeHtml(withBareUrlPlaceholders)
   let result = safe
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -130,6 +181,11 @@ export function renderInline(raw: string): string {
     const item = noteLinkItems[Number(idxStr)]
     if (!item) return ''
     return renderNoteChip(item.id, item.title)
+  })
+  result = result.replace(/WIZZURL(\d+)WIZZURL/g, (_m, idxStr: string) => {
+    const item = webLinkItems[Number(idxStr)]
+    if (!item) return ''
+    return renderWebLinkChip(item.title, item.url)
   })
 
   return result

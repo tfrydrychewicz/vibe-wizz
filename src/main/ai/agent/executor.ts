@@ -234,6 +234,7 @@ async function executeToolCall(
     context.useWebSearch,
     context.overrideModelId,
     context.noteSelections,
+    context.localWebSearchEnabled ?? false,
   )
 
   return {

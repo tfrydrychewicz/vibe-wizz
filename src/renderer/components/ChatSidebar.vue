@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
-import { Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText, X } from 'lucide-vue-next'
+import { Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText, X, Globe } from 'lucide-vue-next'
 import { messages, isLoading, clearMessages, selectedModelId, type ChatMessage, type ExecutedAction } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
 import { useEntityChips } from '../composables/useEntityChips'
-import { renderEntityChip, renderNoteChip, escapeHtml } from '../utils/markdown'
+import { renderEntityChip, renderNoteChip, renderWebLinkChip, escapeHtml } from '../utils/markdown'
 import AttachmentBar from './AttachmentBar.vue'
 import NoteSelectionChip from './NoteSelectionChip.vue'
 import RichTextInput from './RichTextInput.vue'
 import ModelSelect from './ModelSelect.vue'
 import AgentStepProgress from './AgentStepProgress.vue'
+import WebSearchIndicator from './WebSearchIndicator.vue'
 import type { RichInputContent } from './RichTextInput.vue'
 import type { StepProgress } from './AgentStepProgress.vue'
 
@@ -42,10 +43,20 @@ function isMsgStepsCollapsed(i: number): boolean {
   return msgStepsCollapsed.value.get(i) ?? true
 }
 
+// ── Web search indicator ──────────────────────────────────────────────────────
+/** Query currently being searched — non-empty while a web_search tool call is in flight. */
+const webSearchQuery = ref('')
+/** Whether local web search is enabled (loaded from settings on mount). */
+const webSearchEnabled = ref(false)
+
 let unsubAgentProgress: (() => void) | null = null
 let unsubAgentPhase: (() => void) | null = null
+let unsubWebSearch: (() => void) | null = null
 
-onMounted(() => {
+onMounted(async () => {
+  const webSearchSetting = await window.api.invoke('settings:get', { key: 'web_search_enabled' }) as string | null
+  webSearchEnabled.value = webSearchSetting === 'true'
+
   unsubAgentPhase = window.api.on('agent:phase', (data: unknown) => {
     const { phase } = data as { phase: typeof agentPhase.value; stepCount?: number }
     agentPhase.value = phase
@@ -62,11 +73,23 @@ onMounted(() => {
     }
     scrollToBottom()
   })
+
+  unsubWebSearch = window.api.on('web-search:performed', (data: unknown) => {
+    const { query } = data as { query: string }
+    webSearchQuery.value = query
+    scrollToBottom()
+  })
 })
 
 onUnmounted(() => {
   unsubAgentPhase?.()
   unsubAgentProgress?.()
+  unsubWebSearch?.()
+})
+
+// Clear the web search indicator once the response arrives
+watch(isLoading, (loading) => {
+  if (!loading) webSearchQuery.value = ''
 })
 
 const { applyToElement: applyChips } = useEntityChips()
@@ -163,6 +186,7 @@ async function send(): Promise<void> {
   isLoading.value = true
   agentSteps.value = []
   agentPhase.value = 'idle'
+  webSearchQuery.value = ''
   try {
     const apiMessages = messages.value
       .filter((m) => !m.error)
@@ -270,9 +294,18 @@ function formatActionPayload(action: ExecutedAction): string {
   return parts.join(' · ')
 }
 
-/** Event delegation — handles clicks on note-ref and entity-ref buttons rendered inside v-html */
+/** Event delegation — handles clicks on note-ref, entity-ref, and web-link chips rendered inside v-html */
 function onBubbleClick(e: MouseEvent, _msg: ChatMessage): void {
   const target = e.target as HTMLElement
+
+  const webChip = target.closest('[data-web-url]') as HTMLElement | null
+  if (webChip) {
+    e.preventDefault()
+    const url = webChip.dataset.webUrl
+    if (url) void window.api.invoke('shell:open-external', { url })
+    return
+  }
+
   const entityBtn = target.closest('[data-entity-id]') as HTMLElement | null
   if (entityBtn) {
     const entityId = entityBtn.dataset.entityId
@@ -358,11 +391,22 @@ function renderMessage(
   )
 
   // 1e. Swap out [Note: "Title"] citations
-  const withAllPlaceholders = withNoteLinkPlaceholders.replace(
+  const withNoteRefPlaceholders = withNoteLinkPlaceholders.replace(
     /\[Note:\s*"([^"]+)"\]/g,
     (_match, title: string) => {
       noteRefTitles.push(title)
       return `WIZZREF${noteRefTitles.length - 1}WIZZREF`
+    },
+  )
+
+  // 1f. Swap out Markdown links [label](https://...) before marked sees them,
+  //     so they render as web chips rather than plain <a> tags.
+  const webLinkItems: { title: string; url: string }[] = []
+  const withAllPlaceholders = withNoteRefPlaceholders.replace(
+    /\[([^\]]{1,300})\]\((https?:\/\/[^)]{1,2000})\)/g,
+    (_match, label: string, url: string) => {
+      webLinkItems.push({ title: label.trim(), url: url.trim() })
+      return `WIZZURL${webLinkItems.length - 1}WIZZURL`
     },
   )
 
@@ -392,6 +436,20 @@ function renderMessage(
     return `<span class="wizz-note-chip-plain">${escapeHtml(title)}</span>`
   })
 
+  // 3d. Substitute web link placeholders (from step 1f) with web chips
+  result = result.replace(/WIZZURL(\d+)WIZZURL/g, (_m, idxStr: string) => {
+    const item = webLinkItems[Number(idxStr)]
+    if (!item) return ''
+    return renderWebLinkChip(item.title, item.url)
+  })
+
+  // 3e. Convert any remaining <a href="https://..."> tags that marked emitted
+  //     (e.g. autolinked bare URLs) into web chips
+  result = result.replace(
+    /<a\s[^>]*href="(https?:\/\/[^"]+)"[^>]*>([^<]*)<\/a>/g,
+    (_m, url: string, label: string) => renderWebLinkChip(label || url, url),
+  )
+
   return result
 }
 </script>
@@ -408,6 +466,14 @@ function renderMessage(
     <div class="chat-header">
       <span class="chat-header-icon"><MessageSquare :size="14" /></span>
       <span class="chat-header-title">Ask Wizz</span>
+      <button
+        v-if="webSearchEnabled"
+        class="chat-action-btn chat-web-search-badge"
+        title="Web Search enabled — configure in Settings"
+        @click="emit('open-view', '__settings__')"
+      >
+        <Globe :size="13" />
+      </button>
       <button
         v-if="messages.length > 0"
         class="chat-action-btn"
@@ -535,6 +601,8 @@ function renderMessage(
           <span v-else-if="agentPhase === 'planning'">Planning steps…</span>
           <span v-else-if="agentPhase === 'executing'">Executing plan…</span>
         </div>
+        <!-- Web search in-progress indicator -->
+        <WebSearchIndicator v-if="webSearchQuery" :query="webSearchQuery" />
         <!-- Agent step progress (shown during multi-step agent runs) -->
         <AgentStepProgress
           v-if="agentSteps.length > 0"
@@ -669,6 +737,15 @@ function renderMessage(
 .chat-action-btn:hover {
   background: var(--color-hover);
   color: var(--color-text);
+}
+
+.chat-web-search-badge {
+  color: var(--color-primary, #4f6ef7);
+}
+
+.chat-web-search-badge:hover {
+  color: var(--color-primary, #4f6ef7);
+  background: color-mix(in srgb, var(--color-primary, #4f6ef7) 12%, transparent);
 }
 
 .chat-model-select {

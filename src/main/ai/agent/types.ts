@@ -98,6 +98,8 @@ export interface AgentContext {
   useWebSearch: boolean
   overrideModelId?: string
   noteSelections: NoteSelectionAttachment[]
+  /** When true, the local free web_search WIZZ_TOOL is exposed to the model. */
+  localWebSearchEnabled?: boolean
 }
 
 // ── Agent result ──────────────────────────────────────────────────────────────
