@@ -12,31 +12,17 @@ const providerCardRefs = new Map<string, InstanceType<typeof AIProviderCard>>()
 
 const emit = defineEmits<{ close: [] }>()
 
-// ── Category navigation ───────────────────────────────────────────────────────
-type CategoryId = 'ai' | 'actions' | 'calendar' | 'debug'
-const selectedCategory = ref<CategoryId>('ai')
+// ── Navigation ────────────────────────────────────────────────────────────────
+type NavSection =
+  | 'ai:llm' | 'ai:personalization' | 'ai:models' | 'ai:transcription' | 'ai:followup'
+  | 'actions'
+  | 'calendar:general' | 'calendar:sync' | 'calendar:attendees'
+  | 'debug'
 
-const categories: { id: CategoryId; label: string; icon: typeof BrainCircuit }[] = [
-  { id: 'ai', label: 'AI', icon: BrainCircuit },
-  { id: 'actions', label: 'Actions', icon: CheckSquare },
-  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
-  { id: 'debug', label: 'Debug', icon: Bug },
-]
+const activeSection = ref<NavSection>('ai:llm')
 
-// ── Sub-tab navigation ────────────────────────────────────────────────────────
-type AiTab = 'llm' | 'transcription' | 'followup' | 'models' | 'personalization'
-type CalendarTab = 'general' | 'sync' | 'attendees'
 
-const selectedAiTab = ref<AiTab>('llm')
-const selectedCalendarTab = ref<CalendarTab>('general')
 
-const aiTabs: { id: AiTab; label: string }[] = [
-  { id: 'llm', label: 'LLM Providers' },
-  { id: 'transcription', label: 'Transcription' },
-  { id: 'followup', label: 'Follow-up Intelligence' },
-  { id: 'models', label: 'AI Features' },
-  { id: 'personalization', label: 'Personalization' },
-]
 
 // ── AI Providers ──────────────────────────────────────────────────────────────
 interface ProviderModel {
@@ -110,12 +96,6 @@ async function onProviderDeleted(id: string): Promise<void> {
 async function onChainChange({ featureSlot, modelIds }: { featureSlot: string; modelIds: string[] }): Promise<void> {
   await window.api.invoke('ai-feature-models:save', { featureSlot, modelIds })
 }
-
-const calendarTabs: { id: CalendarTab; label: string }[] = [
-  { id: 'general', label: 'General' },
-  { id: 'sync', label: 'Sync' },
-  { id: 'attendees', label: 'Attendees' },
-]
 
 // ── Calendar Sync sources ──────────────────────────────────────────────────────
 interface CalendarSource {
@@ -224,38 +204,15 @@ const followupAssigneeEntityTypeId = ref('')
 
 // ── Personalization ───────────────────────────────────────────────────────────
 const personalizationInputRef = ref<InstanceType<typeof RichTextInput> | null>(null)
-const personalizationSaved = ref(false)
-const _personalizationHtml = ref('')   // cached HTML restored once the tab mounts
-let _personalizationSaveTimer: ReturnType<typeof setTimeout> | null = null
+const _personalizationHtml = ref('')   // cached HTML restored once the section mounts
 
-// Restore the editor content the first time the personalization tab becomes visible
-watch(selectedAiTab, async (tab) => {
-  if (tab === 'personalization' && _personalizationHtml.value) {
+// Restore editor content when the personalization section is navigated to
+watch(activeSection, async (section) => {
+  if (section === 'ai:personalization' && _personalizationHtml.value) {
     await nextTick()
-    if (personalizationInputRef.value) {
-      personalizationInputRef.value.setContent(_personalizationHtml.value)
-    }
+    personalizationInputRef.value?.setContent(_personalizationHtml.value)
   }
 })
-
-async function savePersonalization(): Promise<void> {
-  if (!personalizationInputRef.value) return
-  const content: RichInputContent = personalizationInputRef.value.getContent()
-  const html: string = personalizationInputRef.value.getHtml()
-  await Promise.all([
-    window.api.invoke('settings:set', { key: 'ai_personalization_html', value: html }),
-    window.api.invoke('settings:set', { key: 'ai_personalization_text', value: content.text }),
-    window.api.invoke('settings:set', { key: 'ai_personalization_entity_ids', value: JSON.stringify(content.mentionedEntityIds) }),
-    window.api.invoke('settings:set', { key: 'ai_personalization_note_ids', value: JSON.stringify(content.mentionedNoteIds) }),
-  ])
-  personalizationSaved.value = true
-  setTimeout(() => { personalizationSaved.value = false }, 2000)
-}
-
-function onPersonalizationChange(): void {
-  if (_personalizationSaveTimer) clearTimeout(_personalizationSaveTimer)
-  _personalizationSaveTimer = setTimeout(() => { void savePersonalization() }, 500)
-}
 
 // ── Debug settings ────────────────────────────────────────────────────────────
 const saveDebugAudio = ref(false)
@@ -399,8 +356,7 @@ onMounted(async () => {
   teamMembersField.value = teamMembersFieldVal ?? ''
   if (personalizationHtml) {
     _personalizationHtml.value = personalizationHtml
-    // If the personalization tab is already active (unlikely but possible), restore immediately
-    if (selectedAiTab.value === 'personalization' && personalizationInputRef.value) {
+    if (activeSection.value === 'ai:personalization' && personalizationInputRef.value) {
       personalizationInputRef.value.setContent(personalizationHtml)
     }
   }
@@ -464,6 +420,16 @@ async function save(): Promise<void> {
     window.api.invoke('settings:set', { key: 'followup_staleness_days', value: String(followupStalenessDays.value) }),
     window.api.invoke('settings:set', { key: 'followup_assignee_entity_type_id', value: followupAssigneeEntityTypeId.value }),
     window.api.invoke('settings:set', { key: 'web_search_enabled', value: webSearchEnabled.value ? 'true' : 'false' }),
+    ...(personalizationInputRef.value ? (() => {
+      const content: RichInputContent = personalizationInputRef.value!.getContent()
+      const html: string = personalizationInputRef.value!.getHtml()
+      return [
+        window.api.invoke('settings:set', { key: 'ai_personalization_html', value: html }),
+        window.api.invoke('settings:set', { key: 'ai_personalization_text', value: content.text }),
+        window.api.invoke('settings:set', { key: 'ai_personalization_entity_ids', value: JSON.stringify(content.mentionedEntityIds) }),
+        window.api.invoke('settings:set', { key: 'ai_personalization_note_ids', value: JSON.stringify(content.mentionedNoteIds) }),
+      ]
+    })() : []),
   ])
   saving.value = false
   savedFeedback.value = true
@@ -488,509 +454,492 @@ function onBackdropKeydown(e: KeyboardEvent): void {
       <!-- Two-pane body -->
       <div class="modal-body">
 
-        <!-- Left: category list -->
+        <!-- Left: tree nav -->
         <nav class="category-nav">
-          <button
-            v-for="cat in categories"
-            :key="cat.id"
-            class="category-item"
-            :class="{ active: selectedCategory === cat.id }"
-            @click="selectedCategory = cat.id"
-          >
-            <component :is="cat.icon" :size="15" class="cat-icon" />
-            <span>{{ cat.label }}</span>
+          <!-- AI -->
+          <div class="nav-group-label">
+            <BrainCircuit :size="14" class="cat-icon" />
+            <span>AI</span>
+          </div>
+          <button class="nav-subitem" :class="{ active: activeSection === 'ai:llm' }" @click="activeSection = 'ai:llm'">LLM Providers</button>
+          <button class="nav-subitem" :class="{ active: activeSection === 'ai:personalization' }" @click="activeSection = 'ai:personalization'">Personalization</button>
+          <button class="nav-subitem" :class="{ active: activeSection === 'ai:models' }" @click="activeSection = 'ai:models'">AI Features</button>
+          <button class="nav-subitem" :class="{ active: activeSection === 'ai:transcription' }" @click="activeSection = 'ai:transcription'">Transcription</button>
+          <button class="nav-subitem" :class="{ active: activeSection === 'ai:followup' }" @click="activeSection = 'ai:followup'">Follow-up</button>
+
+          <!-- Actions -->
+          <button class="category-item" :class="{ active: activeSection === 'actions' }" @click="activeSection = 'actions'">
+            <CheckSquare :size="14" class="cat-icon" />
+            <span>Actions</span>
+          </button>
+
+          <!-- Calendar -->
+          <div class="nav-group-label">
+            <CalendarDays :size="14" class="cat-icon" />
+            <span>Calendar</span>
+          </div>
+          <button class="nav-subitem" :class="{ active: activeSection === 'calendar:general' }" @click="activeSection = 'calendar:general'">General</button>
+          <button class="nav-subitem" :class="{ active: activeSection === 'calendar:sync' }" @click="activeSection = 'calendar:sync'">Calendar Sync</button>
+          <button class="nav-subitem" :class="{ active: activeSection === 'calendar:attendees' }" @click="activeSection = 'calendar:attendees'">Attendees</button>
+
+          <!-- Debug -->
+          <button class="category-item" :class="{ active: activeSection === 'debug' }" @click="activeSection = 'debug'">
+            <Bug :size="14" class="cat-icon" />
+            <span>Debug</span>
           </button>
         </nav>
 
         <!-- Right: settings pane -->
         <div class="settings-pane">
 
-          <!-- ── AI ── -->
-          <template v-if="selectedCategory === 'ai'">
-            <div class="pane-header">
-              <h3 class="pane-title">AI</h3>
-              <div class="tab-bar">
-                <button
-                  v-for="tab in aiTabs"
-                  :key="tab.id"
-                  class="tab-btn"
-                  :class="{ active: selectedAiTab === tab.id }"
-                  @click="selectedAiTab = tab.id"
-                >{{ tab.label }}</button>
-              </div>
+          <!-- ── AI: LLM Providers ── -->
+          <template v-if="activeSection === 'ai:llm'">
+            <div class="pane-header"><h3 class="pane-title">LLM Providers</h3></div>
+
+            <div class="field-group web-search-setting">
+              <label class="field-label">
+                <Globe :size="13" style="margin-right: 5px; vertical-align: middle;" />
+                Web Search
+              </label>
+              <label class="toggle-row">
+                <input v-model="webSearchEnabled" type="checkbox" class="toggle-checkbox" />
+                <span class="toggle-label">Enable local web search for AI chat</span>
+              </label>
+              <p class="field-hint">
+                <span v-if="webSearchEnabled" class="web-search-enabled-hint">
+                  The AI assistant can search DuckDuckGo and read web pages to answer questions about current events, documentation, or anything not in your notes. No API key required — searches run locally on your device.
+                </span>
+                <span v-else>
+                  When enabled, the AI can use DuckDuckGo to find up-to-date information. All searches run locally — no external API key needed.
+                </span>
+              </p>
             </div>
 
-            <!-- LLM Providers tab -->
-            <template v-if="selectedAiTab === 'llm'">
-              <!-- Web Search toggle -->
-              <div class="field-group web-search-setting">
-                <label class="field-label">
-                  <Globe :size="13" style="margin-right: 5px; vertical-align: middle;" />
-                  Web Search
-                </label>
-                <label class="toggle-row">
-                  <input v-model="webSearchEnabled" type="checkbox" class="toggle-checkbox" />
-                  <span class="toggle-label">Enable local web search for AI chat</span>
-                </label>
-                <p class="field-hint">
-                  <span v-if="webSearchEnabled" class="web-search-enabled-hint">
-                    The AI assistant can search DuckDuckGo and read web pages to answer questions about current events, documentation, or anything not in your notes. No API key required — searches run locally on your device.
-                  </span>
-                  <span v-else>
-                    When enabled, the AI can use DuckDuckGo to find up-to-date information. All searches run locally — no external API key needed.
-                  </span>
-                </p>
-              </div>
+            <AIProviderCard
+              v-for="p in providers"
+              :key="p.id"
+              :ref="(el) => { if (el) providerCardRefs.set(p.id, el as InstanceType<typeof AIProviderCard>) }"
+              :providerId="p.id"
+              :providerLabel="p.label"
+              :apiKey="p.apiKey"
+              :models="p.models"
+              @deleted="onProviderDeleted(p.id)"
+            />
 
-              <AIProviderCard
-                v-for="p in providers"
-                :key="p.id"
-                :ref="(el) => { if (el) providerCardRefs.set(p.id, el as InstanceType<typeof AIProviderCard>) }"
-                :providerId="p.id"
-                :providerLabel="p.label"
-                :apiKey="p.apiKey"
-                :models="p.models"
-                @deleted="onProviderDeleted(p.id)"
-              />
+            <div v-if="providers.length === 0 && !showAddProvider" class="providers-empty">
+              <p>No AI providers configured.</p>
+              <p>Add Anthropic, OpenAI, or Google Gemini to enable AI features.</p>
+            </div>
 
-              <div v-if="providers.length === 0 && !showAddProvider" class="providers-empty">
-                <p>No AI providers configured.</p>
-                <p>Add Anthropic, OpenAI, or Google Gemini to enable AI features.</p>
-              </div>
-
-              <template v-if="showAddProvider">
-                <div class="add-provider-picker">
-                  <span class="field-label" style="margin-bottom: 8px; display: block;">Choose a provider</span>
-                  <div class="provider-option-chips">
-                    <button
-                      v-for="opt in PROVIDER_OPTIONS.filter(o => !providers.some(p => p.id === o.id))"
-                      :key="opt.id"
-                      class="provider-chip"
-                      @click="addProvider(opt.id)"
-                    >{{ opt.label }}</button>
-                    <span
-                      v-if="PROVIDER_OPTIONS.every(o => providers.some(p => p.id === o.id))"
-                      class="field-hint"
-                    >All providers added.</span>
-                  </div>
-                  <button class="cancel-add-provider-btn" @click="showAddProvider = false">Cancel</button>
+            <template v-if="showAddProvider">
+              <div class="add-provider-picker">
+                <span class="field-label" style="margin-bottom: 8px; display: block;">Choose a provider</span>
+                <div class="provider-option-chips">
+                  <button
+                    v-for="opt in PROVIDER_OPTIONS.filter(o => !providers.some(p => p.id === o.id))"
+                    :key="opt.id"
+                    class="provider-chip"
+                    @click="addProvider(opt.id)"
+                  >{{ opt.label }}</button>
+                  <span
+                    v-if="PROVIDER_OPTIONS.every(o => providers.some(p => p.id === o.id))"
+                    class="field-hint"
+                  >All providers added.</span>
                 </div>
-              </template>
-              <button v-else class="add-provider-btn" @click="showAddProvider = true">
-                <Plus :size="13" />
-                Add Provider
-              </button>
-            </template>
-
-            <!-- Transcription tab -->
-            <template v-else-if="selectedAiTab === 'transcription'">
-              <div class="field-group">
-                <label class="field-label">Engine</label>
-                <div class="model-picker">
-                  <button class="model-btn" :class="{ active: transcriptionModel === 'elevenlabs' }" @click="transcriptionModel = 'elevenlabs'">ElevenLabs</button>
-                  <button class="model-btn" :class="{ active: transcriptionModel === 'deepgram' }" @click="transcriptionModel = 'deepgram'">Deepgram</button>
-                  <button class="model-btn" :class="{ active: transcriptionModel === 'macos' }" @click="transcriptionModel = 'macos'">macOS</button>
-                </div>
-              </div>
-
-              <!-- ElevenLabs: key + optional diarization mode -->
-              <template v-if="transcriptionModel === 'elevenlabs'">
-                <div class="field-group">
-                  <label class="field-label" for="elevenlabs-key">ElevenLabs API Key</label>
-                  <p class="field-hint">
-                    Scribe v2 — 99 languages including Polish, auto-detected.
-                    Stored locally on your device only.
-                  </p>
-                  <div class="key-row">
-                    <input
-                      id="elevenlabs-key"
-                      v-model="elevenLabsKey"
-                      :type="showElevenLabsKey ? 'text' : 'password'"
-                      class="modal-input key-input"
-                      placeholder="ElevenLabs API key"
-                      autocomplete="off"
-                      spellcheck="false"
-                    />
-                    <button class="toggle-btn" :title="showElevenLabsKey ? 'Hide' : 'Show'" @click="showElevenLabsKey = !showElevenLabsKey">
-                      <EyeOff v-if="showElevenLabsKey" :size="14" />
-                      <Eye v-else :size="14" />
-                    </button>
-                  </div>
-                </div>
-                <div class="field-group">
-                  <label class="field-label">Speaker Diarization</label>
-                  <label class="toggle-row">
-                    <input
-                      v-model="elevenLabsDiarize"
-                      type="checkbox"
-                      class="toggle-checkbox"
-                    />
-                    <span class="toggle-label">Identify speakers (Batch mode)</span>
-                  </label>
-                  <p class="field-hint">
-                    <span v-if="elevenLabsDiarize">
-                      Batch mode: audio is recorded locally, then uploaded to Scribe v2 after you stop.
-                      Supports up to 48 speakers. No live transcript preview during recording.
-                    </span>
-                    <span v-else>
-                      Realtime mode: live transcript as you speak (&lt;150ms latency). No speaker labels.
-                    </span>
-                  </p>
-                </div>
-                <div class="field-group">
-                  <label class="field-label">System Audio Capture</label>
-                  <label class="toggle-row">
-                    <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
-                    <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
-                  </label>
-                  <p class="field-hint">
-                    Records both your microphone and what meeting participants say via Core Audio Taps.
-                    Requires Screen &amp; System Audio Recording permission in System Settings.
-                  </p>
-                </div>
-              </template>
-
-              <!-- Deepgram: key + language -->
-              <template v-else-if="transcriptionModel === 'deepgram'">
-                <div class="field-group">
-                  <label class="field-label" for="deepgram-key">Deepgram API Key</label>
-                  <p class="field-hint">
-                    Nova-3 streaming transcription. Stored locally on your device only.
-                  </p>
-                  <div class="key-row">
-                    <input
-                      id="deepgram-key"
-                      v-model="deepgramKey"
-                      :type="showDeepgramKey ? 'text' : 'password'"
-                      class="modal-input key-input"
-                      placeholder="Deepgram API key"
-                      autocomplete="off"
-                      spellcheck="false"
-                    />
-                    <button class="toggle-btn" :title="showDeepgramKey ? 'Hide' : 'Show'" @click="showDeepgramKey = !showDeepgramKey">
-                      <EyeOff v-if="showDeepgramKey" :size="14" />
-                      <Eye v-else :size="14" />
-                    </button>
-                  </div>
-                </div>
-                <div class="field-group">
-                  <label class="field-label" for="transcription-lang">Language</label>
-                  <p class="field-hint">
-                    Auto-detect covers English and major Western languages. Set Polish explicitly for Polish speech.
-                  </p>
-                  <select id="transcription-lang" v-model="transcriptionLanguage" class="modal-input modal-select">
-                    <option value="multi">Auto-detect (EN + ES/FR/DE/HI/RU/PT/JA/IT/NL)</option>
-                    <option value="en">English</option>
-                    <option value="pl">Polish</option>
-                    <option value="es">Spanish</option>
-                    <option value="fr">French</option>
-                    <option value="de">German</option>
-                    <option value="pt">Portuguese</option>
-                    <option value="ru">Russian</option>
-                    <option value="hi">Hindi</option>
-                    <option value="ja">Japanese</option>
-                    <option value="it">Italian</option>
-                    <option value="nl">Dutch</option>
-                  </select>
-                </div>
-                <div class="field-group">
-                  <label class="field-label">System Audio Capture</label>
-                  <label class="toggle-row">
-                    <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
-                    <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
-                  </label>
-                  <p class="field-hint">
-                    Records both your microphone and what meeting participants say via Core Audio Taps.
-                    Requires Screen &amp; System Audio Recording permission in System Settings.
-                  </p>
-                </div>
-              </template>
-
-              <!-- macOS: no key, no language (uses system locale) -->
-              <template v-else>
-                <div class="field-group">
-                  <p class="field-hint">
-                    Uses macOS on-device speech recognition (SFSpeechRecognizer). Language follows your
-                    macOS system language. No API key required.
-                  </p>
-                </div>
-              </template>
-            </template>
-
-            <!-- Follow-up Intelligence tab -->
-            <template v-else-if="selectedAiTab === 'followup'">
-              <div class="field-group">
-                <label class="field-label" for="followup-entity-type">Assignee Entity Type</label>
-                <p class="field-hint">
-                  Action items assigned to entities of this type will be monitored for staleness in the Daily Brief.
-                  Set to "(disabled)" to turn off follow-up tracking.
-                </p>
-                <select id="followup-entity-type" v-model="followupAssigneeEntityTypeId" class="modal-input modal-select">
-                  <option value="">(disabled)</option>
-                  <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
-                </select>
-              </div>
-
-            </template>
-
-            <!-- AI Features tab -->
-            <template v-else-if="selectedAiTab === 'models'">
-              <div v-if="allEnabledModels.length === 0" class="chains-empty">
-                <p>
-                  Configure providers in the <strong>LLM Providers</strong> tab first,
-                  then return here to assign models to each AI feature.
-                </p>
-              </div>
-              <div v-else class="feature-chains">
-                <FeatureChainEditor
-                  v-for="chain in featureChains"
-                  :key="chain.featureSlot"
-                  :featureSlot="chain.featureSlot"
-                  :label="chain.label"
-                  :description="chain.description"
-                  :capability="(chain.capability as 'chat' | 'embedding' | 'image')"
-                  :modelIds="chain.models.map(m => m.modelId)"
-                  :availableModels="allEnabledModels"
-                  @change="onChainChange"
-                />
+                <button class="cancel-add-provider-btn" @click="showAddProvider = false">Cancel</button>
               </div>
             </template>
+            <button v-else class="add-provider-btn" @click="showAddProvider = true">
+              <Plus :size="13" />
+              Add Provider
+            </button>
+          </template>
 
-            <!-- Personalization tab -->
-            <template v-else-if="selectedAiTab === 'personalization'">
-              <div class="field-group personalization-group">
-                <label class="field-label">Tell Wizz about yourself</label>
-                <p class="field-hint">
-                  This is prepended to every AI prompt so Wizz always knows who it is talking to.
-                  Use <code>@</code> to mention entities and <code>[[</code> to include specific notes as context.
-                </p>
-                <RichTextInput
+          <!-- ── AI: Personalization ── -->
+          <template v-else-if="activeSection === 'ai:personalization'">
+            <div class="pane-header"><h3 class="pane-title">Personalization</h3></div>
+
+            <div class="field-group personalization-group">
+              <p class="field-hint">
+                This is prepended to every AI prompt so Wizz always knows who it is talking to.
+                Use <code>@</code> to mention entities and <code>[[</code> to include specific notes as context.
+              </p>
+              <RichTextInput
                   ref="personalizationInputRef"
                   placeholder="Describe yourself, your role, your team, and your preferences…"
                   class="personalization-input"
-                  @change="onPersonalizationChange"
                 />
-                <div class="personalization-footer">
-                  <button class="save-btn" @click="savePersonalization">
-                    {{ personalizationSaved ? 'Saved ✓' : 'Save' }}
+                <p class="field-hint" style="margin-top: 4px;">
+                  Applies to all AI features — chat, daily briefs, entity reviews, and more.
+                </p>
+            </div>
+          </template>
+
+          <!-- ── AI: AI Features ── -->
+          <template v-else-if="activeSection === 'ai:models'">
+            <div class="pane-header"><h3 class="pane-title">AI Features</h3></div>
+
+            <div v-if="allEnabledModels.length === 0" class="chains-empty">
+              <p>
+                Configure providers in the <strong>LLM Providers</strong> section first,
+                then return here to assign models to each AI feature.
+              </p>
+            </div>
+            <div v-else class="feature-chains">
+              <FeatureChainEditor
+                v-for="chain in featureChains"
+                :key="chain.featureSlot"
+                :featureSlot="chain.featureSlot"
+                :label="chain.label"
+                :description="chain.description"
+                :capability="(chain.capability as 'chat' | 'embedding' | 'image')"
+                :modelIds="chain.models.map(m => m.modelId)"
+                :availableModels="allEnabledModels"
+                @change="onChainChange"
+              />
+            </div>
+          </template>
+
+          <!-- ── AI: Transcription ── -->
+          <template v-else-if="activeSection === 'ai:transcription'">
+            <div class="pane-header"><h3 class="pane-title">Transcription</h3></div>
+
+            <div class="field-group">
+              <label class="field-label">Engine</label>
+              <div class="model-picker">
+                <button class="model-btn" :class="{ active: transcriptionModel === 'elevenlabs' }" @click="transcriptionModel = 'elevenlabs'">ElevenLabs</button>
+                <button class="model-btn" :class="{ active: transcriptionModel === 'deepgram' }" @click="transcriptionModel = 'deepgram'">Deepgram</button>
+                <button class="model-btn" :class="{ active: transcriptionModel === 'macos' }" @click="transcriptionModel = 'macos'">macOS</button>
+              </div>
+            </div>
+
+            <!-- ElevenLabs -->
+            <template v-if="transcriptionModel === 'elevenlabs'">
+              <div class="field-group">
+                <label class="field-label" for="elevenlabs-key">ElevenLabs API Key</label>
+                <p class="field-hint">
+                  Scribe v2 — 99 languages including Polish, auto-detected.
+                  Stored locally on your device only.
+                </p>
+                <div class="key-row">
+                  <input
+                    id="elevenlabs-key"
+                    v-model="elevenLabsKey"
+                    :type="showElevenLabsKey ? 'text' : 'password'"
+                    class="modal-input key-input"
+                    placeholder="ElevenLabs API key"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <button class="toggle-btn" :title="showElevenLabsKey ? 'Hide' : 'Show'" @click="showElevenLabsKey = !showElevenLabsKey">
+                    <EyeOff v-if="showElevenLabsKey" :size="14" />
+                    <Eye v-else :size="14" />
                   </button>
-                  <span class="field-hint" style="margin-top: 0;">
-                    Applies immediately to all AI features — chat, daily briefs, entity reviews, and more.
-                  </span>
                 </div>
               </div>
+              <div class="field-group">
+                <label class="field-label">Speaker Diarization</label>
+                <label class="toggle-row">
+                  <input v-model="elevenLabsDiarize" type="checkbox" class="toggle-checkbox" />
+                  <span class="toggle-label">Identify speakers (Batch mode)</span>
+                </label>
+                <p class="field-hint">
+                  <span v-if="elevenLabsDiarize">
+                    Batch mode: audio is recorded locally, then uploaded to Scribe v2 after you stop.
+                    Supports up to 48 speakers. No live transcript preview during recording.
+                  </span>
+                  <span v-else>
+                    Realtime mode: live transcript as you speak (&lt;150ms latency). No speaker labels.
+                  </span>
+                </p>
+              </div>
+              <div class="field-group">
+                <label class="field-label">System Audio Capture</label>
+                <label class="toggle-row">
+                  <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
+                  <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
+                </label>
+                <p class="field-hint">
+                  Records both your microphone and what meeting participants say via Core Audio Taps.
+                  Requires Screen &amp; System Audio Recording permission in System Settings.
+                </p>
+              </div>
             </template>
+
+            <!-- Deepgram -->
+            <template v-else-if="transcriptionModel === 'deepgram'">
+              <div class="field-group">
+                <label class="field-label" for="deepgram-key">Deepgram API Key</label>
+                <p class="field-hint">
+                  Nova-3 streaming transcription. Stored locally on your device only.
+                </p>
+                <div class="key-row">
+                  <input
+                    id="deepgram-key"
+                    v-model="deepgramKey"
+                    :type="showDeepgramKey ? 'text' : 'password'"
+                    class="modal-input key-input"
+                    placeholder="Deepgram API key"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <button class="toggle-btn" :title="showDeepgramKey ? 'Hide' : 'Show'" @click="showDeepgramKey = !showDeepgramKey">
+                    <EyeOff v-if="showDeepgramKey" :size="14" />
+                    <Eye v-else :size="14" />
+                  </button>
+                </div>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="transcription-lang">Language</label>
+                <p class="field-hint">
+                  Auto-detect covers English and major Western languages. Set Polish explicitly for Polish speech.
+                </p>
+                <select id="transcription-lang" v-model="transcriptionLanguage" class="modal-input modal-select">
+                  <option value="multi">Auto-detect (EN + ES/FR/DE/HI/RU/PT/JA/IT/NL)</option>
+                  <option value="en">English</option>
+                  <option value="pl">Polish</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="ru">Russian</option>
+                  <option value="hi">Hindi</option>
+                  <option value="ja">Japanese</option>
+                  <option value="it">Italian</option>
+                  <option value="nl">Dutch</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label class="field-label">System Audio Capture</label>
+                <label class="toggle-row">
+                  <input v-model="systemAudioCapture" type="checkbox" class="toggle-checkbox" />
+                  <span class="toggle-label">Capture Zoom/Meet audio (macOS 14.2+)</span>
+                </label>
+                <p class="field-hint">
+                  Records both your microphone and what meeting participants say via Core Audio Taps.
+                  Requires Screen &amp; System Audio Recording permission in System Settings.
+                </p>
+              </div>
+            </template>
+
+            <!-- macOS -->
+            <template v-else>
+              <div class="field-group">
+                <p class="field-hint">
+                  Uses macOS on-device speech recognition (SFSpeechRecognizer). Language follows your
+                  macOS system language. No API key required.
+                </p>
+              </div>
+            </template>
+          </template>
+
+          <!-- ── AI: Follow-up Intelligence ── -->
+          <template v-else-if="activeSection === 'ai:followup'">
+            <div class="pane-header"><h3 class="pane-title">Follow-up Intelligence</h3></div>
+
+            <div class="field-group">
+              <label class="field-label" for="followup-entity-type">Assignee Entity Type</label>
+              <p class="field-hint">
+                Action items assigned to entities of this type will be monitored for staleness in the Daily Brief.
+                Set to "(disabled)" to turn off follow-up tracking.
+              </p>
+              <select id="followup-entity-type" v-model="followupAssigneeEntityTypeId" class="modal-input modal-select">
+                <option value="">(disabled)</option>
+                <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
+              </select>
+            </div>
           </template>
 
           <!-- ── Actions ── -->
-          <template v-else-if="selectedCategory === 'actions'">
-            <div class="pane-header">
-              <h3 class="pane-title">Actions</h3>
-            </div>
+          <template v-else-if="activeSection === 'actions'">
+            <div class="pane-header"><h3 class="pane-title">Actions</h3></div>
             <GTDSettingsPanel />
           </template>
 
-          <!-- ── Calendar ── -->
-          <template v-else-if="selectedCategory === 'calendar'">
-            <div class="pane-header">
-              <h3 class="pane-title">Calendar</h3>
-              <div class="tab-bar">
+          <!-- ── Calendar: General ── -->
+          <template v-else-if="activeSection === 'calendar:general'">
+            <div class="pane-header"><h3 class="pane-title">General</h3></div>
+
+            <div class="field-group">
+              <label class="field-label">Default Slot Duration</label>
+              <p class="field-hint">Duration of a new meeting when clicking or dragging a time slot.</p>
+              <div class="slot-picker">
                 <button
-                  v-for="tab in calendarTabs"
-                  :key="tab.id"
-                  class="tab-btn"
-                  :class="{ active: selectedCalendarTab === tab.id }"
-                  @click="selectedCalendarTab = tab.id"
-                >{{ tab.label }}</button>
+                  v-for="opt in [{ label: '15 min', value: '15' }, { label: '30 min', value: '30' }, { label: '1 hour', value: '60' }]"
+                  :key="opt.value"
+                  class="slot-btn"
+                  :class="{ active: calendarSlotDuration === opt.value }"
+                  @click="calendarSlotDuration = opt.value"
+                >
+                  {{ opt.label }}
+                </button>
               </div>
             </div>
 
-            <!-- General tab -->
-            <template v-if="selectedCalendarTab === 'general'">
-              <div class="field-group">
-                <label class="field-label">Default Slot Duration</label>
-                <p class="field-hint">Duration of a new meeting when clicking or dragging a time slot.</p>
-                <div class="slot-picker">
-                  <button
-                    v-for="opt in [{ label: '15 min', value: '15' }, { label: '30 min', value: '30' }, { label: '1 hour', value: '60' }]"
-                    :key="opt.value"
-                    class="slot-btn"
-                    :class="{ active: calendarSlotDuration === opt.value }"
-                    @click="calendarSlotDuration = opt.value"
-                  >
-                    {{ opt.label }}
-                  </button>
-                </div>
-              </div>
+            <div class="field-group">
+              <label class="field-label">Meeting Note Title Template</label>
+              <p class="field-hint">
+                Title used when creating a new meeting note. Available placeholders: <code>{date}</code>, <code>{title}</code>.
+              </p>
+              <input v-model="meetingNoteTitleTemplate" class="modal-input" placeholder="{date} - {title}" />
+            </div>
+          </template>
 
-              <div class="field-group">
-                <label class="field-label">Meeting Note Title Template</label>
-                <p class="field-hint">
-                  Title used when creating a new meeting note. Available placeholders: <code>{date}</code>, <code>{title}</code>.
-                </p>
-                <input v-model="meetingNoteTitleTemplate" class="modal-input" placeholder="{date} - {title}" />
-              </div>
-            </template>
+          <!-- ── Calendar: Sync ── -->
+          <template v-else-if="activeSection === 'calendar:sync'">
+            <div class="pane-header"><h3 class="pane-title">Calendar Sync</h3></div>
 
-            <!-- Sync tab -->
-            <template v-else-if="selectedCalendarTab === 'sync'">
-              <div class="sync-header">
-                <span class="field-label" style="text-transform:none; font-size:13px; font-weight:500; letter-spacing:0; color:var(--color-text);">Calendar Sources</span>
-                <button class="add-source-btn" @click="openAddSource">
-                  <Plus :size="13" />
-                  <span>Add source</span>
-                </button>
-              </div>
+            <div class="sync-header">
+              <button class="add-source-btn" @click="openAddSource">
+                <Plus :size="13" />
+                <span>Add source</span>
+              </button>
+            </div>
 
-              <!-- Empty state -->
-              <div v-if="calendarSources.length === 0" class="sync-empty">
-                <p>No calendar sources configured.</p>
-                <p>Add a source to start syncing events from Google Calendar or iCal.</p>
-              </div>
+            <div v-if="calendarSources.length === 0" class="sync-empty">
+              <p>No calendar sources configured.</p>
+              <p>Add a source to start syncing events from Google Calendar or iCal.</p>
+            </div>
 
-              <!-- Source cards -->
-              <div v-else class="source-list">
-                <div v-for="src in calendarSources" :key="src.id" class="source-card">
-                  <div class="source-card-main">
-                    <!-- Enabled toggle -->
-                    <label class="source-toggle" :title="src.enabled ? 'Disable sync' : 'Enable sync'">
-                      <input
-                        type="checkbox"
-                        :checked="src.enabled === 1"
-                        class="toggle-checkbox"
-                        @change="toggleSourceEnabled(src)"
-                      />
-                    </label>
+            <div v-else class="source-list">
+              <div v-for="src in calendarSources" :key="src.id" class="source-card">
+                <div class="source-card-main">
+                  <label class="source-toggle" :title="src.enabled ? 'Disable sync' : 'Enable sync'">
+                    <input
+                      type="checkbox"
+                      :checked="src.enabled === 1"
+                      class="toggle-checkbox"
+                      @change="toggleSourceEnabled(src)"
+                    />
+                  </label>
 
-                    <div class="source-info">
-                      <div class="source-name-row">
-                        <span class="source-name" :class="{ muted: !src.enabled }">{{ src.name }}</span>
-                        <span class="source-provider-badge">{{ src.provider_id === 'google_apps_script' ? 'Apps Script' : src.provider_id }}</span>
-                      </div>
-                      <div class="source-meta">
-                        <span>{{ formatLastSync(src.last_sync_at) }}</span>
+                  <div class="source-info">
+                    <div class="source-name-row">
+                      <span class="source-name" :class="{ muted: !src.enabled }">{{ src.name }}</span>
+                      <span class="source-provider-badge">{{ src.provider_id === 'google_apps_script' ? 'Apps Script' : src.provider_id }}</span>
+                    </div>
+                    <div class="source-meta">
+                      <span>{{ formatLastSync(src.last_sync_at) }}</span>
+                      <span class="meta-sep">·</span>
+                      <span>Every {{ formatInterval(src.sync_interval_minutes) }}</span>
+                      <template v-if="syncErrors.get(src.id)">
                         <span class="meta-sep">·</span>
-                        <span>Every {{ formatInterval(src.sync_interval_minutes) }}</span>
-                        <template v-if="syncErrors.get(src.id)">
-                          <span class="meta-sep">·</span>
-                          <span class="source-error-badge">
-                            <AlertCircle :size="11" />
-                            {{ syncErrors.get(src.id) }}
-                          </span>
-                        </template>
-                      </div>
-                    </div>
-
-                    <div class="source-actions">
-                      <button
-                        class="source-action-btn"
-                        :disabled="syncingSourceIds.has(src.id)"
-                        :title="'Sync now'"
-                        @click="syncNow(src)"
-                      >
-                        <Loader2 v-if="syncingSourceIds.has(src.id)" :size="13" class="spin" />
-                        <RefreshCw v-else :size="13" />
-                      </button>
-                      <button class="source-action-btn" title="Edit" @click="openEditSource(src)">
-                        <Pencil :size="13" />
-                      </button>
-                      <button
-                        class="source-action-btn danger"
-                        title="Remove"
-                        @click="deleteConfirmId = src.id"
-                      >
-                        <Trash2 :size="13" />
-                      </button>
+                        <span class="source-error-badge">
+                          <AlertCircle :size="11" />
+                          {{ syncErrors.get(src.id) }}
+                        </span>
+                      </template>
                     </div>
                   </div>
 
-                  <!-- Delete confirmation -->
-                  <div v-if="deleteConfirmId === src.id" class="delete-confirm">
-                    <span>Remove this source? Synced events without linked notes will be deleted.</span>
-                    <div class="delete-confirm-btns">
-                      <button class="dc-cancel" @click="deleteConfirmId = null">Cancel</button>
-                      <button class="dc-delete" @click="deleteSource(src.id)">Remove</button>
-                    </div>
+                  <div class="source-actions">
+                    <button
+                      class="source-action-btn"
+                      :disabled="syncingSourceIds.has(src.id)"
+                      :title="'Sync now'"
+                      @click="syncNow(src)"
+                    >
+                      <Loader2 v-if="syncingSourceIds.has(src.id)" :size="13" class="spin" />
+                      <RefreshCw v-else :size="13" />
+                    </button>
+                    <button class="source-action-btn" title="Edit" @click="openEditSource(src)">
+                      <Pencil :size="13" />
+                    </button>
+                    <button
+                      class="source-action-btn danger"
+                      title="Remove"
+                      @click="deleteConfirmId = src.id"
+                    >
+                      <Trash2 :size="13" />
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="deleteConfirmId === src.id" class="delete-confirm">
+                  <span>Remove this source? Synced events without linked notes will be deleted.</span>
+                  <div class="delete-confirm-btns">
+                    <button class="dc-cancel" @click="deleteConfirmId = null">Cancel</button>
+                    <button class="dc-delete" @click="deleteSource(src.id)">Remove</button>
                   </div>
                 </div>
               </div>
-            </template>
+            </div>
+          </template>
 
-            <!-- Attendees tab -->
-            <template v-else-if="selectedCalendarTab === 'attendees'">
-              <div class="field-group">
-                <label class="field-label">Attendee Entity</label>
-                <p class="field-hint">
-                  Link meeting attendees to entities. When configured, the meeting modal lets you search and pick existing entities instead of typing name and email manually.
-                </p>
-                <select v-model="attendeeEntityTypeId" class="modal-input modal-select">
-                  <option value="">None (free-form name + email)</option>
-                  <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
-                </select>
-                <template v-if="attendeeEntityTypeId">
-                  <div class="attendee-field-row">
-                    <div class="attendee-field-col">
-                      <label class="field-label">Name Field</label>
-                      <select v-model="attendeeNameField" class="modal-input modal-select">
-                        <option value="">— select field —</option>
-                        <option v-for="f in nameFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
-                      </select>
-                    </div>
-                    <div class="attendee-field-col">
-                      <label class="field-label">Email Field</label>
-                      <select v-model="attendeeEmailField" class="modal-input modal-select">
-                        <option value="">— select field —</option>
-                        <option v-for="f in emailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
-                      </select>
-                    </div>
-                  </div>
-                </template>
-              </div>
+          <!-- ── Calendar: Attendees ── -->
+          <template v-else-if="activeSection === 'calendar:attendees'">
+            <div class="pane-header"><h3 class="pane-title">Attendees</h3></div>
 
-              <div class="field-group">
-                <label class="field-label">Team Entity</label>
-                <p class="field-hint">
-                  Optionally also link meeting attendees to team entities (e.g. a team distribution email). Matched teams appear alongside individual attendees in meeting popups and can be searched when adding attendees.
-                </p>
-                <select v-model="teamEntityTypeId" class="modal-input modal-select">
-                  <option value="">None</option>
-                  <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
-                </select>
-                <template v-if="teamEntityTypeId">
-                  <div class="attendee-field-row">
-                    <div class="attendee-field-col">
-                      <label class="field-label">Name Field</label>
-                      <select v-model="teamNameField" class="modal-input modal-select">
-                        <option value="">— select field —</option>
-                        <option v-for="f in teamNameFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
-                      </select>
-                    </div>
-                    <div class="attendee-field-col">
-                      <label class="field-label">Email Field</label>
-                      <select v-model="teamEmailField" class="modal-input modal-select">
-                        <option value="">— select field —</option>
-                        <option v-for="f in teamEmailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
-                      </select>
-                    </div>
+            <div class="field-group">
+              <label class="field-label">Attendee Entity</label>
+              <p class="field-hint">
+                Link meeting attendees to entities. When configured, the meeting modal lets you search and pick existing entities instead of typing name and email manually.
+              </p>
+              <select v-model="attendeeEntityTypeId" class="modal-input modal-select">
+                <option value="">None (free-form name + email)</option>
+                <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
+              </select>
+              <template v-if="attendeeEntityTypeId">
+                <div class="attendee-field-row">
+                  <div class="attendee-field-col">
+                    <label class="field-label">Name Field</label>
+                    <select v-model="attendeeNameField" class="modal-input modal-select">
+                      <option value="">— select field —</option>
+                      <option v-for="f in nameFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                    </select>
                   </div>
-                  <label class="field-label" style="margin-top: 8px;">Members Field</label>
-                  <select v-model="teamMembersField" class="modal-input modal-select">
-                    <option value="">None (don't expand team members)</option>
-                    <option v-for="f in teamMembersFieldOptions" :key="f.name" :value="f.name">{{ f.name }}</option>
-                  </select>
-                  <p class="field-hint">
-                    When a team appears as a meeting attendee, this field's members are used for speaker identification in transcription. Supports computed fields (WQL query results), entity reference lists (resolved to person names), text lists (one name per line), or comma-separated text.
-                  </p>
-                </template>
-              </div>
-            </template>
+                  <div class="attendee-field-col">
+                    <label class="field-label">Email Field</label>
+                    <select v-model="attendeeEmailField" class="modal-input modal-select">
+                      <option value="">— select field —</option>
+                      <option v-for="f in emailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                    </select>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label">Team Entity</label>
+              <p class="field-hint">
+                Optionally also link meeting attendees to team entities (e.g. a team distribution email). Matched teams appear alongside individual attendees in meeting popups and can be searched when adding attendees.
+              </p>
+              <select v-model="teamEntityTypeId" class="modal-input modal-select">
+                <option value="">None</option>
+                <option v-for="et in entityTypes" :key="et.id" :value="et.id">{{ et.name }}</option>
+              </select>
+              <template v-if="teamEntityTypeId">
+                <div class="attendee-field-row">
+                  <div class="attendee-field-col">
+                    <label class="field-label">Name Field</label>
+                    <select v-model="teamNameField" class="modal-input modal-select">
+                      <option value="">— select field —</option>
+                      <option v-for="f in teamNameFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                    </select>
+                  </div>
+                  <div class="attendee-field-col">
+                    <label class="field-label">Email Field</label>
+                    <select v-model="teamEmailField" class="modal-input modal-select">
+                      <option value="">— select field —</option>
+                      <option v-for="f in teamEmailFieldOptions" :key="f.value" :value="f.value">{{ f.label }}</option>
+                    </select>
+                  </div>
+                </div>
+                <label class="field-label" style="margin-top: 8px;">Members Field</label>
+                <select v-model="teamMembersField" class="modal-input modal-select">
+                  <option value="">None (don't expand team members)</option>
+                  <option v-for="f in teamMembersFieldOptions" :key="f.name" :value="f.name">{{ f.name }}</option>
+                </select>
+                <p class="field-hint">
+                  When a team appears as a meeting attendee, this field's members are used for speaker identification in transcription. Supports computed fields (WQL query results), entity reference lists (resolved to person names), text lists (one name per line), or comma-separated text.
+                </p>
+              </template>
+            </div>
           </template>
 
           <!-- ── Debug ── -->
-          <template v-else-if="selectedCategory === 'debug'">
-            <div class="pane-header">
-              <h3 class="pane-title">Debug</h3>
-            </div>
+          <template v-else-if="activeSection === 'debug'">
+            <div class="pane-header"><h3 class="pane-title">Debug</h3></div>
 
             <div class="field-group">
               <label class="field-label">Transcription Audio</label>
@@ -1113,42 +1062,85 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 
 /* ── Left nav ─────────────────────────────────────────────────────────────── */
 .category-nav {
-  width: 168px;
+  width: 176px;
   flex-shrink: 0;
   border-right: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-bg) 60%, var(--color-surface));
-  padding: 12px 8px;
+  padding: 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   overflow-y: auto;
 }
 
+/* Category-level items (Actions, Debug) */
 .category-item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 7px 10px;
   border-radius: 7px;
   border: none;
   background: transparent;
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-size: 13px;
   font-family: inherit;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   text-align: left;
+  width: 100%;
   transition: background 0.12s, color 0.12s;
+  margin-top: 2px;
 }
 
 .category-item:hover {
   background: color-mix(in srgb, var(--color-text) 8%, transparent);
-  color: var(--color-text);
 }
 
 .category-item.active {
   background: color-mix(in srgb, var(--color-accent) 18%, transparent);
   color: var(--color-accent);
+}
+
+/* Group label (AI, Calendar) — non-clickable header */
+.nav-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px 4px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 2px;
+  user-select: none;
+}
+
+/* Subcategory nav items — indented */
+.nav-subitem {
+  display: block;
+  width: 100%;
+  padding: 5px 10px 5px 30px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  font-family: inherit;
+  font-weight: 400;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+}
+
+.nav-subitem:hover {
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+  color: var(--color-text);
+}
+
+.nav-subitem.active {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+  font-weight: 500;
 }
 
 .cat-icon {
@@ -1159,33 +1151,28 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 .settings-pane {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px 28px;
+  padding: 20px 24px 32px;
   display: flex;
   flex-direction: column;
   gap: 20px;
 }
 
-/* ── Pane header with tabs ────────────────────────────────────────────────── */
+/* ── Pane header ──────────────────────────────────────────────────────────── */
 .pane-header {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   flex-shrink: 0;
 }
 
 .pane-title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--color-text);
-  margin: 0;
+  margin: 0 0 4px;
 }
 
-.tab-bar {
-  display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
+/* legacy stubs */
+.subsection-heading { display: none; }
+.subsection-divider { display: none; }
+.tab-bar { display: none; }
 .tab-btn {
   padding: 6px 14px;
   background: transparent;
@@ -1463,7 +1450,8 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 .sync-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  margin-bottom: 10px;
 }
 
 .add-source-btn {
@@ -1775,26 +1763,4 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   min-height: 80px;
 }
 
-.personalization-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 4px;
-}
-
-.save-btn {
-  flex-shrink: 0;
-  padding: 6px 16px;
-  border-radius: 6px;
-  border: 1px solid var(--color-accent);
-  background: var(--color-accent);
-  color: #fff;
-  font-size: 12px;
-  font-family: inherit;
-  font-weight: 500;
-  cursor: pointer;
-  transition: opacity 0.12s;
-  white-space: nowrap;
-}
-.save-btn:hover { opacity: 0.88; }
 </style>
