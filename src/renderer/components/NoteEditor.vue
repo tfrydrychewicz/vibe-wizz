@@ -1264,11 +1264,32 @@ function onEditorContextMenu(e: MouseEvent): void {
  *
  * We do NOT call e.preventDefault() — TipTap must still write text/plain so
  * that pasting into external apps works normally.
+ *
+ * When Cmd+A is handled by the OS/Electron (e.g. via Edit menu) rather than
+ * TipTap's own keyboard handler, the DOM selection is updated but TipTap's
+ * internal ProseMirror state may still show an empty (cursor) selection.  In
+ * that case we fall back to the DOM selection: if the DOM has a non-collapsed
+ * selection whose anchor/focus nodes are inside the editor, we treat it as a
+ * full-document selection so the chip is still produced.
  */
 function onEditorCopy(e: ClipboardEvent): void {
   if (!editor.value || !props.noteId || !title.value) return
-  const { from, to, empty } = editor.value.state.selection
-  if (empty) return
+
+  const state = editor.value.state
+  let { from, to, empty } = state.selection
+
+  // Fallback for Cmd+A handled at the OS/Electron level: TipTap's internal
+  // selection remains empty but the DOM selection covers all editor content.
+  if (empty) {
+    const domSel = window.getSelection()
+    if (!domSel || domSel.isCollapsed) return
+    const editorDom = editor.value.view.dom
+    // Only apply the fallback when the selection is inside our editor.
+    if (!editorDom.contains(domSel.anchorNode) && !editorDom.contains(domSel.focusNode)) return
+    from = 0
+    to = state.doc.content.size
+    if (from === to) return
+  }
 
   const attachment = buildNoteSelectionAttachment(
     editor.value,
