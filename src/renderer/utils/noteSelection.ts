@@ -48,42 +48,72 @@ function collectTopLevelBlocks(doc: ProseMirrorNode): Array<{ node: ProseMirrorN
 }
 
 /**
- * Serialize a single top-level block node to plain text.
- * Task items are rendered with their checkbox state: "- [ ] " or "- [x] ".
- * List items and paragraphs use their textContent.
+ * Serialize a single top-level block node to plain text, optionally restricted
+ * to only the child list items that overlap [selFrom, selTo].
+ *
+ * `blockPos` is the document position of the block's opening token (b.from).
+ * When provided alongside selFrom/selTo, list nodes (taskList, bulletList,
+ * orderedList) will filter their children to only those that overlap the
+ * selection — so copying M tasks out of N only yields those M tasks.
  */
-function serializeBlock(node: ProseMirrorNode): string {
+function serializeBlock(
+  node: ProseMirrorNode,
+  blockPos?: number,
+  selFrom?: number,
+  selTo?: number,
+): string {
+  // Whether we should filter list children to the selection window.
+  const hasRange = blockPos !== undefined && selFrom !== undefined && selTo !== undefined
+
   switch (node.type.name) {
     case 'taskItem': {
       const checked: boolean = node.attrs['checked'] === true
       return `- [${checked ? 'x' : ' '}] ${node.textContent}`
     }
     case 'taskList': {
-      // Recurse into task items
       const lines: string[] = []
+      // blockPos + 1 = position after the list's opening token (first child starts here)
+      let childPos = hasRange ? blockPos! + 1 : 0
       node.forEach((child) => {
-        if (child.type.name === 'taskItem') {
-          const checked: boolean = child.attrs['checked'] === true
-          lines.push(`- [${checked ? 'x' : ' '}] ${child.textContent}`)
-        } else {
-          lines.push(child.textContent)
+        const childFrom = childPos
+        const childTo = childPos + child.nodeSize
+        const inRange = !hasRange || (childFrom < selTo! && childTo > selFrom!)
+        if (inRange) {
+          if (child.type.name === 'taskItem') {
+            const checked: boolean = child.attrs['checked'] === true
+            lines.push(`- [${checked ? 'x' : ' '}] ${child.textContent}`)
+          } else {
+            lines.push(child.textContent)
+          }
         }
+        childPos += child.nodeSize
       })
       return lines.join('\n')
     }
     case 'bulletList': {
       const lines: string[] = []
+      let childPos = hasRange ? blockPos! + 1 : 0
       node.forEach((child) => {
-        lines.push(`- ${child.textContent}`)
+        const childFrom = childPos
+        const childTo = childPos + child.nodeSize
+        const inRange = !hasRange || (childFrom < selTo! && childTo > selFrom!)
+        if (inRange) lines.push(`- ${child.textContent}`)
+        childPos += child.nodeSize
       })
       return lines.join('\n')
     }
     case 'orderedList': {
       const lines: string[] = []
+      let childPos = hasRange ? blockPos! + 1 : 0
       let i = node.attrs['start'] as number ?? 1
       node.forEach((child) => {
-        lines.push(`${i}. ${child.textContent}`)
+        const childFrom = childPos
+        const childTo = childPos + child.nodeSize
+        const inRange = !hasRange || (childFrom < selTo! && childTo > selFrom!)
+        if (inRange) lines.push(`${i}. ${child.textContent}`)
+        // Always advance i so original numbering is preserved for partial selections
         i++
+        childPos += child.nodeSize
       })
       return lines.join('\n')
     }
@@ -136,9 +166,11 @@ export function buildNoteSelectionAttachment(
   const blockStart = overlapping[0].idx + 1  // 1-based
   const blockEnd   = overlapping[overlapping.length - 1].idx + 1  // 1-based
 
-  // Serialize the overlapping blocks to plain text
+  // Serialize the overlapping blocks to plain text.
+  // Pass blockPos + selection range so list nodes can filter to only the
+  // child items the user actually selected (fixes partial task-list copies).
   const selectedText = overlapping
-    .map((b) => serializeBlock(b.node))
+    .map((b) => serializeBlock(b.node, b.from, from, to))
     .join('\n')
     .trim()
 

@@ -380,8 +380,10 @@ const WIZZ_TOOLS: Anthropic.Tool[] = [
   {
     name: 'ensure_action_item_for_task',
     description:
-      'Find or create an action item that corresponds to a task from a pasted note selection. ' +
-      'Call this BEFORE calling update_action_item whenever you need to modify a task that came from a pasted note selection and you do not yet have its action_item_id. ' +
+      'Find or create an action item that corresponds to a single task from a pasted note selection. ' +
+      'Call this BEFORE update_action_item for each task you need to modify. ' +
+      'When the note selection contains multiple tasks, call this tool once per task (with its individual task_text) ' +
+      'and then call update_action_item for each returned action_item_id — do not skip any task. ' +
       'Returns { action_item_id, created, title } — use action_item_id as the id parameter for update_action_item.',
     input_schema: {
       type: 'object',
@@ -1090,13 +1092,19 @@ export type AttachedFilePayload = {
  * Mirrors the renderer-side `formatNoteSelectionsForPrompt` utility (kept in
  * the main process to avoid cross-process imports).
  */
+function countSelectedTaskLines(selectedText: string): number {
+  return selectedText.split('\n').filter((l) => /^-\s+\[.\]/.test(l.trim())).length
+}
+
 function formatNoteSelectionsBlock(selections: NoteSelectionAttachment[]): string {
   if (selections.length === 0) return ''
   const blocks = selections
-    .map(
-      (s) =>
-        `--- Note Selection: "${s.noteTitle}" (note_id: ${s.noteId}, blocks ${s.blockStart}–${s.blockEnd}) ---\n${s.selectedText}\n---`,
-    )
+    .map((s) => {
+      const taskCount = countSelectedTaskLines(s.selectedText)
+      const taskHint = taskCount > 0 ? `, ${taskCount} task${taskCount !== 1 ? 's' : ''} selected` : ''
+      const header = `--- Note Selection: "${s.noteTitle}" (note_id: ${s.noteId}, blocks ${s.blockStart}–${s.blockEnd}${taskHint}) ---`
+      return `${header}\n${s.selectedText}\n---`
+    })
     .join('\n\n')
   return `<note_selections>\n${blocks}\n</note_selections>\n\n`
 }
@@ -1135,10 +1143,13 @@ export async function sendChatMessage(
     'When editing an entity, resolve its ID from the entity context provided, then call the edit_<type> tool — only send the fields you want to change. ' +
     'For deletes: describe what you are about to delete and ask the user to confirm before calling the delete tool. ' +
     'When creating a note, generate rich, well-structured Markdown content — use headings, bullet lists, task checkboxes, and GFM tables (| Col | Col |\\n| --- | --- |\\n| val | val |) as appropriate.\n\n' +
-    'When the user asks you to modify a task that came from a pasted note selection (e.g. assign a project, ' +
-    'set status, link to a project), ALWAYS call ensure_action_item_for_task first to obtain the ' +
-    'action item ID, then call update_action_item with that ID. ' +
-    'Do not call update_action_item without a verified action_item_id from ensure_action_item_for_task.'
+    'When a <note_selections> block is present and the user refers to "these tasks", "them", or similar:\n' +
+    '  1. The scope is STRICTLY LIMITED to the task lines listed inside that block — do NOT act on other\n' +
+    '     action items from the same note that appear in the action items list but were not in the selection.\n' +
+    '  2. Process EVERY task line from the selection, one by one, without skipping any.\n' +
+    '  3. For each task: first check whether it already appears in the action items context with an [id:...] —\n' +
+    '     if yes, use that ID directly in update_action_item; if not, call ensure_action_item_for_task first.\n' +
+    '  4. Do not stop after the first task — keep calling tools until every selected task has been updated.'
 
   if (pinnedNotes.length > 0) {
     const pinnedStr = pinnedNotes
