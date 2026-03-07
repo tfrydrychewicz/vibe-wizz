@@ -5,6 +5,8 @@ import CalendarSourceModal from './CalendarSourceModal.vue'
 import AIProviderCard from './AIProviderCard.vue'
 import FeatureChainEditor from './FeatureChainEditor.vue'
 import GTDSettingsPanel from './GTDSettingsPanel.vue'
+import RichTextInput from './RichTextInput.vue'
+import type { RichInputContent } from './RichTextInput.vue'
 
 const providerCardRefs = new Map<string, InstanceType<typeof AIProviderCard>>()
 
@@ -22,7 +24,7 @@ const categories: { id: CategoryId; label: string; icon: typeof BrainCircuit }[]
 ]
 
 // ── Sub-tab navigation ────────────────────────────────────────────────────────
-type AiTab = 'llm' | 'transcription' | 'followup' | 'models'
+type AiTab = 'llm' | 'transcription' | 'followup' | 'models' | 'personalization'
 type CalendarTab = 'general' | 'sync' | 'attendees'
 
 const selectedAiTab = ref<AiTab>('llm')
@@ -33,6 +35,7 @@ const aiTabs: { id: AiTab; label: string }[] = [
   { id: 'transcription', label: 'Transcription' },
   { id: 'followup', label: 'Follow-up Intelligence' },
   { id: 'models', label: 'AI Features' },
+  { id: 'personalization', label: 'Personalization' },
 ]
 
 // ── AI Providers ──────────────────────────────────────────────────────────────
@@ -219,6 +222,41 @@ const systemAudioCapture = ref(false)
 const followupStalenessDays = ref(7)
 const followupAssigneeEntityTypeId = ref('')
 
+// ── Personalization ───────────────────────────────────────────────────────────
+const personalizationInputRef = ref<InstanceType<typeof RichTextInput> | null>(null)
+const personalizationSaved = ref(false)
+const _personalizationHtml = ref('')   // cached HTML restored once the tab mounts
+let _personalizationSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+// Restore the editor content the first time the personalization tab becomes visible
+watch(selectedAiTab, async (tab) => {
+  if (tab === 'personalization' && _personalizationHtml.value) {
+    await nextTick()
+    if (personalizationInputRef.value) {
+      personalizationInputRef.value.setContent(_personalizationHtml.value)
+    }
+  }
+})
+
+async function savePersonalization(): Promise<void> {
+  if (!personalizationInputRef.value) return
+  const content: RichInputContent = personalizationInputRef.value.getContent()
+  const html: string = personalizationInputRef.value.getHtml()
+  await Promise.all([
+    window.api.invoke('settings:set', { key: 'ai_personalization_html', value: html }),
+    window.api.invoke('settings:set', { key: 'ai_personalization_text', value: content.text }),
+    window.api.invoke('settings:set', { key: 'ai_personalization_entity_ids', value: JSON.stringify(content.mentionedEntityIds) }),
+    window.api.invoke('settings:set', { key: 'ai_personalization_note_ids', value: JSON.stringify(content.mentionedNoteIds) }),
+  ])
+  personalizationSaved.value = true
+  setTimeout(() => { personalizationSaved.value = false }, 2000)
+}
+
+function onPersonalizationChange(): void {
+  if (_personalizationSaveTimer) clearTimeout(_personalizationSaveTimer)
+  _personalizationSaveTimer = setTimeout(() => { void savePersonalization() }, 500)
+}
+
 // ── Debug settings ────────────────────────────────────────────────────────────
 const saveDebugAudio = ref(false)
 const debugAudioFolder = ref('')
@@ -307,7 +345,7 @@ const saving = ref(false)
 const savedFeedback = ref(false)
 
 onMounted(async () => {
-  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, teamTypeId, teamNameFieldVal, teamEmailFieldVal, teamMembersFieldVal, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes, webSearch] = await Promise.all([
+  const [elevenlabs, deepgram, transcModel, transcLang, elDiarize, sysAudio, slotDuration, noteTitleTemplate, attTypeId, attNameField, attEmailField, teamTypeId, teamNameFieldVal, teamEmailFieldVal, teamMembersFieldVal, etList, debugAudio, folder, followupDays, followupTypeId, sources, providersRes, chainsRes, webSearch, personalizationHtml] = await Promise.all([
     window.api.invoke('settings:get', { key: 'elevenlabs_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'deepgram_api_key' }) as Promise<string | null>,
     window.api.invoke('settings:get', { key: 'transcription_model' }) as Promise<string | null>,
@@ -332,6 +370,7 @@ onMounted(async () => {
     window.api.invoke('ai-providers:list') as Promise<ProviderRow[]>,
     window.api.invoke('ai-feature-models:list') as Promise<FeatureChain[]>,
     window.api.invoke('settings:get', { key: 'web_search_enabled' }) as Promise<string | null>,
+    window.api.invoke('settings:get', { key: 'ai_personalization_html' }) as Promise<string | null>,
   ])
   elevenLabsKey.value = elevenlabs ?? ''
   deepgramKey.value = deepgram ?? ''
@@ -358,6 +397,13 @@ onMounted(async () => {
   teamNameField.value = teamNameFieldVal ?? ''
   teamEmailField.value = teamEmailFieldVal ?? ''
   teamMembersField.value = teamMembersFieldVal ?? ''
+  if (personalizationHtml) {
+    _personalizationHtml.value = personalizationHtml
+    // If the personalization tab is already active (unlikely but possible), restore immediately
+    if (selectedAiTab.value === 'personalization' && personalizationInputRef.value) {
+      personalizationInputRef.value.setContent(personalizationHtml)
+    }
+  }
 
   // Subscribe to background sync push events so the source list updates live
   _syncUnsubs.push(
@@ -707,6 +753,31 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                   :availableModels="allEnabledModels"
                   @change="onChainChange"
                 />
+              </div>
+            </template>
+
+            <!-- Personalization tab -->
+            <template v-else-if="selectedAiTab === 'personalization'">
+              <div class="field-group personalization-group">
+                <label class="field-label">Tell Wizz about yourself</label>
+                <p class="field-hint">
+                  This is prepended to every AI prompt so Wizz always knows who it is talking to.
+                  Use <code>@</code> to mention entities and <code>[[</code> to include specific notes as context.
+                </p>
+                <RichTextInput
+                  ref="personalizationInputRef"
+                  placeholder="Describe yourself, your role, your team, and your preferences…"
+                  class="personalization-input"
+                  @change="onPersonalizationChange"
+                />
+                <div class="personalization-footer">
+                  <button class="save-btn" @click="savePersonalization">
+                    {{ personalizationSaved ? 'Saved ✓' : 'Save' }}
+                  </button>
+                  <span class="field-hint" style="margin-top: 0;">
+                    Applies immediately to all AI features — chat, daily briefs, entity reviews, and more.
+                  </span>
+                </div>
               </div>
             </template>
           </template>
@@ -1686,4 +1757,44 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   display: flex;
   flex-direction: column;
 }
+
+/* ── Personalization tab ─────────────────────────────────────────────────── */
+.personalization-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.personalization-input {
+  /* Allow taller content than the default 120px chat input */
+  --rich-input-max-height: 240px;
+}
+
+.personalization-input :deep(.rich-input) {
+  max-height: 240px;
+  min-height: 80px;
+}
+
+.personalization-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.save-btn {
+  flex-shrink: 0;
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.12s;
+  white-space: nowrap;
+}
+.save-btn:hover { opacity: 0.88; }
 </style>

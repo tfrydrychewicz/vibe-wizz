@@ -482,6 +482,24 @@ function clear(): void {
   emit('change')
 }
 
+/**
+ * Restore the editor from saved HTML (e.g. from a persisted settings value).
+ * Re-applies entity chip colors/icons after setting the content.
+ * Note: selection chips cannot be restored (their data lives only in memory),
+ * but entity and note chips are fully restored from data-* attributes.
+ */
+function setContent(html: string): void {
+  if (!editorRef.value) return
+  editorRef.value.innerHTML = html
+  updateEmptyState()
+  applyAfterTick(editorRef.value)
+}
+
+/** Return the raw innerHTML of the editor for persistence. */
+function getHtml(): string {
+  return editorRef.value?.innerHTML ?? ''
+}
+
 function focus(): void {
   editorRef.value?.focus()
 }
@@ -490,7 +508,7 @@ function isEmpty(): boolean {
   return _isEmpty.value
 }
 
-defineExpose({ getContent, clear, focus, isEmpty })
+defineExpose({ getContent, getHtml, setContent, clear, focus, isEmpty })
 </script>
 
 <template>

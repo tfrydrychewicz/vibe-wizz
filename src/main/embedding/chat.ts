@@ -15,6 +15,7 @@ import { scheduleEmbedding } from './pipeline'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { getCurrentDateString } from '../utils/date'
 import { callWithFallback } from '../ai/modelRouter'
+import { getPersonalizationPreamble } from '../ai/personalization'
 import { searchAndRead } from '../web/index'
 import { pushToRenderer } from '../push'
 import type { ChatMessage, ContentBlock, ToolDef, ImageBlock, ToolResultBlock } from '../ai/providers/types'
@@ -1031,6 +1032,8 @@ export async function generateInlineContent(
       ? noteBodyPlain.slice(0, MAX_NOTE_CHARS) + '…'
       : noteBodyPlain
 
+  const personalization = getPersonalizationPreamble(db)
+
   let systemPrompt =
     `Today is ${getCurrentDateString()}.\n\n` +
     'You are an inline writing assistant embedded in a personal knowledge base editor. ' +
@@ -1039,6 +1042,10 @@ export async function generateInlineContent(
     'Return ONLY the content to insert — no preamble, no meta-commentary, no explanation. ' +
     'Use Markdown formatting: ## headings, - for bullets, - [ ] for tasks, **bold**, *italic*, `code`. ' +
     'GFM tables (| Col | Col |\\n| --- | --- |\\n| cell | cell |) for structured data.'
+
+  if (personalization.preamble) {
+    systemPrompt += `\n\n## About the user\n${personalization.preamble}`
+  }
 
   if (truncatedBody) {
     systemPrompt +=
@@ -1185,6 +1192,8 @@ export async function sendChatMessage(
 
   const { tools: entityTools, slugToTypeId, slugToTypeName } = buildEntityTools(db)
 
+  const personalization = getPersonalizationPreamble(db)
+
   let systemPrompt =
     'You are Wizz, an AI assistant built into an engineering manager\'s personal knowledge base. ' +
     'You help the user find information from their notes, understand patterns across meetings, ' +
@@ -1206,6 +1215,10 @@ export async function sendChatMessage(
     '  3. For each task: first check whether it already appears in the action items context with an [id:...] —\n' +
     '     if yes, use that ID directly in update_action_item; if not, call ensure_action_item_for_task first.\n' +
     '  4. Do not stop after the first task — keep calling tools until every selected task has been updated.'
+
+  if (personalization.preamble) {
+    systemPrompt += `\n\n## About the user\n${personalization.preamble}`
+  }
 
   if (pinnedNotes.length > 0) {
     const pinnedStr = pinnedNotes

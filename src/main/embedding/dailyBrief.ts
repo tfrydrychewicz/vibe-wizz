@@ -7,6 +7,7 @@
  */
 
 import { callWithFallback } from '../ai/modelRouter'
+import { getPersonalizationPreamble } from '../ai/personalization'
 import { getDatabase } from '../db/index'
 
 const MAX_NOTES_CHARS = 5000
@@ -260,8 +261,13 @@ export async function generateDailyBrief(date: string): Promise<string> {
       .join('\n')
   }
 
+  const personalization = getPersonalizationPreamble(db)
+  const personalizationSection = personalization.preamble
+    ? `\n\n## About the user\n${personalization.preamble}`
+    : ''
+
   const prompt =
-    `You are generating a Daily Brief for an engineering manager. Today is ${todayStr}.\n\n` +
+    `You are generating a Daily Brief for an engineering manager. Today is ${todayStr}.${personalizationSection}\n\n` +
     `Generate a concise, actionable daily brief in Markdown. Follow this structure (skip any section that has no relevant content):\n\n` +
     `# ${todayStr} — Your Day\n\n` +
     `## 🔥 Needs Attention\n` +

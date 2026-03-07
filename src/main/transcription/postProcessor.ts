@@ -17,6 +17,7 @@ import { pushToRenderer } from '../push'
 import { UUID_RE_STR } from '../utils/tokenFormat'
 import { getCurrentDateString } from '../utils/date'
 import { callWithFallback } from '../ai/modelRouter'
+import { getPersonalizationPreamble } from '../ai/personalization'
 
 const MAX_TRANSCRIPT_CHARS = 8000
 const MAX_NOTE_CHARS = 4000
@@ -480,8 +481,13 @@ async function generateMergedNote(
 
   const hasManualNotes = truncatedNotes.trim().length > 0
 
+  const personalization = getPersonalizationPreamble(db)
+  const preambleSection = personalization.preamble
+    ? `\n\n## About the user\n${personalization.preamble}`
+    : ''
+
   const prompt = hasManualNotes
-    ? `Today is ${getCurrentDateString()}.\n\nYou are synthesizing a meeting note. Combine the user's manual notes with the speech transcript into a single, well-structured note.
+    ? `Today is ${getCurrentDateString()}.${preambleSection}\n\nYou are synthesizing a meeting note. Combine the user's manual notes with the speech transcript into a single, well-structured note.
 
 Rules:
 - Preserve all information from the manual notes (user's intent takes priority)
@@ -498,7 +504,7 @@ Transcript:
 ${truncatedTranscript}
 
 Write only the note content, no preamble or meta-commentary.`
-    : `Today is ${getCurrentDateString()}.\n\nYou are summarizing a meeting transcript. Produce a concise, well-structured note using the same language as the transcript.
+    : `Today is ${getCurrentDateString()}.${preambleSection}\n\nYou are summarizing a meeting transcript. Produce a concise, well-structured note using the same language as the transcript.
 
 Use markdown: ## headings, - for regular bullets, - [ ] for action items and tasks. In the "Action Items / Follow-ups" section use - [ ] checkbox syntax for every task so they render as interactive checkboxes in the editor. Include sections only where relevant: Meeting Summary, Key Decisions, Action Items / Follow-ups.
 

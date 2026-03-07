@@ -10,6 +10,7 @@ import { generateEntityReview, type EntityTypeWithReview } from '../entity/revie
 import { pushToRenderer } from '../push'
 import { sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField, NoteSelectionAttachment } from '../embedding/chat'
 import { runAgent, needsAgentPlanning, planPrompt } from '../ai/agent'
+import { getPersonalizationPreamble } from '../ai/personalization'
 import { callWithFallback } from '../ai/modelRouter'
 import { saveGeneratedImage } from '../ai/imageStorage'
 import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
@@ -2223,6 +2224,40 @@ export function registerDbIpcHandlers(): void {
           // non-critical
         }
       }
+      // Merge personalization entity/note IDs so the AI always has the user's preferred context
+      try {
+        const personalization = getPersonalizationPreamble(db)
+
+        if (personalization.noteIds.length > 0) {
+          const existingPinnedIds = new Set(pinnedNotes.map((n) => n.id))
+          const newIds = personalization.noteIds.filter((id) => !existingPinnedIds.has(id))
+          if (newIds.length > 0) {
+            const sp = newIds.map(() => '?').join(',')
+            const rows = db
+              .prepare(`SELECT id, title, body_plain FROM notes WHERE id IN (${sp}) AND archived_at IS NULL`)
+              .all(...newIds) as { id: string; title: string; body_plain: string }[]
+            // Prepend so personalization notes act as highest-priority context (same as pinned)
+            const personNotes: EntityLinkedNote[] = rows.map((r) => ({
+              id: r.id,
+              title: r.title,
+              excerpt: r.body_plain.length > 4000 ? r.body_plain.slice(0, 4000) + '…' : r.body_plain,
+            }))
+            pinnedNotes.unshift(...personNotes)
+          }
+        }
+
+        if (personalization.entityIds.length > 0) {
+          const existingEntityIds = new Set(richEntities.map((e) => e.id))
+          const newEntityIds = personalization.entityIds.filter((id) => !existingEntityIds.has(id))
+          if (newEntityIds.length > 0) {
+            const { richEntities: personEntities } = buildRichEntityContext(db, newEntityIds)
+            richEntities.unshift(...personEntities)
+          }
+        }
+      } catch {
+        // Non-critical — skip personalization context merge on error
+      }
+
       // Flat EntityContext[] for Claude tool assignment — keep [id:...] working for action items / events
       const entityContext: EntityContext[] = richEntities.map((e) => ({ id: e.id, name: e.name, type_name: e.type_name }))
 

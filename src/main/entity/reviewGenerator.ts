@@ -12,6 +12,7 @@
 import { randomUUID } from 'crypto'
 import Database from 'better-sqlite3'
 import { callWithFallback } from '../ai/modelRouter'
+import { getPersonalizationPreamble } from '../ai/personalization'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -333,9 +334,10 @@ export function buildEntityContext(
 
 // ── Prompt builder ─────────────────────────────────────────────────────────────
 
-function buildPrompt(ctx: EntityContext, periodStart: string, periodEnd: string): string {
+function buildPrompt(ctx: EntityContext, periodStart: string, periodEnd: string, userPreamble = ''): string {
+  const preambleSection = userPreamble ? `\n\n## About the user\n${userPreamble}` : ''
   return (
-    `You are a personal knowledge assistant. Generate a concise, structured review.\n\n` +
+    `You are a personal knowledge assistant. Generate a concise, structured review.${preambleSection}\n\n` +
     `Entity type: "${ctx.typeName}" — ${ctx.reviewGuidance}.\n\n` +
     `Review period: ${periodStart} to ${periodEnd}.\n\n` +
 
@@ -442,7 +444,8 @@ export async function generateEntityReview(
   const { periodStart, periodEnd } = getPeriodWindow(frequency)
 
   const ctx = buildEntityContext(db, entity, type, periodStart, periodEnd)
-  const prompt = buildPrompt(ctx, periodStart, periodEnd)
+  const personalization = getPersonalizationPreamble(db)
+  const prompt = buildPrompt(ctx, periodStart, periodEnd, personalization.preamble)
 
   let usedModelId: string | null = null
   let content: string
