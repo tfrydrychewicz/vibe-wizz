@@ -16,6 +16,8 @@ For context read and @CLAUDE.md, @DESIGN.md.
 
 Design a new feature.
 
+
+
 Remember about reusability and consistency across whole app.
 
 For this idea , first create a new file in the /features folder of this project. The file should have a design of the feature and the implementation plan in a form of a checklist (like in @DESIGN.md) 

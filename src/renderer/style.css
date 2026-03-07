@@ -1469,6 +1469,71 @@ body {
   color: #e05555;
 }
 
+/* ── Composer model select wrapper (ChatSidebar + AIPromptModal) ── */
+
+
+/* ── Rich text input inline chips (created via DOM in RichTextInput.vue) ── */
+
+.rich-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 1px 4px 1px 7px;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+  vertical-align: middle;
+  line-height: 1.4;
+  white-space: nowrap;
+  position: relative;
+  top: -1px;
+}
+
+.rich-chip--entity {
+  background: rgba(91, 141, 239, 0.15);
+  border: 1px solid rgba(91, 141, 239, 0.35);
+  color: var(--color-accent, #5b8def);
+}
+
+.rich-chip--note {
+  background: rgba(52, 168, 83, 0.12);
+  border: 1px solid rgba(52, 168, 83, 0.3);
+  color: #34a853;
+}
+
+.rich-chip--selection {
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.rich-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.55;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.rich-chip__remove:hover {
+  opacity: 1;
+  background: rgba(220, 80, 80, 0.18);
+  color: #ef4444;
+}
+
 /* ── Textarea-based picker dropdown (@mention + [[note-link) ── */
 
 .input-picker {

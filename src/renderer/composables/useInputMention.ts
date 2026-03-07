@@ -6,6 +6,7 @@ export interface EntityResult {
   type_id: string
   type_name: string
   type_icon: string
+  type_color?: string | null
 }
 
 /**
@@ -86,14 +87,15 @@ export function useInputMention(
     if (!ta || mentionStart.value < 0) return
     const val = ta.value
     const cursorPos = ta.selectionStart ?? val.length
-    inputText.value = val.slice(0, mentionStart.value) + `@${entity.name}` + val.slice(cursorPos)
+    // Remove the @query trigger from the textarea; chip appears inline within the input wrapper
+    inputText.value = val.slice(0, mentionStart.value) + val.slice(cursorPos)
     if (!mentionedEntities.value.find((e) => e.id === entity.id)) {
       mentionedEntities.value.push(entity)
     }
-    const insertEnd = mentionStart.value + entity.name.length + 1
+    const newCursor = mentionStart.value
     close()
     nextTick(() => {
-      ta.setSelectionRange(insertEnd, insertEnd)
+      ta.setSelectionRange(newCursor, newCursor)
       ta.focus()
       afterPick?.()
     })

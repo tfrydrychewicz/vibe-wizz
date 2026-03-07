@@ -1,21 +1,17 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted } from 'vue'
 import { marked } from 'marked'
-import { X, Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText } from 'lucide-vue-next'
-import { messages, isLoading, clearMessages, selectedModelId, type ChatMessage, type ExecutedAction, type AttachedImage, type AttachedFile } from '../stores/chatStore'
+import { Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText, X } from 'lucide-vue-next'
+import { messages, isLoading, clearMessages, selectedModelId, type ChatMessage, type ExecutedAction } from '../stores/chatStore'
 import type { OpenMode } from '../stores/tabStore'
-import { useInputMention } from '../composables/useInputMention'
-import { useInputNoteLink } from '../composables/useInputNoteLink'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT } from '../composables/useFileAttachment'
-import { useNoteSelectionPaste } from '../composables/useNoteSelectionPaste'
 import { useEntityChips } from '../composables/useEntityChips'
-import { entityTypeMap } from '../stores/entityTypeStore'
 import { renderEntityChip, renderNoteChip, escapeHtml } from '../utils/markdown'
-import LucideIcon from './LucideIcon.vue'
 import AttachmentBar from './AttachmentBar.vue'
 import NoteSelectionChip from './NoteSelectionChip.vue'
-import InputEntityPicker from './InputEntityPicker.vue'
-import InputNoteLinkPicker from './InputNoteLinkPicker.vue'
+import RichTextInput from './RichTextInput.vue'
+import ModelSelect from './ModelSelect.vue'
+import type { RichInputContent } from './RichTextInput.vue'
 
 const emit = defineEmits<{
   close: []
@@ -25,23 +21,21 @@ const emit = defineEmits<{
   'note-created': []
 }>()
 
-const inputText = ref('')
 const messagesContainerRef = ref<HTMLElement | null>(null)
 const messagesEndRef = ref<HTMLElement | null>(null)
+const richInputRef = ref<InstanceType<typeof RichTextInput> | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const chatModels = ref<{ id: string; label: string }[]>([])
+const hasContent = ref(false)
 
 const { applyToElement: applyChips } = useEntityChips()
 
-// Apply entity chip styling after each new message is pushed (watch length
-// because messages is mutated in-place via .push — the ref itself never changes).
 watch(() => messages.value.length, async () => {
   await nextTick()
   if (messagesContainerRef.value) void applyChips(messagesContainerRef.value)
 })
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
-const fileInputRef = ref<HTMLInputElement | null>(null)
-const chatModels = ref<{ id: string; label: string }[]>([])
 
-// ── File attachment (shared composable) ──────────────────────────────────────
+// ── File attachment ───────────────────────────────────────────────────────────
 const {
   attachedImages,
   attachedFiles,
@@ -54,69 +48,15 @@ const {
   onFileInputChange,
 } = useFileAttachment()
 
-// ── Note selection paste (checked first — before file attachment) ─────────────
-const {
-  attachedSelections,
-  onPaste: onNoteSelectionPaste,
-  removeSelection,
-  clear: clearSelections,
-} = useNoteSelectionPaste()
-
-/**
- * Combined paste handler for the chat textarea.
- * Note selection paste is checked first; falls through to file/image paste
- * when no Wizz clipboard data is present.
- */
-function onPaste(e: ClipboardEvent): void {
-  if (onNoteSelectionPaste(e)) return
-  onFilePaste(e)
-}
-
-// ── @mention + [[note link pickers (shared composables) ──────────────────────
-const {
-  mentionActive,
-  mentionResults,
-  mentionIndex,
-  mentionedEntities,
-  updateState: updateMentionState,
-  handleKeydown: handleMentionKeydown,
-  pick: pickMention,
-  close: closeMention,
-  removeEntity: removeMentionEntity,
-} = useInputMention(textareaRef, inputText, adjustTextareaHeight)
-
-const {
-  noteLinkActive,
-  noteLinkResults,
-  noteLinkIndex,
-  mentionedNotes,
-  updateState: updateNoteLinkState,
-  handleKeydown: handleNoteLinkKeydown,
-  pick: pickNote,
-  close: closeNoteLinkPicker,
-  removeNote: removeNoteLinkNote,
-} = useInputNoteLink(textareaRef, inputText, adjustTextareaHeight)
-
-function entityChipStyle(typeId: string): Record<string, string> {
-  const color = entityTypeMap.get(typeId)?.color
-  if (!color) return {}
-  return {
-    background: `${color}1a`,
-    borderColor: `${color}40`,
-    color,
-  }
-}
-
-// Configure marked: no GFM tables/extensions needed beyond basic, keep it safe
+// Configure marked
 marked.setOptions({ breaks: true })
 
 onMounted(async () => {
   nextTick(() => {
-    textareaRef.value?.focus()
+    richInputRef.value?.focus()
     messagesEndRef.value?.scrollIntoView({ behavior: 'instant' })
   })
 
-  // Load enabled chat-capable models from all configured providers
   try {
     interface ProviderRow { id: string; label: string; models: { id: string; label: string; capabilities: string[]; enabled: boolean }[] }
     const providers = await window.api.invoke('ai-providers:list') as ProviderRow[]
@@ -129,9 +69,7 @@ onMounted(async () => {
       }
     }
     chatModels.value = models
-  } catch {
-    // leave chatModels empty — send() will use server-side default chain
-  }
+  } catch { /* leave empty */ }
 })
 
 function scrollToBottom(): void {
@@ -140,39 +78,27 @@ function scrollToBottom(): void {
   })
 }
 
-watch(
-  () => messages.value.length,
-  () => scrollToBottom(),
-)
+watch(() => messages.value.length, () => scrollToBottom())
 
-function adjustTextareaHeight(): void {
-  const el = textareaRef.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
-}
-
-function onInputWithMention(): void {
-  adjustTextareaHeight()
-  const hadMention = updateMentionState(closeNoteLinkPicker)
-  if (!hadMention) updateNoteLinkState(closeMention)
+function onContentChange(): void {
+  hasContent.value = !(richInputRef.value?.isEmpty() ?? true)
 }
 
 function onClear(): void {
   clearMessages()
-  mentionedEntities.value = []
-  mentionedNotes.value = []
+  richInputRef.value?.clear()
 }
 
 async function send(): Promise<void> {
-  const text = inputText.value.trim()
-  const hasAttachments = attachedImages.value.length > 0 || attachedFiles.value.length > 0 || attachedSelections.value.length > 0
-  if ((!text && !hasAttachments) || isLoading.value) return
+  if (!richInputRef.value || isLoading.value) return
+  const { text, mentionedEntityIds, mentionedNoteIds, selections }: RichInputContent = richInputRef.value.getContent()
 
-  inputText.value = ''
-  nextTick(() => {
-    if (textareaRef.value) textareaRef.value.style.height = 'auto'
-  })
+  const hasFiles = attachedImages.value.length > 0 || attachedFiles.value.length > 0
+  const hasContext = selections.length > 0 || mentionedEntityIds.length > 0 || mentionedNoteIds.length > 0
+  if (!text && !hasFiles && !hasContext) return
+
+  richInputRef.value.clear()
+  hasContent.value = false
 
   const imagesToSend = attachedImages.value.map(({ dataUrl, mimeType }) => ({ dataUrl, mimeType }))
   attachedImages.value = []
@@ -181,10 +107,8 @@ async function send(): Promise<void> {
   const fileNamesForDisplay = attachedFiles.value.map(({ name }) => ({ name }))
   attachedFiles.value = []
 
-  // Spread each attachment into a plain object so Electron's IPC serializer
-  // (v8.serialize) can clone them — Vue reactive Proxies are not cloneable.
-  const selectionsToSend = attachedSelections.value.map((s) => ({ ...s }))
-  clearSelections()
+  // Plain objects required for Electron IPC structured clone
+  const selectionsToSend = selections.map((s) => ({ ...s }))
 
   const userMsg: ChatMessage = {
     role: 'user',
@@ -208,12 +132,8 @@ async function send(): Promise<void> {
       files: filesToSend.length > 0 ? filesToSend : undefined,
       noteSelections: selectionsToSend.length > 0 ? selectionsToSend : undefined,
       overrideModelId: selectedModelId.value || undefined,
-      mentionedEntityIds: mentionedEntities.value.length > 0
-        ? mentionedEntities.value.map((e) => e.id)
-        : undefined,
-      mentionedNoteIds: mentionedNotes.value.length > 0
-        ? mentionedNotes.value.map((n) => n.id)
-        : undefined,
+      mentionedEntityIds: mentionedEntityIds.length > 0 ? mentionedEntityIds : undefined,
+      mentionedNoteIds: mentionedNoteIds.length > 0 ? mentionedNoteIds : undefined,
     })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[]; warning?: string }
 
     messages.value.push({
@@ -224,28 +144,13 @@ async function send(): Promise<void> {
       actions: result.actions,
       warning: result.warning,
     })
-    if (result.actions?.some((a) => a.type === 'created_note')) {
-      emit('note-created')
-    }
+    if (result.actions?.some((a) => a.type === 'created_note')) emit('note-created')
   } catch (err) {
     console.error('[Chat] send failed:', err)
-    messages.value.push({
-      role: 'assistant',
-      content: 'An error occurred. Please try again.',
-      error: true,
-    })
+    messages.value.push({ role: 'assistant', content: 'An error occurred. Please try again.', error: true })
   } finally {
     isLoading.value = false
-    nextTick(() => textareaRef.value?.focus())
-  }
-}
-
-function onKeydown(e: KeyboardEvent): void {
-  if (handleMentionKeydown(e)) return
-  if (handleNoteLinkKeydown(e)) return
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    void send()
+    nextTick(() => richInputRef.value?.focus())
   }
 }
 
@@ -456,15 +361,6 @@ function renderMessage(
     <div class="chat-header">
       <span class="chat-header-icon"><MessageSquare :size="14" /></span>
       <span class="chat-header-title">Ask Wizz</span>
-      <select
-        v-if="chatModels.length > 0"
-        v-model="selectedModelId"
-        class="chat-model-select"
-        title="Model"
-      >
-        <option value="">Default</option>
-        <option v-for="m in chatModels" :key="m.id" :value="m.id">{{ m.label }}</option>
-      </select>
       <button
         v-if="messages.length > 0"
         class="chat-action-btn"
@@ -567,56 +463,6 @@ function renderMessage(
       <div ref="messagesEndRef" />
     </div>
 
-    <!-- Attachments bar (note selections + images + files + mentioned entities + pinned notes) -->
-    <div v-if="attachedSelections.length > 0 || attachedImages.length > 0 || attachedFiles.length > 0 || mentionedEntities.length > 0 || mentionedNotes.length > 0" class="chat-attachments-bar">
-      <!-- Note selection chips (above file attachments) -->
-      <NoteSelectionChip
-        v-for="(sel, idx) in attachedSelections"
-        :key="idx"
-        :attachment="sel"
-        @remove="removeSelection(idx)"
-      />
-      <AttachmentBar
-        :attached-images="attachedImages"
-        :attached-files="attachedFiles"
-        @remove-image="removeImage"
-        @remove-file="removeFile"
-      />
-      <!-- Mentioned entity chips -->
-      <div
-        v-for="entity in mentionedEntities"
-        :key="entity.id"
-        class="chat-mention-chip"
-        :style="entityChipStyle(entity.type_id)"
-      >
-        <LucideIcon
-          :name="entityTypeMap.get(entity.type_id)?.icon ?? entity.type_icon ?? 'tag'"
-          :size="11"
-          class="chat-mention-chip-icon"
-        />
-        <span class="chat-mention-chip-name">@{{ entity.name }}</span>
-        <span class="chat-mention-chip-type">{{ entity.type_name }}</span>
-        <button class="chat-chip-remove" title="Remove" @click="removeMentionEntity(entity.id)">
-          <X :size="10" />
-        </button>
-      </div>
-      <!-- Pinned note chips -->
-      <div
-        v-for="note in mentionedNotes"
-        :key="note.id"
-        class="chat-note-chip"
-      >
-        <FileText :size="11" class="chat-note-chip-icon" />
-        <span class="chat-note-chip-title">{{ note.title }}</span>
-        <button class="chat-chip-remove" title="Remove" @click="removeNoteLinkNote(note.id)">
-          <X :size="10" />
-        </button>
-      </div>
-    </div>
-
-    <!-- File drop/type error -->
-    <div v-if="dropError" class="chat-drop-error">{{ dropError }}</div>
-
     <!-- Hidden file input -->
     <input
       ref="fileInputRef"
@@ -627,50 +473,57 @@ function renderMessage(
       @change="onFileInputChange"
     />
 
-    <!-- Input -->
-    <div class="chat-input-area">
-      <!-- @mention entity picker (floats above input) -->
-      <InputEntityPicker
-        v-if="mentionActive && mentionResults.length > 0"
-        :items="mentionResults"
-        :active-index="mentionIndex"
-        @pick="pickMention"
-      />
-      <!-- [[note link picker (floats above input) -->
-      <InputNoteLinkPicker
-        v-if="noteLinkActive && noteLinkResults.length > 0"
-        :items="noteLinkResults"
-        :active-index="noteLinkIndex"
-        @pick="pickNote"
-      />
-      <button
-        class="chat-attach-btn"
+    <!-- Composer: unified input box (Cursor-style) -->
+    <div class="chat-composer">
+      <!-- File/image attachments inside the box -->
+      <div v-if="attachedImages.length > 0 || attachedFiles.length > 0" class="chat-composer-files">
+        <AttachmentBar
+          :attached-images="attachedImages"
+          :attached-files="attachedFiles"
+          @remove-image="removeImage"
+          @remove-file="removeFile"
+        />
+      </div>
+
+      <!-- Rich text input (borderless — box provides the border) -->
+      <RichTextInput
+        ref="richInputRef"
+        placeholder="Ask about your notes…"
         :disabled="isLoading"
-        title="Attach file (PDF, TXT, CSV, MD)"
-        @click="fileInputRef?.click()"
-      >
-        <Paperclip :size="14" />
-      </button>
-      <textarea
-        ref="textareaRef"
-        v-model="inputText"
-        class="chat-input"
-        placeholder="Ask about your notes… (@ entity, [[ note)"
-        rows="1"
-        :disabled="isLoading"
-        @keydown="onKeydown"
-        @input="onInputWithMention"
-        @paste="onPaste"
-        @blur="closeMention(); closeNoteLinkPicker()"
+        @submit="send"
+        @paste="onFilePaste"
+        @change="onContentChange"
       />
-      <button
-        class="chat-send-btn"
-        :disabled="(!inputText.trim() && attachedImages.length === 0 && attachedFiles.length === 0 && attachedSelections.length === 0) || isLoading"
-        title="Send (Enter)"
-        @click="send"
-      >
-        <Send :size="14" />
-      </button>
+
+      <!-- Bottom toolbar -->
+      <div class="chat-composer-toolbar">
+        <ModelSelect
+          v-if="chatModels.length > 0"
+          v-model="selectedModelId"
+          :models="chatModels"
+          :disabled="isLoading"
+        />
+        <div class="chat-composer-spacer" />
+        <button
+          class="chat-composer-btn"
+          :disabled="isLoading"
+          title="Attach file (PDF, TXT, CSV, MD)"
+          @click="fileInputRef?.click()"
+        >
+          <Paperclip :size="14" />
+        </button>
+        <button
+          class="chat-composer-send"
+          :disabled="(!hasContent && attachedImages.length === 0 && attachedFiles.length === 0) || isLoading"
+          title="Send (Enter)"
+          @click="send"
+        >
+          <Send :size="14" />
+        </button>
+      </div>
+
+      <!-- Drop/type error -->
+      <div v-if="dropError" class="chat-drop-error">{{ dropError }}</div>
     </div>
   </div>
 </template>
@@ -952,68 +805,74 @@ function renderMessage(
   outline-offset: -4px;
 }
 
-/* ── Attachments bar ── */
+/* ── Composer (unified input box, Cursor-style) ── */
 
-.chat-attachments-bar {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--color-border);
-  flex-shrink: 0;
-  overflow-x: auto;
-  background: var(--color-surface);
-}
-
-/* ── Input area ── */
-
-.chat-input-area {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--color-border);
-  flex-shrink: 0;
-}
-
-.chat-input {
-  flex: 1;
-  background: var(--color-surface);
+.chat-composer {
+  margin: 8px 10px 10px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  color: var(--color-text);
-  font-size: 13px;
-  font-family: inherit;
-  line-height: 1.5;
-  resize: none;
-  outline: none;
-  min-height: 36px;
-  max-height: 120px;
-  overflow-y: auto;
+  border-radius: 10px;
+  background: var(--color-surface);
+  flex-shrink: 0;
+  transition: border-color 0.15s;
+  /* Override RichTextInput so the box provides the border */
+  --rich-input-border: none;
+  --rich-input-bg: transparent;
+  --rich-input-radius: 0;
 }
 
-.chat-input:focus {
+.chat-composer:focus-within {
   border-color: var(--color-accent);
 }
 
-.chat-input::placeholder {
-  color: var(--color-text-muted);
+.chat-composer-files {
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--color-border);
 }
 
-.chat-input:disabled {
-  opacity: 0.5;
+.chat-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px;
 }
 
-.chat-send-btn {
+.chat-composer-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.chat-composer-btn:hover:not(:disabled) {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.chat-composer-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+
+.chat-composer-spacer {
+  flex: 1;
+}
+
+.chat-composer-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
   background: var(--color-accent);
   border: none;
   color: #fff;
@@ -1022,12 +881,12 @@ function renderMessage(
   transition: opacity 0.15s;
 }
 
-.chat-send-btn:disabled {
+.chat-composer-send:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
 
-.chat-send-btn:not(:disabled):hover {
+.chat-composer-send:not(:disabled):hover {
   opacity: 0.85;
 }
 
@@ -1141,30 +1000,6 @@ function renderMessage(
   text-overflow: ellipsis;
 }
 
-/* ── Entity/note chip inline remove button ── */
-
-.chat-chip-remove {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: inherit;
-  opacity: 0.5;
-  padding: 0;
-  flex-shrink: 0;
-}
-
-.chat-chip-remove:hover {
-  opacity: 1;
-  background: rgba(220, 80, 80, 0.15);
-  color: #ef4444;
-}
-
 /* ── Drop error ── */
 
 .chat-drop-error {
@@ -1176,91 +1011,6 @@ function renderMessage(
   margin: 0 8px;
 }
 
-/* ── Attach button ── */
-
-.chat-attach-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 34px;
-  background: transparent;
-  border: none;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  flex-shrink: 0;
-  border-radius: 6px;
-  transition: color 0.1s, background 0.1s;
-}
-
-.chat-attach-btn:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-hover);
-}
-
-.chat-attach-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-/* ── Note chips in attachments bar ── */
-
-.chat-note-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  font-weight: 500;
-  background: rgba(52, 168, 83, 0.1);
-  border: 1px solid rgba(52, 168, 83, 0.25);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.chat-note-chip-icon {
-  color: #34a853;
-  flex-shrink: 0;
-}
-
-.chat-note-chip-title {
-  color: #34a853;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ── Entity mention chips in attachments bar ── */
-
-.chat-mention-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  font-weight: 500;
-  background: rgba(91, 141, 239, 0.1);
-  border: 1px solid rgba(91, 141, 239, 0.25);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.chat-mention-chip-icon {
-  opacity: 0.8;
-  flex-shrink: 0;
-}
-
-.chat-mention-chip-name {
-  color: inherit;
-}
-
-.chat-mention-chip-type {
-  font-size: 10.5px;
-  color: var(--color-text-muted);
-  font-weight: 400;
-}
 
 /* ── Fallback warning ── */
 

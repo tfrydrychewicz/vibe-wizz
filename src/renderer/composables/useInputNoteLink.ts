@@ -83,16 +83,16 @@ export function useInputNoteLink(
     if (!ta || noteLinkStart.value < 0) return
     const val = ta.value
     const cursorPos = ta.selectionStart ?? val.length
-    const inserted = `[[${note.title}]]`
-    inputText.value = val.slice(0, noteLinkStart.value) + inserted + val.slice(cursorPos)
+    // Remove the [[query trigger from the textarea; chip appears inline within the input wrapper
+    inputText.value = val.slice(0, noteLinkStart.value) + val.slice(cursorPos)
     // cap at 5 unique notes per session
     if (mentionedNotes.value.length < 5 && !mentionedNotes.value.find((n) => n.id === note.id)) {
       mentionedNotes.value.push(note)
     }
-    const insertEnd = noteLinkStart.value + inserted.length
+    const newCursor = noteLinkStart.value
     close()
     nextTick(() => {
-      ta.setSelectionRange(insertEnd, insertEnd)
+      ta.setSelectionRange(newCursor, newCursor)
       ta.focus()
       afterPick?.()
     })

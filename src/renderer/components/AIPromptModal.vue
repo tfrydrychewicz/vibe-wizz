@@ -1,15 +1,12 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted } from 'vue'
-import { Sparkles, X, FileText, Paperclip } from 'lucide-vue-next'
-import { useInputMention } from '../composables/useInputMention'
-import { useInputNoteLink } from '../composables/useInputNoteLink'
+import { Sparkles, Paperclip } from 'lucide-vue-next'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT, type AttachedFile } from '../composables/useFileAttachment'
-import { useNoteSelectionPaste } from '../composables/useNoteSelectionPaste'
 import type { NoteSelectionAttachment } from '../types/noteSelection'
 import AttachmentBar from './AttachmentBar.vue'
-import NoteSelectionChip from './NoteSelectionChip.vue'
-import InputEntityPicker from './InputEntityPicker.vue'
-import InputNoteLinkPicker from './InputNoteLinkPicker.vue'
+import RichTextInput from './RichTextInput.vue'
+import ModelSelect from './ModelSelect.vue'
+import type { RichInputContent } from './RichTextInput.vue'
 
 export interface AIPromptSubmit {
   prompt: string
@@ -32,13 +29,13 @@ const emit = defineEmits<{
   close: []
 }>()
 
-const textarea = ref<HTMLTextAreaElement | null>(null)
+const richInput = ref<InstanceType<typeof RichTextInput> | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
-const promptText = ref('')
 const selectedModel = ref('')
 const chatModels = ref<{ id: string; label: string }[]>([])
+const hasContent = ref(false)
 
-// ── Composables ────────────────────────────────────────────────────────────────
+// ── File attachment ────────────────────────────────────────────────────────────
 const {
   attachedImages,
   attachedFiles,
@@ -51,23 +48,8 @@ const {
   onFileInputChange,
 } = useFileAttachment()
 
-// Note selection paste — checked before file attachment paste
-const {
-  attachedSelections,
-  onPaste: onNoteSelectionPaste,
-  removeSelection,
-} = useNoteSelectionPaste()
-
-function onPaste(e: ClipboardEvent): void {
-  if (onNoteSelectionPaste(e)) return
-  onFilePaste(e)
-}
-
-const mention = useInputMention(textarea, promptText)
-const noteLink = useInputNoteLink(textarea, promptText)
-
 onMounted(async () => {
-  nextTick(() => textarea.value?.focus())
+  nextTick(() => richInput.value?.focus())
   try {
     interface ProviderRow { id: string; label: string; models: { id: string; label: string; capabilities: string[]; enabled: boolean }[] }
     const providers = await window.api.invoke('ai-providers:list') as ProviderRow[]
@@ -80,56 +62,33 @@ onMounted(async () => {
       }
     }
     chatModels.value = models
-  } catch {
-    // leave empty — IPC will use default chain
-  }
+  } catch { /* leave empty */ }
 })
 
 function openFilePicker(): void {
   fileInput.value?.click()
 }
 
-// ── Keyboard + input ───────────────────────────────────────────────────────────
-
-function onInput(): void {
-  const hadMention = mention.updateState(noteLink.close)
-  if (!hadMention) noteLink.updateState(mention.close)
-}
-
-function onKeydown(e: KeyboardEvent): void {
-  if (mention.handleKeydown(e)) return
-  if (noteLink.handleKeydown(e)) return
-
-  if (e.key === 'Escape') {
-    emit('close')
-    return
-  }
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    if (!props.loading && promptText.value.trim()) {
-      doSubmit()
-    }
-  }
+function onContentChange(): void {
+  hasContent.value = !(richInput.value?.isEmpty() ?? true)
 }
 
 function doSubmit(): void {
+  if (!richInput.value) return
+  const { text, mentionedEntityIds, mentionedNoteIds, selections }: RichInputContent = richInput.value.getContent()
+  if (!text && selections.length === 0 && mentionedEntityIds.length === 0 && mentionedNoteIds.length === 0
+    && attachedImages.value.length === 0 && attachedFiles.value.length === 0) return
+
   emit('submit', {
-    prompt: promptText.value.trim(),
-    mentionedEntityIds: mention.mentionedEntities.value.map((e) => e.id),
-    mentionedNoteIds: noteLink.mentionedNotes.value.map((n) => n.id),
+    prompt: text,
+    mentionedEntityIds,
+    mentionedNoteIds,
     images: attachedImages.value.map(({ dataUrl, mimeType }) => ({ dataUrl, mimeType })),
     files: attachedFiles.value.map(({ name, content, mimeType }) => ({ name, content, mimeType })),
-    noteSelections: attachedSelections.value.map((s) => ({ ...s })),
+    noteSelections: selections.map((s) => ({ ...s })),
     model: selectedModel.value,
   })
 }
-
-const hasContext = () =>
-  mention.mentionedEntities.value.length > 0 ||
-  noteLink.mentionedNotes.value.length > 0 ||
-  attachedImages.value.length > 0 ||
-  attachedFiles.value.length > 0 ||
-  attachedSelections.value.length > 0
 </script>
 
 <template>
@@ -149,79 +108,64 @@ const hasContext = () =>
         </span>
       </div>
 
-      <!-- Context bar: entity/note chips + file/image attachments -->
-      <div v-if="hasContext()" class="ai-modal-context">
-        <span
-          v-for="entity in mention.mentionedEntities.value"
-          :key="entity.id"
-          class="ai-modal-chip ai-modal-chip--entity"
-        >
-          @{{ entity.name }}
-          <span class="ai-modal-chip-type">{{ entity.type_name }}</span>
-          <button class="ai-modal-chip-remove" @mousedown.prevent @click="mention.removeEntity(entity.id)">
-            <X :size="10" />
-          </button>
-        </span>
-        <span
-          v-for="note in noteLink.mentionedNotes.value"
-          :key="note.id"
-          class="ai-modal-chip ai-modal-chip--note"
-        >
-          <FileText :size="11" />
-          {{ note.title }}
-          <button class="ai-modal-chip-remove" @mousedown.prevent @click="noteLink.removeNote(note.id)">
-            <X :size="10" />
-          </button>
-        </span>
-        <AttachmentBar
-          :attached-images="attachedImages"
-          :attached-files="attachedFiles"
-          @remove-image="removeImage"
-          @remove-file="removeFile"
-        />
-        <!-- Note selection chips -->
-        <NoteSelectionChip
-          v-for="(sel, idx) in attachedSelections"
-          :key="idx"
-          :attachment="sel"
-          @remove="removeSelection(idx)"
-        />
-      </div>
+      <!-- Unified input box (Cursor-style): attachments + rich text + toolbar -->
+      <div
+        class="ai-modal-input-wrap"
+        @dragover.prevent="isDragOver = true"
+        @dragleave="isDragOver = false"
+        @drop.prevent="onDrop"
+      >
+        <!-- File/image attachments (inside box, above text) -->
+        <div v-if="attachedImages.length > 0 || attachedFiles.length > 0" class="ai-modal-files">
+          <AttachmentBar
+            :attached-images="attachedImages"
+            :attached-files="attachedFiles"
+            @remove-image="removeImage"
+            @remove-file="removeFile"
+          />
+        </div>
 
-      <!-- Textarea with floating dropdowns -->
-      <div class="ai-modal-input-wrap">
-        <!-- Entity mention dropdown -->
-        <InputEntityPicker
-          v-if="mention.mentionActive.value && mention.mentionResults.value.length > 0"
-          :items="mention.mentionResults.value"
-          :active-index="mention.mentionIndex.value"
-          @pick="mention.pick"
-        />
-
-        <!-- Note link dropdown -->
-        <InputNoteLinkPicker
-          v-if="noteLink.noteLinkActive.value && noteLink.noteLinkResults.value.length > 0"
-          :items="noteLink.noteLinkResults.value"
-          :active-index="noteLink.noteLinkIndex.value"
-          @pick="noteLink.pick"
-        />
-
-        <textarea
-          ref="textarea"
-          v-model="promptText"
-          class="ai-modal-textarea"
+        <!-- Rich text input (borderless — box provides the border) -->
+        <RichTextInput
+          ref="richInput"
           :placeholder="mode === 'replace'
-            ? 'Describe how to rewrite the selection… (@entity, [[note, paste or drag file)'
-            : 'Describe what to write here… (@entity, [[note, paste or drag file)'"
+            ? 'Describe how to rewrite the selection…'
+            : 'Describe what to write here…'"
           :disabled="loading"
-          rows="3"
-          @keydown="onKeydown"
-          @input="onInput"
-          @paste="onPaste"
-          @dragover.prevent.stop="isDragOver = true"
-          @dragleave.stop="isDragOver = false"
-          @drop.prevent.stop="onDrop"
+          @submit="doSubmit"
+          @escape="emit('close')"
+          @paste="onFilePaste"
+          @change="onContentChange"
         />
+
+        <!-- Bottom toolbar -->
+        <div class="ai-modal-toolbar">
+          <ModelSelect
+            v-if="chatModels.length > 0"
+            v-model="selectedModel"
+            :models="chatModels"
+            :disabled="loading"
+          />
+          <div class="ai-modal-toolbar-spacer" />
+          <button
+            class="ai-modal-toolbar-btn"
+            title="Attach file (image, PDF, TXT, CSV, MD)"
+            :disabled="loading"
+            @mousedown.prevent
+            @click="openFilePicker"
+          >
+            <Paperclip :size="14" />
+          </button>
+          <button
+            class="ai-modal-submit"
+            :disabled="loading || (!hasContent && attachedImages.length === 0 && attachedFiles.length === 0)"
+            @mousedown.prevent
+            @click="doSubmit"
+          >
+            <span v-if="loading" class="ai-modal-spinner" />
+            <span v-else>Generate</span>
+          </button>
+        </div>
       </div>
 
       <!-- Hidden file input -->
@@ -236,33 +180,6 @@ const hasContext = () =>
 
       <div v-if="dropError" class="ai-modal-error">{{ dropError }}</div>
       <div v-if="errorMessage" class="ai-modal-error">{{ errorMessage }}</div>
-      <div class="ai-modal-footer">
-        <div class="ai-modal-footer-left">
-          <button
-            class="ai-modal-attach"
-            title="Attach file (image, PDF, TXT, CSV, MD)"
-            :disabled="loading"
-            @mousedown.prevent
-            @click="openFilePicker"
-          >
-            <Paperclip :size="14" />
-          </button>
-          <span class="ai-modal-hint">Enter ↵ · Shift+Enter newline · Esc cancel</span>
-        </div>
-        <select v-if="chatModels.length > 0" v-model="selectedModel" class="ai-modal-model-select" :disabled="loading" title="Model">
-          <option value="">Default</option>
-          <option v-for="m in chatModels" :key="m.id" :value="m.id">{{ m.label }}</option>
-        </select>
-        <button
-          class="ai-modal-submit"
-          :disabled="loading || (!promptText.trim() && attachedImages.length === 0 && attachedFiles.length === 0 && attachedSelections.length === 0)"
-          @mousedown.prevent
-          @click="doSubmit"
-        >
-          <span v-if="loading" class="ai-modal-spinner" />
-          <span v-else>Generate</span>
-        </button>
-      </div>
     </div>
   </div>
 </template>
@@ -314,171 +231,67 @@ const hasContext = () =>
   letter-spacing: 0.05em;
 }
 
-/* ── Context chips ─────────────────────────────────────────────────────────── */
-
-.ai-modal-context {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-.ai-modal-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  border-radius: 5px;
-  padding: 3px 7px 3px 8px;
-  line-height: 1;
-}
-
-.ai-modal-chip--entity {
-  background: rgba(91, 141, 239, 0.12);
-  color: var(--color-accent, #5b8def);
-  border: 1px solid rgba(91, 141, 239, 0.25);
-}
-
-.ai-modal-chip--note {
-  background: rgba(34, 197, 94, 0.1);
-  color: #16a34a;
-  border: 1px solid rgba(34, 197, 94, 0.25);
-}
-
-.ai-modal-chip-type {
-  font-size: 10px;
-  opacity: 0.7;
-  border-left: 1px solid currentColor;
-  padding-left: 5px;
-}
-
-.ai-modal-chip-remove {
-  display: inline-flex;
-  align-items: center;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0 0 0 2px;
-  color: inherit;
-  opacity: 0.6;
-  line-height: 1;
-}
-
-.ai-modal-chip-remove:hover {
-  opacity: 1;
-}
-
-/* ── Input area ────────────────────────────────────────────────────────────── */
+/* ── Input area (unified box, Cursor-style) ────────────────────────────────── */
 
 .ai-modal-input-wrap {
   position: relative;
-}
-
-
-.ai-modal-textarea {
-  background: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: 6px;
-  color: var(--color-text);
-  font-size: 13px;
-  font-family: inherit;
-  padding: 8px 10px;
-  resize: vertical;
-  outline: none;
-  width: 100%;
-  box-sizing: border-box;
-  line-height: 1.5;
+  border-radius: 8px;
+  transition: border-color 0.15s;
+  /* Override RichTextInput so the box provides the border */
+  --rich-input-border: none;
+  --rich-input-bg: transparent;
+  --rich-input-radius: 0;
 }
 
-.ai-modal-textarea:focus {
+.ai-modal-input-wrap:focus-within {
   border-color: var(--color-accent);
 }
 
-.ai-modal-textarea:disabled {
-  opacity: 0.5;
+.ai-modal-files {
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--color-border);
 }
 
-/* ── Footer ────────────────────────────────────────────────────────────────── */
+/* ── Bottom toolbar ─────────────────────────────────────────────────────────── */
 
-.ai-modal-error {
-  font-size: 12px;
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.08);
-  border-radius: 5px;
-  padding: 6px 10px;
-}
-
-.ai-modal-footer {
+.ai-modal-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
+  padding: 3px 6px;
 }
 
-.ai-modal-file-input {
-  display: none;
-}
-
-.ai-modal-footer-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.ai-modal-attach {
+.ai-modal-toolbar-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: none;
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
   color: var(--color-text-muted);
   cursor: pointer;
-  padding: 4px 6px;
   flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
 }
 
-.ai-modal-attach:hover:not(:disabled) {
-  color: var(--color-text);
-  border-color: var(--color-accent);
-}
-
-.ai-modal-attach:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.ai-modal-hint {
-  font-size: 11px;
-  color: var(--color-text-muted);
-}
-
-.ai-modal-model-select {
-  appearance: none;
+.ai-modal-toolbar-btn:hover:not(:disabled) {
   background: var(--color-hover);
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-family: inherit;
-  padding: 2px 6px;
-  height: 22px;
-  cursor: pointer;
-  outline: none;
-  flex-shrink: 0;
-}
-
-.ai-modal-model-select:hover:not(:disabled),
-.ai-modal-model-select:focus:not(:disabled) {
-  border-color: var(--color-accent);
   color: var(--color-text);
 }
 
-.ai-modal-model-select:disabled {
+.ai-modal-toolbar-btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
+
+.ai-modal-toolbar-spacer {
+  flex: 1;
+}
+
+
 
 .ai-modal-submit {
   display: inline-flex;
@@ -487,13 +300,15 @@ const hasContext = () =>
   background: var(--color-accent, #5b8def);
   color: #fff;
   border: none;
-  border-radius: 5px;
+  border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
-  padding: 5px 14px;
+  padding: 4px 12px;
+  height: 28px;
   cursor: pointer;
-  min-width: 80px;
   justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
 }
 
 .ai-modal-submit:disabled {
@@ -503,6 +318,20 @@ const hasContext = () =>
 
 .ai-modal-submit:not(:disabled):hover {
   opacity: 0.88;
+}
+
+/* ── Errors ─────────────────────────────────────────────────────────────────── */
+
+.ai-modal-error {
+  font-size: 12px;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 5px;
+  padding: 6px 10px;
+}
+
+.ai-modal-file-input {
+  display: none;
 }
 
 .ai-modal-spinner {
