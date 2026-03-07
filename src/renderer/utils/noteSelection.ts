@@ -10,6 +10,39 @@ import type { Editor } from '@tiptap/core'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import type { NoteSelectionAttachment } from '../types/noteSelection'
 
+// ── Inline content serializer ─────────────────────────────────────────────────
+/**
+ * Recursively serialize a ProseMirror node's content to plain text, preserving
+ * @mention and [[noteLink]] references that are invisible to `node.textContent`
+ * (which returns '' for atomic nodes like mention/noteLink).
+ *
+ * Block-level children are separated by '\n'; inline children are concatenated
+ * without separators (matching the visual flow of a paragraph's inline content).
+ */
+function getNodeText(node: ProseMirrorNode): string {
+  // Atomic inline reference nodes — serialize with ID + name so the model can
+  // unambiguously identify the referenced entity/note (names are not unique).
+  // Format matches the token used by the inline AI bubble: {{entity:id:label}}
+  if (node.type.name === 'mention') {
+    return `{{entity:${node.attrs['id'] as string}:${node.attrs['label'] as string}}}`
+  }
+  if (node.type.name === 'noteLink') {
+    return `{{note:${node.attrs['id'] as string}:${node.attrs['label'] as string}}}`
+  }
+  // Plain text leaf
+  if (node.isText) {
+    return node.text ?? ''
+  }
+  // Container node — recurse into children
+  const parts: string[] = []
+  node.forEach((child) => {
+    parts.push(getNodeText(child))
+  })
+  // Block-level containers (paragraph inside listItem, etc.) get newline separation;
+  // inline containers (marks, etc.) are joined without separator.
+  return parts.join(node.isBlock && !node.isInline ? '\n' : '')
+}
+
 // ── Block-level node type names that constitute a "line" ──────────────────────
 // Any top-level block whose pos range overlaps the TipTap selection contributes
 // one "block" to the range.  Inline nodes inside list items are counted as part
@@ -68,7 +101,7 @@ function serializeBlock(
   switch (node.type.name) {
     case 'taskItem': {
       const checked: boolean = node.attrs['checked'] === true
-      return `- [${checked ? 'x' : ' '}] ${node.textContent}`
+      return `- [${checked ? 'x' : ' '}] ${getNodeText(node)}`
     }
     case 'taskList': {
       const lines: string[] = []
@@ -81,9 +114,9 @@ function serializeBlock(
         if (inRange) {
           if (child.type.name === 'taskItem') {
             const checked: boolean = child.attrs['checked'] === true
-            lines.push(`- [${checked ? 'x' : ' '}] ${child.textContent}`)
+            lines.push(`- [${checked ? 'x' : ' '}] ${getNodeText(child)}`)
           } else {
-            lines.push(child.textContent)
+            lines.push(getNodeText(child))
           }
         }
         childPos += child.nodeSize
@@ -97,7 +130,7 @@ function serializeBlock(
         const childFrom = childPos
         const childTo = childPos + child.nodeSize
         const inRange = !hasRange || (childFrom < selTo! && childTo > selFrom!)
-        if (inRange) lines.push(`- ${child.textContent}`)
+        if (inRange) lines.push(`- ${getNodeText(child)}`)
         childPos += child.nodeSize
       })
       return lines.join('\n')
@@ -110,7 +143,7 @@ function serializeBlock(
         const childFrom = childPos
         const childTo = childPos + child.nodeSize
         const inRange = !hasRange || (childFrom < selTo! && childTo > selFrom!)
-        if (inRange) lines.push(`${i}. ${child.textContent}`)
+        if (inRange) lines.push(`${i}. ${getNodeText(child)}`)
         // Always advance i so original numbering is preserved for partial selections
         i++
         childPos += child.nodeSize
@@ -119,21 +152,21 @@ function serializeBlock(
     }
     case 'heading': {
       const level = node.attrs['level'] as number ?? 1
-      return `${'#'.repeat(level)} ${node.textContent}`
+      return `${'#'.repeat(level)} ${getNodeText(node)}`
     }
     case 'codeBlock': {
       const lang = (node.attrs['language'] as string | null) ?? ''
-      return `\`\`\`${lang}\n${node.textContent}\n\`\`\``
+      return `\`\`\`${lang}\n${getNodeText(node)}\n\`\`\``
     }
     case 'blockquote':
-      return node.textContent
+      return getNodeText(node)
         .split('\n')
         .map((l) => `> ${l}`)
         .join('\n')
     case 'horizontalRule':
       return '---'
     default:
-      return node.textContent
+      return getNodeText(node)
   }
 }
 
