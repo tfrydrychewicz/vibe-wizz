@@ -107,6 +107,23 @@ export interface ModelDef {
   capabilities: ('chat' | 'embedding' | 'image')[]
 }
 
+// ── Image generation ──────────────────────────────────────────────────────────
+
+export interface ImageGenParams {
+  model: string
+  prompt: string
+  size?: '1024x1024' | '1536x1024' | '1024x1536'
+  quality?: 'standard' | 'hd'
+}
+
+export interface ImageGenResult {
+  /** Base64-encoded image data */
+  base64: string
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  /** Prompt revised by the model (when applicable, e.g. DALL-E) */
+  revisedPrompt?: string
+}
+
 // ── Provider adapter interface ────────────────────────────────────────────────
 
 export interface ProviderAdapter {
@@ -128,4 +145,10 @@ export interface ProviderAdapter {
    * (OpenAI, Gemini — not Anthropic).
    */
   embed?(texts: string[], modelId: string, apiKey: string): Promise<EmbedResult[]>
+
+  /**
+   * Generate an image from a text prompt. Only required for providers that
+   * support it (OpenAI DALL-E/gpt-image, Gemini Imagen — not Anthropic).
+   */
+  generateImage?(params: ImageGenParams, apiKey: string): Promise<ImageGenResult>
 }

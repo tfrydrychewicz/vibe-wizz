@@ -14,7 +14,7 @@ const props = defineProps<{
   featureSlot: string
   label: string
   description: string
-  capability: 'chat' | 'embedding'
+  capability: 'chat' | 'embedding' | 'image'
   modelIds: string[]
   availableModels: EnabledModel[]
 }>()

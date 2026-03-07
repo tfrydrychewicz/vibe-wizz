@@ -45,6 +45,8 @@ export interface ChatMessage {
   references?: { id: string; title: string }[]
   entityRefs?: { id: string; name: string }[]
   actions?: ExecutedAction[]
+  generatedImages?: { path: string; prompt: string }[]
+  agentSteps?: import('../components/AgentStepProgress.vue').StepProgress[]
   error?: boolean
   warning?: string
 }

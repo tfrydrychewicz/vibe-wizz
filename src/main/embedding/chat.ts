@@ -6,7 +6,10 @@
  */
 
 import { randomUUID } from 'crypto'
+import { readFileSync, existsSync } from 'fs'
+import { extname, join } from 'path'
 import { getDatabase } from '../db/index'
+import { getGeneratedImageDir } from '../ai/imageStorage'
 import { parseMarkdownToTipTap } from '../transcription/postProcessor'
 import { scheduleEmbedding } from './pipeline'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
@@ -399,7 +402,9 @@ const WIZZ_TOOLS: ToolDef[] = [
       'Create a new note in the knowledge base. Use this when the user asks to create, write, draft, or generate a note, document, summary, or any piece of structured content. ' +
       'Format the content as Markdown: ## for headings, - for bullets, - [ ] for task checkboxes, **bold**, *italic*, `code`, ' +
       'and GFM tables (| Col | Col |\\n| --- | --- |\\n| cell | cell |) for structured data. ' +
-      'The note will be rendered with full rich-text formatting in the editor.',
+      'The note will be rendered with full rich-text formatting in the editor. ' +
+      'To embed a generated image anywhere in the note, use standard Markdown image syntax: ![description](file_path). ' +
+      'Place the image at the position you want it to appear — as a header, between sections, at the end, etc.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -408,7 +413,8 @@ const WIZZ_TOOLS: ToolDef[] = [
           type: 'string',
           description:
             'Note body in Markdown. Use ## for section headings, - for bullet lists, - [ ] for actionable tasks, **bold** for emphasis. ' +
-            'For structured/tabular data use GFM tables: | Header | Header |\\n| --- | --- |\\n| cell | cell |',
+            'For structured/tabular data use GFM tables: | Header | Header |\\n| --- | --- |\\n| cell | cell |. ' +
+            'To include a generated image, use ![description](file_path) at the desired position.',
         },
       },
       required: ['title', 'content'],
@@ -417,6 +423,46 @@ const WIZZ_TOOLS: ToolDef[] = [
 ]
 
 // ── Tool executor ────────────────────────────────────────────────────────────
+
+const EXT_TO_MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
+}
+
+/**
+ * Walk TipTap nodes and convert any image nodes whose `src` is a local file
+ * path into embedded data URLs. Mutates nodes in place.
+ */
+function resolveLocalImages(nodes: { type: string; attrs?: Record<string, unknown>; content?: unknown[] }[]): void {
+  for (const node of nodes) {
+    if (node.type === 'image' && node.attrs?.src && typeof node.attrs.src === 'string') {
+      const src = node.attrs.src as string
+      if (src.startsWith('data:') || src.startsWith('http')) {
+        // Already a valid URL — skip
+      } else {
+        let filePath: string
+        if (src.startsWith('wizz-file://')) {
+          const filename = src.replace('wizz-file://', '')
+          filePath = join(getGeneratedImageDir(), filename)
+        } else {
+          filePath = src.trim()
+        }
+        if (existsSync(filePath)) {
+          try {
+            const ext = extname(filePath).toLowerCase().slice(1)
+            const mime = EXT_TO_MIME[ext] ?? 'image/png'
+            const b64 = readFileSync(filePath).toString('base64')
+            node.attrs.src = `data:${mime};base64,${b64}`
+          } catch {
+            // Leave src as-is on read failure
+          }
+        }
+      }
+    }
+    if (Array.isArray(node.content)) {
+      resolveLocalImages(node.content as typeof nodes)
+    }
+  }
+}
 
 function executeTool(
   toolName: string,
@@ -617,12 +663,12 @@ function executeTool(
       const inp = input as { title: string; content: string }
       const id = randomUUID()
       const contentNodes = parseMarkdownToTipTap(inp.content)
+      resolveLocalImages(contentNodes)
       const doc = { type: 'doc', content: contentNodes }
       const now = new Date().toISOString()
       db.prepare(
         `INSERT INTO notes (id, title, body, body_plain, updated_at) VALUES (?, ?, ?, ?, ?)`,
       ).run(id, inp.title, JSON.stringify(doc), inp.content, now)
-      // Fire-and-forget: trigger NER + action extraction + embeddings
       scheduleEmbedding(id)
       return { type: 'created_note', payload: { id, title: inp.title } }
     }

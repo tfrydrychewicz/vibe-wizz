@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted } from 'vue'
+import { ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 import { Trash2, Send, MessageSquare, CalendarPlus, CalendarCheck, CalendarX, ListPlus, CheckSquare, SquareMinus, FilePlus, Paperclip, FileText, X } from 'lucide-vue-next'
 import { messages, isLoading, clearMessages, selectedModelId, type ChatMessage, type ExecutedAction } from '../stores/chatStore'
@@ -11,7 +11,9 @@ import AttachmentBar from './AttachmentBar.vue'
 import NoteSelectionChip from './NoteSelectionChip.vue'
 import RichTextInput from './RichTextInput.vue'
 import ModelSelect from './ModelSelect.vue'
+import AgentStepProgress from './AgentStepProgress.vue'
 import type { RichInputContent } from './RichTextInput.vue'
+import type { StepProgress } from './AgentStepProgress.vue'
 
 const emit = defineEmits<{
   close: []
@@ -27,6 +29,45 @@ const richInputRef = ref<InstanceType<typeof RichTextInput> | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const chatModels = ref<{ id: string; label: string }[]>([])
 const hasContent = ref(false)
+
+// ── Agent step progress ───────────────────────────────────────────────────────
+const agentSteps = ref<StepProgress[]>([])
+const agentPhase = ref<'idle' | 'classifying' | 'planning' | 'executing' | 'done'>('idle')
+const agentProgressCollapsed = ref(false)
+const msgStepsCollapsed = ref(new Map<number, boolean>())
+function toggleMsgSteps(i: number): void {
+  msgStepsCollapsed.value.set(i, !isMsgStepsCollapsed(i))
+}
+function isMsgStepsCollapsed(i: number): boolean {
+  return msgStepsCollapsed.value.get(i) ?? true
+}
+
+let unsubAgentProgress: (() => void) | null = null
+let unsubAgentPhase: (() => void) | null = null
+
+onMounted(() => {
+  unsubAgentPhase = window.api.on('agent:phase', (data: unknown) => {
+    const { phase } = data as { phase: typeof agentPhase.value; stepCount?: number }
+    agentPhase.value = phase
+    scrollToBottom()
+  })
+
+  unsubAgentProgress = window.api.on('agent:step-progress', (data: unknown) => {
+    const step = data as StepProgress
+    const idx = agentSteps.value.findIndex((s) => s.stepId === step.stepId)
+    if (idx >= 0) {
+      agentSteps.value[idx] = step
+    } else {
+      agentSteps.value.push(step)
+    }
+    scrollToBottom()
+  })
+})
+
+onUnmounted(() => {
+  unsubAgentPhase?.()
+  unsubAgentProgress?.()
+})
 
 const { applyToElement: applyChips } = useEntityChips()
 
@@ -120,6 +161,8 @@ async function send(): Promise<void> {
   messages.value.push(userMsg)
 
   isLoading.value = true
+  agentSteps.value = []
+  agentPhase.value = 'idle'
   try {
     const apiMessages = messages.value
       .filter((m) => !m.error)
@@ -134,7 +177,7 @@ async function send(): Promise<void> {
       overrideModelId: selectedModelId.value || undefined,
       mentionedEntityIds: mentionedEntityIds.length > 0 ? mentionedEntityIds : undefined,
       mentionedNoteIds: mentionedNoteIds.length > 0 ? mentionedNoteIds : undefined,
-    })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[]; warning?: string }
+    })) as { content: string; references: { id: string; title: string }[]; actions: ExecutedAction[]; entityRefs: { id: string; name: string }[]; warning?: string; generatedImages?: { path: string; prompt: string }[] }
 
     messages.value.push({
       role: 'assistant',
@@ -143,6 +186,8 @@ async function send(): Promise<void> {
       entityRefs: result.entityRefs,
       actions: result.actions,
       warning: result.warning,
+      generatedImages: result.generatedImages,
+      agentSteps: agentSteps.value.length > 0 ? [...agentSteps.value] : undefined,
     })
     if (result.actions?.some((a) => a.type === 'created_note')) emit('note-created')
   } catch (err) {
@@ -150,6 +195,8 @@ async function send(): Promise<void> {
     messages.value.push({ role: 'assistant', content: 'An error occurred. Please try again.', error: true })
   } finally {
     isLoading.value = false
+    agentSteps.value = []
+    agentPhase.value = 'idle'
     nextTick(() => richInputRef.value?.focus())
   }
 }
@@ -417,13 +464,33 @@ function renderMessage(
         </template>
 
         <!-- Assistant bubble: Markdown + inline note chips via v-html + event delegation -->
-        <div
-          v-else
-          class="chat-bubble chat-bubble-assistant"
-          :class="{ 'chat-bubble-error': msg.error }"
-          v-html="renderMessage(msg.content, msg.references ?? [], msg.entityRefs)"
-          @click="onBubbleClick($event, msg)"
-        />
+        <template v-else>
+          <!-- Persisted agent step progress (for completed agent runs) -->
+          <AgentStepProgress
+            v-if="msg.agentSteps?.length"
+            :steps="msg.agentSteps"
+            :collapsed="isMsgStepsCollapsed(i)"
+            @toggle="toggleMsgSteps(i)"
+          />
+          <div
+            class="chat-bubble chat-bubble-assistant"
+            :class="{ 'chat-bubble-error': msg.error }"
+            v-html="renderMessage(msg.content, msg.references ?? [], msg.entityRefs)"
+            @click="onBubbleClick($event, msg)"
+          />
+        </template>
+
+        <!-- Generated images (shown for assistant messages from agent runs) -->
+        <div v-if="msg.role === 'assistant' && msg.generatedImages?.length" class="chat-generated-images">
+          <div
+            v-for="(img, gi) in msg.generatedImages"
+            :key="gi"
+            class="chat-generated-image"
+            :title="img.prompt"
+          >
+            <img :src="'wizz-file://' + img.path" :alt="img.prompt" />
+          </div>
+        </div>
 
         <!-- Fallback warning (shown when a secondary model was used) -->
         <div v-if="msg.role === 'assistant' && msg.warning" class="chat-fallback-warning">
@@ -458,6 +525,23 @@ function renderMessage(
         <div class="chat-bubble chat-bubble-assistant chat-bubble-loading">
           <span class="dot" /><span class="dot" /><span class="dot" />
         </div>
+        <!-- Agent lifecycle phase (shown once the agent kicks in) -->
+        <div v-if="agentPhase !== 'idle' && agentPhase !== 'done'" class="agent-phase-label">
+          <svg v-if="agentPhase === 'classifying' || agentPhase === 'planning'" class="agent-phase-spinner" width="14" height="14" viewBox="0 0 16 16">
+            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.2"/>
+            <path d="M8 2 A6 6 0 0 1 14 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span v-if="agentPhase === 'classifying'">Analyzing prompt…</span>
+          <span v-else-if="agentPhase === 'planning'">Planning steps…</span>
+          <span v-else-if="agentPhase === 'executing'">Executing plan…</span>
+        </div>
+        <!-- Agent step progress (shown during multi-step agent runs) -->
+        <AgentStepProgress
+          v-if="agentSteps.length > 0"
+          :steps="agentSteps"
+          :collapsed="agentProgressCollapsed"
+          @toggle="agentProgressCollapsed = !agentProgressCollapsed"
+        />
       </div>
 
       <div ref="messagesEndRef" />

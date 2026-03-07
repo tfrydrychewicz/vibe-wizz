@@ -15,7 +15,7 @@
 
 import Database from 'better-sqlite3'
 import { getAdapter } from './registry'
-import { DEFAULT_CHAINS, type FeatureSlotId } from './featureSlots'
+import { DEFAULT_CHAINS, FEATURE_SLOTS, type FeatureSlotId } from './featureSlots'
 import type { ProviderAdapter } from './providers/types'
 
 // ── Resolved model ─────────────────────────────────────────────────────────
@@ -80,8 +80,14 @@ export function resolveChain(featureSlot: FeatureSlotId, db: Database.Database):
 
   if (fromDb.length > 0) return fromDb
 
-  // Fallback: resolve DEFAULT_CHAINS against whatever providers are configured in DB
-  return resolveDefaultChain(featureSlot, db)
+  // Fallback 1: resolve DEFAULT_CHAINS against whatever providers are configured in DB
+  const fromDefault = resolveDefaultChain(featureSlot, db)
+  if (fromDefault.length > 0) return fromDefault
+
+  // Fallback 2: auto-discover any enabled model with the matching capability.
+  // Covers the case where the user has enabled an image (or other) model that
+  // isn't in the hardcoded DEFAULT_CHAINS list and hasn't explicitly assigned it.
+  return discoverByCapability(featureSlot, db)
 }
 
 function resolveDefaultChain(featureSlot: FeatureSlotId, db: Database.Database): ResolvedModel[] {
@@ -108,6 +114,50 @@ function resolveDefaultChain(featureSlot: FeatureSlotId, db: Database.Database):
     }
   }
 
+  return results
+}
+
+/**
+ * Last-resort fallback: find any enabled model whose capabilities column
+ * contains the required capability for the given slot. This ensures that
+ * e.g. an enabled Gemini Imagen model is automatically picked up for the
+ * image_generation slot even when the user hasn't explicitly assigned it
+ * and the hardcoded DEFAULT_CHAINS entry (gpt-image-1) isn't available.
+ */
+function discoverByCapability(
+  featureSlot: FeatureSlotId,
+  db: Database.Database,
+): ResolvedModel[] {
+  const slot = FEATURE_SLOTS.find((s) => s.id === featureSlot)
+  if (!slot) return []
+
+  const rows = db
+    .prepare(
+      `SELECT m.id AS model_id, m.provider_id, p.api_key
+       FROM ai_models m
+       JOIN ai_providers p ON p.id = m.provider_id
+       WHERE m.enabled = 1
+         AND p.enabled = 1
+         AND p.api_key != ''
+         AND m.capabilities LIKE ?
+       ORDER BY m.id ASC`,
+    )
+    .all(`%${slot.capability}%`) as { model_id: string; provider_id: string; api_key: string }[]
+
+  const results: ResolvedModel[] = []
+  for (const row of rows) {
+    try {
+      const adapter = getAdapter(row.provider_id)
+      results.push({
+        modelId: row.model_id,
+        providerId: row.provider_id,
+        apiKey: row.api_key,
+        adapter,
+      })
+    } catch {
+      // Unknown provider — skip
+    }
+  }
   return results
 }
 

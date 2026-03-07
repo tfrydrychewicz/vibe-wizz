@@ -16,7 +16,7 @@ Wizz is a desktop app that connects your notes, people, projects, and calendar i
 
 **Actions** is a kanban board of action items extracted from your notes by Claude, with assignees, due dates, and status tracking.
 
-**Ask Wizz** is an AI chat sidebar where Claude can read your knowledge base *and* act on it — creating events, updating tasks, writing notes — via a tool-use loop.
+**Ask Wizz** is an AI chat sidebar where the AI can read your knowledge base *and* act on it — creating events, updating tasks, writing notes — via a tool-use loop. An **agentic orchestrator** automatically detects complex requests (e.g. "create a note about X with a picture of Y") and decomposes them into parallel steps: text generation, image generation, and tool execution — with live step-by-step progress in the UI.
 
 ---
 
@@ -66,7 +66,9 @@ After a session ends, Claude Haiku maps speaker IDs to calendar attendee names, 
 | UI | Vue 3 + TipTap (ProseMirror) |
 | DB | better-sqlite3 · WAL mode · FTS5 · sqlite-vec |
 | Embeddings | OpenAI text-embedding-3-small (1536d) |
-| AI | Claude Sonnet (chat, daily brief, post-processing) · Claude Haiku (NER, actions, summaries, query expansion, re-ranking) |
+| AI providers | Anthropic · OpenAI · Google Gemini |
+| Model router | Per-feature slot model chains with ordered fallback · capability-based auto-discovery |
+| Agentic AI | Planner → Executor pipeline · topological step ordering · parallel execution · image generation · `wizz-file://` protocol |
 | Swift | MicMonitor · Transcriber.app · AudioCapture.app |
 | Build | electron-vite · electron-builder |
 
@@ -80,8 +82,7 @@ All data is local. No cloud backend. Everything lives in a single SQLite file in
 
 - macOS (primary target)
 - Node.js 20+
-- Anthropic API key (required for AI features)
-- OpenAI API key (required for embeddings / semantic search)
+- At least one AI provider API key (Anthropic, OpenAI, or Google Gemini)
 
 ### Install & run
 
@@ -117,14 +118,18 @@ npm run typecheck
 ```
 src/
 ├── main/           # Electron main process
+│   ├── ai/         # Model router, provider adapters, feature slots, image storage
+│   │   ├── agent/  # Agentic orchestrator: planner, executor, types
+│   │   └── providers/ # Anthropic, OpenAI, Gemini adapters + shared types
 │   ├── db/         # SQLite schema, migrations, all IPC handlers
 │   ├── embedding/  # Chunker, embedder, NER, action extractor, chat, daily brief
 │   ├── calendar/   # Sync engine, providers, scheduler
+│   ├── entity/     # Entity review generator
 │   ├── mic/        # MicMonitor subprocess wrapper
 │   └── transcription/  # Session routing, post-processor, Swift wrappers
 ├── preload/        # Context bridge → typed window.api surface
 └── renderer/       # Vue 3 SPA
-    ├── components/ # NoteEditor, EntityDetail, CalendarView, ChatSidebar, …
+    ├── components/ # NoteEditor, EntityDetail, CalendarView, ChatSidebar, AgentStepProgress, …
     ├── stores/     # tabStore, chatStore, mentionStore, noteLinkStore, transcriptionStore
     └── composables/ # useInputMention, useInputNoteLink
 ```
@@ -133,18 +138,19 @@ Three-process boundary is strict: renderer has no Node access and communicates e
 
 ---
 
-## API keys
+## AI providers
 
-Set in **Settings → AI**:
+Configured in **Settings → AI Providers**. Each provider's API key unlocks its models. Assign models to feature slots in **Settings → AI Features**.
 
-| Key | Used for |
-|-----|----------|
-| `anthropic_api_key` | Chat, NER, action extraction, summaries, query expansion, re-ranking, daily brief |
-| `openai_api_key` | Embeddings (L1/L2/L3) and semantic search |
-| `deepgram_api_key` | Deepgram transcription backend |
-| `elevenlabs_api_key` | ElevenLabs transcription backend |
+| Provider | Models | Used for |
+|----------|--------|----------|
+| Anthropic | Claude Sonnet, Claude Haiku | Chat, NER, action extraction, summaries, query expansion, re-ranking, daily brief, agent planning |
+| OpenAI | GPT-4o, GPT Image, text-embedding-3-small | Chat, embeddings (L1/L2/L3), semantic search, image generation |
+| Google Gemini | Gemini Flash, Imagen | Chat, image generation |
 
-The app works without any keys — AI features degrade gracefully.
+Transcription keys (Deepgram, ElevenLabs) are configured separately in **Settings → Transcription**.
+
+The app works without any keys — AI features degrade gracefully. Each feature slot has an ordered fallback chain: if the primary model fails, the next one is tried automatically.
 
 ---
 

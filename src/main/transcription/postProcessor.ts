@@ -365,6 +365,16 @@ export function parseMarkdownToTipTap(markdown: string, ctx?: ParseContext): Tip
       continue
     }
 
+    // Image: ![alt](src) on its own line
+    const imgMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/)
+    if (imgMatch) {
+      const alt = imgMatch[1]
+      const src = imgMatch[2]
+      nodes.push({ type: 'image', attrs: { src, alt: alt || undefined } })
+      i++
+      continue
+    }
+
     // Paragraph — collect consecutive non-special lines
     const paraLines: string[] = []
     while (i < lines.length) {
@@ -375,6 +385,7 @@ export function parseMarkdownToTipTap(markdown: string, ctx?: ParseContext): Tip
         pl.startsWith('- ') || pl.startsWith('* ') ||
         pl.startsWith('> ') || pl.startsWith('```') ||
         pl.startsWith('|') ||
+        /^!\[/.test(pl) ||
         /^(-{3,}|\*{3,}|_{3,})$/.test(pl)
       ) break
       paraLines.push(pl)

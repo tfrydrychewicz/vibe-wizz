@@ -1365,30 +1365,37 @@ async function onAIPromptSubmit(payload: import('./AIPromptModal.vue').AIPromptS
       files: payload.files.length > 0 ? payload.files : undefined,
       noteSelections: payload.noteSelections.length > 0 ? payload.noteSelections : undefined,
       overrideModelId: payload.model || undefined,
-    })) as { content: object[] } | { error: string }
+    })) as { content: object[]; generatedImages?: { src: string; alt: string }[] } | { error: string }
 
     if ('error' in result) {
       aiModalError.value = result.error
       return
     }
-    if (!result.content.length) {
+    if (!result.content.length && !result.generatedImages?.length) {
       aiModalError.value = 'AI returned empty content. Try a different prompt.'
       return
     }
+
+    // Build combined content: generated images first, then text nodes
+    const imageNodes = (result.generatedImages ?? []).map((img) => ({
+      type: 'image',
+      attrs: { src: img.src, alt: img.alt },
+    }))
+    const combinedContent = [...imageNodes, ...result.content]
 
     if (aiModalMode.value === 'insert') {
       editor.value
         .chain()
         .focus()
         .deleteRange({ from: aiInsertPos, to: aiInsertEnd })
-        .insertContentAt(aiInsertPos, result.content)
+        .insertContentAt(aiInsertPos, combinedContent)
         .run()
     } else {
       editor.value
         .chain()
         .focus()
         .deleteRange({ from: aiReplaceFrom, to: aiReplaceTo })
-        .insertContentAt(aiReplaceFrom, result.content)
+        .insertContentAt(aiReplaceFrom, combinedContent)
         .run()
     }
 

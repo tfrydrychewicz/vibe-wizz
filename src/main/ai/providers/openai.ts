@@ -14,6 +14,8 @@ import type {
   EmbedResult,
   ContentBlock,
   ToolCall,
+  ImageGenParams,
+  ImageGenResult,
 } from './types'
 
 /** Fallback used by the registry when no models have been fetched yet. */
@@ -216,5 +218,31 @@ export const openaiAdapter: ProviderAdapter = {
     }
 
     return results
+  },
+
+  async generateImage(params: ImageGenParams, apiKey: string): Promise<ImageGenResult> {
+    const client = new OpenAI({ apiKey })
+
+    const isGptImage = params.model.startsWith('gpt-image')
+    const response = await client.images.generate({
+      model: params.model,
+      prompt: params.prompt,
+      n: 1,
+      ...(isGptImage
+        ? { output_format: 'png' }
+        : { response_format: 'b64_json' as const, size: params.size ?? '1024x1024' }),
+      ...(params.quality && !isGptImage ? { quality: params.quality } : {}),
+      ...(params.quality && isGptImage ? { quality: params.quality === 'hd' ? 'high' : 'medium' } : {}),
+    })
+
+    const item = response.data[0]
+    const b64 = item.b64_json ?? ''
+    if (!b64) throw new Error('OpenAI image generation returned no base64 data')
+
+    return {
+      base64: b64,
+      mimeType: 'image/png',
+      revisedPrompt: item.revised_prompt ?? undefined,
+    }
   },
 }

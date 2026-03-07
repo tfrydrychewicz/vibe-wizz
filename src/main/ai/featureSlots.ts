@@ -89,24 +89,31 @@ export const FEATURE_SLOTS = [
     description: 'Generates vector embeddings for notes and chunks.',
     capability: 'embedding',
   },
+  {
+    id: 'image_generation',
+    label: 'Image Generation',
+    description: 'Generates images from text prompts for notes and chat.',
+    capability: 'image',
+  },
 ] as const
 
 export type FeatureSlotId = typeof FEATURE_SLOTS[number]['id']
-export type ModelCapability = 'chat' | 'embedding'
+export type ModelCapability = 'chat' | 'embedding' | 'image'
 
 /** Default model chain for each slot — used when the user has not configured one. */
 export const DEFAULT_CHAINS: Record<FeatureSlotId, string[]> = {
-  chat:            ['claude-sonnet-4-6'],
-  daily_brief:     ['claude-sonnet-4-6'],
-  note_summary:    ['claude-haiku-4-5-20251001'],
-  ner:             ['claude-haiku-4-5-20251001'],
-  action_extract:  ['claude-haiku-4-5-20251001'],
-  inline_ai:       ['claude-haiku-4-5-20251001'],
-  meeting_summary: ['claude-haiku-4-5-20251001'],
-  cluster_summary: ['claude-haiku-4-5-20251001'],
-  query_expand:    ['claude-haiku-4-5-20251001'],
-  rerank:          ['claude-haiku-4-5-20251001'],
-  task_clarify:    ['claude-haiku-4-5-20251001'],
-  entity_review:   ['claude-haiku-4-5-20251001'],
-  embedding:       ['text-embedding-3-small'],
+  chat:             ['claude-sonnet-4-6'],
+  daily_brief:      ['claude-sonnet-4-6'],
+  note_summary:     ['claude-haiku-4-5-20251001'],
+  ner:              ['claude-haiku-4-5-20251001'],
+  action_extract:   ['claude-haiku-4-5-20251001'],
+  inline_ai:        ['claude-haiku-4-5-20251001'],
+  meeting_summary:  ['claude-haiku-4-5-20251001'],
+  cluster_summary:  ['claude-haiku-4-5-20251001'],
+  query_expand:     ['claude-haiku-4-5-20251001'],
+  rerank:           ['claude-haiku-4-5-20251001'],
+  task_clarify:     ['claude-haiku-4-5-20251001'],
+  entity_review:    ['claude-haiku-4-5-20251001'],
+  embedding:        ['text-embedding-3-small'],
+  image_generation: ['gpt-image-1'],
 }

@@ -87,7 +87,7 @@ const allEnabledModels = computed(() =>
         label: m.label,
         providerId: p.id,
         providerLabel: p.label,
-        capability: m.capabilities.includes('embedding') ? 'embedding' as const : 'chat' as const,
+        capability: m.capabilities.includes('embedding') ? 'embedding' as const : m.capabilities.includes('image') ? 'image' as const : 'chat' as const,
       })),
   ),
 )
@@ -678,7 +678,7 @@ function onBackdropKeydown(e: KeyboardEvent): void {
                   :featureSlot="chain.featureSlot"
                   :label="chain.label"
                   :description="chain.description"
-                  :capability="(chain.capability as 'chat' | 'embedding')"
+                  :capability="(chain.capability as 'chat' | 'embedding' | 'image')"
                   :modelIds="chain.models.map(m => m.modelId)"
                   :availableModels="allEnabledModels"
                   @change="onChainChange"

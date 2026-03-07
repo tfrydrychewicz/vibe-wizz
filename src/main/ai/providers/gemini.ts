@@ -16,6 +16,8 @@ import type {
   EmbedResult,
   ContentBlock,
   ToolCall,
+  ImageGenParams,
+  ImageGenResult,
 } from './types'
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
@@ -286,5 +288,59 @@ export const geminiAdapter: ProviderAdapter = {
     }
 
     return results
+  },
+
+  async generateImage(params: ImageGenParams, apiKey: string): Promise<ImageGenResult> {
+    const modelId = params.model.startsWith('models/') ? params.model : `models/${params.model}`
+    const isImagen = /^models\/imagen/i.test(modelId)
+
+    if (isImagen) {
+      // Imagen models use the :predict endpoint with instances/parameters format
+      interface ImagenResponse {
+        predictions?: Array<{ bytesBase64Encoded: string; mimeType?: string }>
+      }
+      const sizeToAspect: Record<string, string> = {
+        '1024x1024': '1:1',
+        '1536x1024': '3:2',
+        '1024x1536': '2:3',
+      }
+      const body = {
+        instances: [{ prompt: params.prompt }],
+        parameters: {
+          sampleCount: 1,
+          aspectRatio: sizeToAspect[params.size ?? '1024x1024'] ?? '1:1',
+        },
+      }
+      const data = await geminiPost<ImagenResponse>(`/${modelId}:predict`, apiKey, body)
+      const prediction = data.predictions?.[0]
+      if (!prediction?.bytesBase64Encoded) {
+        throw new Error('Imagen API returned no image data')
+      }
+      return {
+        base64: prediction.bytesBase64Encoded,
+        mimeType: (prediction.mimeType as ImageGenResult['mimeType']) ?? 'image/png',
+      }
+    }
+
+    // Gemini Flash image-generation models use :generateContent with responseModalities
+    interface FlashImageResponse {
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> }
+      }>
+    }
+    const body = {
+      contents: [{ role: 'user', parts: [{ text: params.prompt }] }],
+      generationConfig: { responseModalities: ['IMAGE'], maxOutputTokens: 4096 },
+    }
+    const data = await geminiPost<FlashImageResponse>(`/${modelId}:generateContent`, apiKey, body)
+    const parts = data.candidates?.[0]?.content?.parts ?? []
+    const imagePart = parts.find((p) => p.inlineData?.data)
+    if (!imagePart?.inlineData) {
+      throw new Error('Gemini image generation returned no image data')
+    }
+    return {
+      base64: imagePart.inlineData.data,
+      mimeType: (imagePart.inlineData.mimeType as ImageGenResult['mimeType']) ?? 'image/png',
+    }
   },
 }

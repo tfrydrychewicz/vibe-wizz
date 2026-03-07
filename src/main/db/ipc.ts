@@ -9,6 +9,9 @@ import { deriveTaskAttributes } from '../embedding/taskClarifier'
 import { generateEntityReview, type EntityTypeWithReview } from '../entity/reviewGenerator'
 import { pushToRenderer } from '../push'
 import { sendChatMessage, extractSearchKeywords, expandQueryConcepts, reRankResults, generateInlineContent, CalendarEventContext, ActionItemContext, ExecutedAction, EntityContext, EntityLinkedNote, RichEntityContext, ResolvedField, NoteSelectionAttachment } from '../embedding/chat'
+import { runAgent, needsAgentPlanning, planPrompt } from '../ai/agent'
+import { callWithFallback } from '../ai/modelRouter'
+import { saveGeneratedImage } from '../ai/imageStorage'
 import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { parseQuery } from '../entity-query/parser'
@@ -1417,7 +1420,7 @@ export function registerDbIpcHandlers(): void {
         noteSelections?: NoteSelectionAttachment[]
         overrideModelId?: string
       },
-    ): Promise<{ content: object[] } | { error: string }> => {
+    ): Promise<{ content: object[]; generatedImages?: { src: string; alt: string }[] } | { error: string }> => {
       const db = getDatabase()
 
       // FTS5 keyword search on the prompt for knowledge base context (top 5 notes).
@@ -1511,19 +1514,50 @@ export function registerDbIpcHandlers(): void {
       }
 
       try {
-        const markdown = await generateInlineContent(
-          prompt,
-          noteBodyPlain,
-          selectedText,
-          contextNotes,
-          richEntities.length > 0 ? richEntities : undefined,
-          images && images.length > 0 ? images as { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[] : undefined,
-          files && files.length > 0 ? files : undefined,
-          inlineNeedsWebSearch,
-          overrideModelId,
-          noteSelections ?? [],
-        )
-        if (!markdown) {
+        const agentNeeded = await needsAgentPlanning(prompt, db)
+
+        const richEntityArg = richEntities.length > 0 ? richEntities : undefined
+        const imageArg = images && images.length > 0 ? images as { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[] : undefined
+        const fileArg = files && files.length > 0 ? files : undefined
+        const nsArg = noteSelections ?? []
+
+        let markdown: string
+        let generatedImages: { src: string; alt: string }[] = []
+
+        if (agentNeeded) {
+          const [text, plan] = await Promise.all([
+            generateInlineContent(prompt, noteBodyPlain, selectedText, contextNotes, richEntityArg, imageArg, fileArg, inlineNeedsWebSearch, overrideModelId, nsArg),
+            planPrompt(prompt, db).catch(() => null),
+          ])
+          markdown = text
+
+          if (plan && !plan.singleStepPassthrough) {
+            const imageSteps = plan.steps.filter((s) => s.type === 'image_generation')
+            const imgResults = await Promise.all(
+              imageSteps.map(async (step) => {
+                try {
+                  const imgResult = await callWithFallback('image_generation', db, async (model) => {
+                    if (!model.adapter.generateImage) throw new Error('Model does not support image generation')
+                    return model.adapter.generateImage({ model: model.modelId, prompt: step.prompt }, model.apiKey)
+                  })
+                  await saveGeneratedImage(imgResult.base64, imgResult.mimeType)
+                  return {
+                    src: `data:${imgResult.mimeType};base64,${imgResult.base64}`,
+                    alt: imgResult.revisedPrompt ?? step.prompt,
+                  }
+                } catch (err) {
+                  console.warn('[AI Inline] Image generation step failed:', err)
+                  return null
+                }
+              }),
+            )
+            generatedImages = imgResults.filter((r): r is NonNullable<typeof r> => r !== null)
+          }
+        } else {
+          markdown = await generateInlineContent(prompt, noteBodyPlain, selectedText, contextNotes, richEntityArg, imageArg, fileArg, inlineNeedsWebSearch, overrideModelId, nsArg)
+        }
+
+        if (!markdown && generatedImages.length === 0) {
           return { error: 'AI returned empty content. Please try a different prompt.' }
         }
 
@@ -1532,10 +1566,10 @@ export function registerDbIpcHandlers(): void {
         // parser can emit interactive mention / noteLink TipTap nodes.
         const entityNames = new Set<string>()
         const noteTitles = new Set<string>()
-        for (const m of markdown.matchAll(/@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g)) {
+        for (const m of (markdown || '').matchAll(/@([A-Za-z\u00C0-\u04FF][^\s@,.:!?"()\[\]{}<>#\n]{0,59})/g)) {
           entityNames.add(m[1].replace(/[.,!?;:'")\]]+$/, '').trim())
         }
-        for (const m of markdown.matchAll(/\[\[([^\]]{1,200})\]\]/g)) {
+        for (const m of (markdown || '').matchAll(/\[\[([^\]]{1,200})\]\]/g)) {
           noteTitles.add(m[1].trim())
         }
 
@@ -1562,8 +1596,11 @@ export function registerDbIpcHandlers(): void {
           resolveNote:   (title) => noteMap.get(title)   ?? null,
         }
 
-        const nodes = parseMarkdownToTipTap(markdown, parseCtx)
-        return { content: nodes }
+        const nodes = parseMarkdownToTipTap(markdown || '', parseCtx)
+        return {
+          content: nodes,
+          ...(generatedImages.length > 0 ? { generatedImages } : {}),
+        }
       } catch (err) {
         console.error('[AI Inline] Generation failed:', err)
         return { error: 'AI generation failed. Please check your API key and try again.' }
@@ -2179,14 +2216,33 @@ export function registerDbIpcHandlers(): void {
       let executedActions: ExecutedAction[] = []
       let entityRefs: { id: string; name: string }[] = []
       let responseWarning: string | undefined
+      let generatedImages: { path: string; prompt: string }[] = []
       try {
-        const result = await sendChatMessage(messages, contextNotes, calendarEvents, actionItems, images, files, entityContext, pinnedNotes, richEntities, entityLinkedNotes, needsWebSearch, overrideModelId, noteSelections ?? [])
+        const result = await runAgent(
+          {
+            messages,
+            contextNotes,
+            calendarEvents,
+            actionItems,
+            images,
+            files,
+            entityContext,
+            pinnedNotes,
+            richEntities,
+            entityLinkedNotes,
+            useWebSearch: needsWebSearch,
+            overrideModelId,
+            noteSelections: noteSelections ?? [],
+          },
+          db,
+        )
         content = result.content
         executedActions = result.actions
         entityRefs = result.entityRefs
         responseWarning = result.fallbackWarning
+        generatedImages = result.generatedImages
       } catch (err) {
-        console.error('[Chat] Claude API error:', err)
+        console.error('[Chat] AI error:', err)
         const isNoModels =
           (err instanceof Error && err.message.includes('No AI models configured')) ||
           err instanceof AggregateError
@@ -2223,7 +2279,7 @@ export function registerDbIpcHandlers(): void {
       }
       entityRefs = Array.from(refsById.values())
 
-      return { content, references, actions: executedActions, entityRefs, warning: responseWarning }
+      return { content, references, actions: executedActions, entityRefs, warning: responseWarning, generatedImages: generatedImages.length > 0 ? generatedImages : undefined }
       } catch (err) {
         console.error('[Chat] Unhandled error in chat:send handler:', err)
         return {

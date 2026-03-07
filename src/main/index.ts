@@ -1,5 +1,5 @@
-import { app, BrowserWindow, shell, ipcMain } from 'electron'
-import { join } from 'path'
+import { app, BrowserWindow, shell, ipcMain, net, protocol } from 'electron'
+import { join, normalize } from 'path'
 import { initDatabase, closeDatabase, getDatabase } from './db/index'
 import { registerDbIpcHandlers } from './db/ipc'
 import { setMainWindow, pushToRenderer } from './push'
@@ -12,6 +12,10 @@ import { startCalendarSyncScheduler } from './calendar/sync/scheduler'
 import { scheduleEntityReviews } from './entity/reviewScheduler'
 
 const isDev = process.env['NODE_ENV'] === 'development'
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'wizz-file', privileges: { standard: false, secure: true, supportFetchAPI: true } },
+])
 
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
@@ -59,6 +63,17 @@ function createWindow(): void {
 ipcMain.handle('mic:status', () => ({ isActive: getMicStatus() }))
 
 app.whenReady().then(() => {
+  // Serve generated images from disk via wizz-file:// protocol.
+  // Scoped to the generated-images directory for security.
+  const generatedImagesDir = normalize(join(app.getPath('userData'), 'generated-images'))
+  protocol.handle('wizz-file', (request) => {
+    const filePath = normalize(decodeURIComponent(new URL(request.url).pathname))
+    if (!filePath.startsWith(generatedImagesDir)) {
+      return new Response('Forbidden', { status: 403 })
+    }
+    return net.fetch(`file://${filePath}`)
+  })
+
   initDatabase()
   processDirtyNotes().catch(console.error)
   registerDbIpcHandlers()
