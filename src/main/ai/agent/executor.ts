@@ -157,7 +157,9 @@ async function executeTextGeneration(
   return { type: 'text_generation', text }
 }
 
+const IMAGE_MAX_ATTEMPTS = 3
 const IMAGE_RETRY_DELAY_MS = 2000
+const IMAGE_CALL_TIMEOUT_MS = 30_000
 
 async function executeImageGeneration(
   step: AgentStep,
@@ -166,15 +168,26 @@ async function executeImageGeneration(
 ): Promise<StepResult> {
   let lastError: unknown
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < IMAGE_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      const retryInfo = `Retry ${attempt}/${IMAGE_MAX_ATTEMPTS - 1}`
+      console.warn(`[agent] Image generation ${retryInfo} in ${IMAGE_RETRY_DELAY_MS}ms`)
+      pushProgress({
+        stepId: step.id, type: step.type, status: 'running',
+        label: stepLabel(step), retryInfo,
+      })
+      await new Promise((r) => setTimeout(r, IMAGE_RETRY_DELAY_MS))
+    }
+
     try {
       const result = await callWithFallback('image_generation', db, async (model) => {
         if (!model.adapter.generateImage) {
           throw new Error(`Model ${model.modelId} does not support image generation`)
         }
-        return model.adapter.generateImage(
-          { model: model.modelId, prompt },
-          model.apiKey,
+        return withTimeout(
+          model.adapter.generateImage({ model: model.modelId, prompt }, model.apiKey),
+          IMAGE_CALL_TIMEOUT_MS,
+          `${model.modelId} image generation`,
         )
       })
 
@@ -186,11 +199,8 @@ async function executeImageGeneration(
       }
     } catch (err) {
       lastError = err
-      if (attempt === 0) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.warn(`[agent] Image generation attempt 1 failed, retrying in ${IMAGE_RETRY_DELAY_MS}ms: ${msg}`)
-        await new Promise((r) => setTimeout(r, IMAGE_RETRY_DELAY_MS))
-      }
+      const msg = err instanceof Error ? err.message : String(err)
+      console.warn(`[agent] Image generation attempt ${attempt + 1}/${IMAGE_MAX_ATTEMPTS} failed: ${msg}`)
     }
   }
 
@@ -279,11 +289,7 @@ export async function executeAgentPlan(
 
           case 'image_generation':
             try {
-              result = await withTimeout(
-                executeImageGeneration(step, prompt, db),
-                timeoutMs,
-                stepLabel(step),
-              )
+              result = await executeImageGeneration(step, prompt, db)
             } catch (imgErr) {
               const msg = imgErr instanceof Error ? imgErr.message : String(imgErr)
               console.warn(`[agent] Image generation failed (step ${step.id}): ${msg}`)
@@ -307,6 +313,9 @@ export async function executeAgentPlan(
                 filePath: '',
                 prompt,
               }
+              results.set(step.id, result)
+              pushProgress({ stepId: step.id, type: step.type, status: 'error', label: stepLabel(step) })
+              return
             }
             break
 

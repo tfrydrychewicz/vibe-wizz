@@ -1514,6 +1514,7 @@ export function registerDbIpcHandlers(): void {
       }
 
       try {
+        pushToRenderer('inline-agent:phase', { phase: 'classifying' })
         const agentNeeded = await needsAgentPlanning(prompt, db)
 
         const richEntityArg = richEntities.length > 0 ? richEntities : undefined
@@ -1525,6 +1526,7 @@ export function registerDbIpcHandlers(): void {
         let generatedImages: { src: string; alt: string }[] = []
 
         if (agentNeeded) {
+          pushToRenderer('inline-agent:phase', { phase: 'planning' })
           const [text, plan] = await Promise.all([
             generateInlineContent(prompt, noteBodyPlain, selectedText, contextNotes, richEntityArg, imageArg, fileArg, inlineNeedsWebSearch, overrideModelId, nsArg),
             planPrompt(prompt, db).catch(() => null),
@@ -1533,22 +1535,60 @@ export function registerDbIpcHandlers(): void {
 
           if (plan && !plan.singleStepPassthrough) {
             const imageSteps = plan.steps.filter((s) => s.type === 'image_generation')
+            if (imageSteps.length > 0) {
+              pushToRenderer('inline-agent:phase', { phase: 'executing', stepCount: imageSteps.length + 1 })
+              for (const step of imageSteps) {
+                pushToRenderer('inline-agent:step-progress', {
+                  stepId: step.id, type: step.type, status: 'pending', label: step.label || 'Generating image',
+                })
+              }
+              pushToRenderer('inline-agent:step-progress', {
+                stepId: 0, type: 'text_generation', status: 'complete', label: plan.steps.find((s) => s.type === 'text_generation')?.label || 'Generating text',
+              })
+            }
+
+            const INLINE_IMG_MAX_ATTEMPTS = 3
+            const INLINE_IMG_RETRY_DELAY = 2000
             const imgResults = await Promise.all(
               imageSteps.map(async (step) => {
-                try {
-                  const imgResult = await callWithFallback('image_generation', db, async (model) => {
-                    if (!model.adapter.generateImage) throw new Error('Model does not support image generation')
-                    return model.adapter.generateImage({ model: model.modelId, prompt: step.prompt }, model.apiKey)
-                  })
-                  await saveGeneratedImage(imgResult.base64, imgResult.mimeType)
-                  return {
-                    src: `data:${imgResult.mimeType};base64,${imgResult.base64}`,
-                    alt: imgResult.revisedPrompt ?? step.prompt,
+                const label = step.label || 'Generating image'
+                pushToRenderer('inline-agent:step-progress', {
+                  stepId: step.id, type: step.type, status: 'running', label,
+                })
+                let lastErr: unknown
+                for (let attempt = 0; attempt < INLINE_IMG_MAX_ATTEMPTS; attempt++) {
+                  if (attempt > 0) {
+                    const retryInfo = `Retry ${attempt}/${INLINE_IMG_MAX_ATTEMPTS - 1}`
+                    console.warn(`[AI Inline] Image generation ${retryInfo} in ${INLINE_IMG_RETRY_DELAY}ms`)
+                    pushToRenderer('inline-agent:step-progress', {
+                      stepId: step.id, type: step.type, status: 'running', label, retryInfo,
+                    })
+                    await new Promise((r) => setTimeout(r, INLINE_IMG_RETRY_DELAY))
                   }
-                } catch (err) {
-                  console.warn('[AI Inline] Image generation step failed:', err)
-                  return null
+                  try {
+                    const imgResult = await callWithFallback('image_generation', db, async (model) => {
+                      if (!model.adapter.generateImage) throw new Error('Model does not support image generation')
+                      return model.adapter.generateImage({ model: model.modelId, prompt: step.prompt }, model.apiKey)
+                    })
+                    await saveGeneratedImage(imgResult.base64, imgResult.mimeType)
+                    pushToRenderer('inline-agent:step-progress', {
+                      stepId: step.id, type: step.type, status: 'complete', label,
+                    })
+                    return {
+                      src: `data:${imgResult.mimeType};base64,${imgResult.base64}`,
+                      alt: imgResult.revisedPrompt ?? step.prompt,
+                    }
+                  } catch (err) {
+                    lastErr = err
+                    const msg = err instanceof Error ? err.message : String(err)
+                    console.warn(`[AI Inline] Image generation attempt ${attempt + 1}/${INLINE_IMG_MAX_ATTEMPTS} failed: ${msg}`)
+                  }
                 }
+                pushToRenderer('inline-agent:step-progress', {
+                  stepId: step.id, type: step.type, status: 'error', label,
+                })
+                console.warn('[AI Inline] Image generation failed after all retries:', lastErr)
+                return null
               }),
             )
             generatedImages = imgResults.filter((r): r is NonNullable<typeof r> => r !== null)
@@ -1556,6 +1596,7 @@ export function registerDbIpcHandlers(): void {
         } else {
           markdown = await generateInlineContent(prompt, noteBodyPlain, selectedText, contextNotes, richEntityArg, imageArg, fileArg, inlineNeedsWebSearch, overrideModelId, nsArg)
         }
+        pushToRenderer('inline-agent:phase', { phase: 'done' })
 
         if (!markdown && generatedImages.length === 0) {
           return { error: 'AI returned empty content. Please try a different prompt.' }

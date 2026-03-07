@@ -78,6 +78,8 @@ export interface StepProgress {
   type: StepType
   status: StepStatus
   label: string
+  /** Present during retries, e.g. "Retry 1/2" */
+  retryInfo?: string
 }
 
 // ── Agent context (mirrors sendChatMessage params) ────────────────────────────

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { Sparkles, Paperclip } from 'lucide-vue-next'
 import { useFileAttachment, SUPPORTED_ALL_ACCEPT, type AttachedFile } from '../composables/useFileAttachment'
 import type { NoteSelectionAttachment } from '../types/noteSelection'
 import AttachmentBar from './AttachmentBar.vue'
 import RichTextInput from './RichTextInput.vue'
 import ModelSelect from './ModelSelect.vue'
+import AgentStepProgress from './AgentStepProgress.vue'
+import type { StepProgress } from './AgentStepProgress.vue'
 import type { RichInputContent } from './RichTextInput.vue'
 
 export interface AIPromptSubmit {
@@ -48,8 +50,33 @@ const {
   onFileInputChange,
 } = useFileAttachment()
 
+// ── Agent step progress ──────────────────────────────────────────────────────
+const agentSteps = ref<StepProgress[]>([])
+const agentPhase = ref<'idle' | 'classifying' | 'planning' | 'executing' | 'done'>('idle')
+
+let unsubPhase: (() => void) | null = null
+let unsubProgress: (() => void) | null = null
+
 onMounted(async () => {
   nextTick(() => richInput.value?.focus())
+
+  unsubPhase = window.api.on('inline-agent:phase', (data: unknown) => {
+    const { phase } = data as { phase: typeof agentPhase.value }
+    agentPhase.value = phase
+    if (phase === 'classifying' || phase === 'planning') {
+      agentSteps.value = []
+    }
+  })
+  unsubProgress = window.api.on('inline-agent:step-progress', (data: unknown) => {
+    const step = data as StepProgress
+    const idx = agentSteps.value.findIndex((s) => s.stepId === step.stepId)
+    if (idx >= 0) {
+      agentSteps.value[idx] = step
+    } else {
+      agentSteps.value.push(step)
+    }
+  })
+
   try {
     interface ProviderRow { id: string; label: string; models: { id: string; label: string; capabilities: string[]; enabled: boolean }[] }
     const providers = await window.api.invoke('ai-providers:list') as ProviderRow[]
@@ -63,6 +90,11 @@ onMounted(async () => {
     }
     chatModels.value = models
   } catch { /* leave empty */ }
+})
+
+onUnmounted(() => {
+  unsubPhase?.()
+  unsubProgress?.()
 })
 
 function openFilePicker(): void {
@@ -176,6 +208,21 @@ function doSubmit(): void {
         multiple
         class="ai-modal-file-input"
         @change="onFileInputChange"
+      />
+
+      <!-- Agent step progress (visible during multi-step inline AI) -->
+      <div v-if="loading && (agentPhase === 'classifying' || agentPhase === 'planning')" class="ai-modal-phase">
+        <svg class="ai-modal-phase-spinner" width="12" height="12" viewBox="0 0 16 16">
+          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.2"/>
+          <path d="M8 2 A6 6 0 0 1 14 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span v-if="agentPhase === 'classifying'">Analyzing prompt…</span>
+        <span v-else>Planning steps…</span>
+      </div>
+      <AgentStepProgress
+        v-if="loading && agentSteps.length > 0"
+        :steps="agentSteps"
+        :collapsed="false"
       />
 
       <div v-if="dropError" class="ai-modal-error">{{ dropError }}</div>
@@ -328,6 +375,19 @@ function doSubmit(): void {
   background: rgba(239, 68, 68, 0.08);
   border-radius: 5px;
   padding: 6px 10px;
+}
+
+.ai-modal-phase {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.ai-modal-phase-spinner {
+  animation: ai-spin 0.7s linear infinite;
+  flex-shrink: 0;
 }
 
 .ai-modal-file-input {

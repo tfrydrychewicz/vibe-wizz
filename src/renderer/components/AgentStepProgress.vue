@@ -7,6 +7,7 @@ export interface StepProgress {
   type: StepType
   status: StepStatus
   label: string
+  retryInfo?: string
 }
 
 defineProps<{
@@ -88,6 +89,7 @@ function stepTypeIcon(type: StepType): string {
           <!-- Step type badge + label -->
           <span class="agent-step-type">{{ stepTypeIcon(step.type) }}</span>
           <span class="agent-step-label">{{ step.label }}</span>
+          <span v-if="step.retryInfo" class="agent-step-retry">{{ step.retryInfo }}</span>
         </div>
       </div>
     </Transition>
