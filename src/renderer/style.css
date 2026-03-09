@@ -872,6 +872,17 @@ body {
   text-align: center;
 }
 
+.transcript-summary-failed {
+  margin: 8px 10px 4px;
+  padding: 7px 10px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: #f87171;
+  line-height: 1.4;
+}
+
 /* ── Related notes side panel ── */
 .related-notes-panel {
   width: 280px;

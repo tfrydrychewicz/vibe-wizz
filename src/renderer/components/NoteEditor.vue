@@ -253,6 +253,8 @@ const transcriptionError = ref<string | null>(null)
 const isRetryingTranscription = ref(false)
 // True while the "Regenerate Note" reprocess call is in-flight
 const isReprocessingTranscripts = ref(false)
+// Set when AI meeting summary generation fails (transcript appended as raw fallback)
+const summaryGenerationFailed = ref(false)
 
 // True while this note's audio is being post-processed (between stop and complete)
 const isProcessingThisNote = computed(
@@ -370,6 +372,7 @@ async function deleteTranscription(id: string): Promise<void> {
 async function reprocessTranscripts(): Promise<void> {
   if (isReprocessingTranscripts.value || isProcessingThisNote.value) return
   isReprocessingTranscripts.value = true
+  summaryGenerationFailed.value = false
   processingTranscriptionNoteId.value = props.noteId
   try {
     await window.api.invoke('transcriptions:reprocess', { noteId: props.noteId })
@@ -396,6 +399,7 @@ async function startTranscription(): Promise<void> {
     return
   }
   transcriptionError.value = null
+  summaryGenerationFailed.value = false
 
   const result = (await window.api.invoke('transcription:start', {
     noteId: props.noteId,
@@ -506,6 +510,13 @@ const unsubTranscriptComplete = window.api.on('transcription:complete', (...args
     expandedTranscriptIds.value = []
     showTranscriptPanel.value = true
     void loadNote(props.noteId)  // also calls loadTranscriptions() at the end
+  }
+})
+
+const unsubSummaryFailed = window.api.on('transcription:summary-failed', (...args: unknown[]) => {
+  const { noteId } = args[0] as { noteId: string }
+  if (noteId === props.noteId) {
+    summaryGenerationFailed.value = true
   }
 })
 
@@ -1732,6 +1743,7 @@ onBeforeUnmount(() => {
   unsubTranscriptComplete()
   unsubTranscriptError()
   unsubTranscriptRetrying()
+  unsubSummaryFailed()
   // If transcription is active we intentionally do NOT stop it here.
   // Audio objects live in activeAudio (module scope) and keep streaming to the
   // main-process WebSocket while the user is on another note or view.
@@ -2051,6 +2063,9 @@ onBeforeUnmount(() => {
           <button class="transcript-sp-close" title="Close" @click="showTranscriptPanel = false">
             <X :size="12" />
           </button>
+        </div>
+        <div v-if="summaryGenerationFailed" class="transcript-summary-failed">
+          AI summary failed — raw transcript saved. Check your AI provider settings or try Regenerate.
         </div>
         <div v-if="storedTranscriptions.length === 0" class="transcript-sp-empty">
           No transcripts yet

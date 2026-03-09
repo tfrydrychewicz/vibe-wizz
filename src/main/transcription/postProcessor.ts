@@ -19,7 +19,7 @@ import { getCurrentDateString } from '../utils/date'
 import { callWithFallback } from '../ai/modelRouter'
 import { getPersonalizationPreamble } from '../ai/personalization'
 
-const MAX_TRANSCRIPT_CHARS = 8000
+const MAX_TRANSCRIPT_CHARS = 30000
 const MAX_NOTE_CHARS = 4000
 
 // ── TipTap JSON helpers ────────────────────────────────────────────────────────
@@ -518,7 +518,7 @@ Write only the note content, no preamble.`
       const result = await model.adapter.chat(
         {
           model: model.modelId,
-          maxTokens: 1024,
+          maxTokens: 2048,
           messages: [{ role: 'user', content: prompt }],
         },
         model.apiKey,
@@ -526,7 +526,15 @@ Write only the note content, no preamble.`
       return result.text.trim()
     })
   } catch (err) {
-    console.error('[Transcription] Merge generation failed:', err)
+    if (err instanceof AggregateError) {
+      console.error(
+        '[Transcription] Merge generation failed — all models in meeting_summary chain errored:',
+        err.message,
+        err.errors,
+      )
+    } else {
+      console.error('[Transcription] Merge generation failed:', err)
+    }
     return ''
   }
 }
@@ -643,6 +651,10 @@ export async function reprocessAllTranscripts(noteId: string): Promise<void> {
   pushToRenderer('transcription:processing-step', { noteId, step: 'Regenerating meeting notes…' })
   const mergedContent = await generateMergedNote(combinedTranscript, noteBodyPlain)
 
+  if (!mergedContent) {
+    pushToRenderer('transcription:summary-failed', { noteId })
+  }
+
   if (mergedContent) {
     db.prepare('UPDATE note_transcriptions SET summary = ? WHERE note_id = ?').run(
       mergedContent,
@@ -705,6 +717,10 @@ export async function processTranscript(
   // Generate merged note (transcript + user's existing notes, graceful on failure)
   pushToRenderer('transcription:processing-step', { noteId, step: 'Generating meeting notes…' })
   const mergedContent = await generateMergedNote(labeledTranscript, noteBodyPlain)
+
+  if (!mergedContent) {
+    pushToRenderer('transcription:summary-failed', { noteId })
+  }
 
   // Store merged content as the session summary for the history panel
   if (startedAt && mergedContent) {
