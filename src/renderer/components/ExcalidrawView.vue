@@ -681,7 +681,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px;
+  padding: 8px 14px 8px 86px; /* 86px left = clear macOS traffic-light buttons */
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
   height: 44px;
