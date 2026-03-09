@@ -828,6 +828,42 @@ body {
   color: var(--color-text);
 }
 
+.transcript-sp-reprocess {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  margin-right: 6px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.transcript-sp-reprocess:hover:not(:disabled) {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.transcript-sp-reprocess:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes transcript-sp-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.transcript-sp-reprocess-spin {
+  animation: transcript-sp-spin 1s linear infinite;
+}
+
 .transcript-sp-empty {
   padding: 20px 14px;
   font-size: 12px;

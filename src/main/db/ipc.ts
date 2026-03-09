@@ -13,7 +13,7 @@ import { runAgent, needsAgentPlanning, planPrompt } from '../ai/agent'
 import { getPersonalizationPreamble } from '../ai/personalization'
 import { callWithFallback } from '../ai/modelRouter'
 import { saveGeneratedImage } from '../ai/imageStorage'
-import { parseMarkdownToTipTap, ParseContext } from '../transcription/postProcessor'
+import { parseMarkdownToTipTap, ParseContext, reprocessAllTranscripts } from '../transcription/postProcessor'
 import { ENTITY_TOKEN_RE } from '../utils/tokenFormat'
 import { parseQuery } from '../entity-query/parser'
 import { evalQuery } from '../entity-query/evaluator'
@@ -2575,6 +2575,12 @@ export function registerDbIpcHandlers(): void {
   ipcMain.handle('transcriptions:delete', (_event, { id }: { id: string }) => {
     const db = getDatabase()
     db.prepare('DELETE FROM note_transcriptions WHERE id = ?').run(id)
+    return { ok: true }
+  })
+
+  /** transcriptions:reprocess — re-run AI note generation from all stored transcripts. */
+  ipcMain.handle('transcriptions:reprocess', async (_event, { noteId }: { noteId: string }) => {
+    await reprocessAllTranscripts(noteId)
     return { ok: true }
   })
 

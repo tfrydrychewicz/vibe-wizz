@@ -85,7 +85,7 @@ import {
   Check, ExternalLink, Trash2,
   Palette,
   Mic, MicOff, ChevronDown as ChevronDownIcon,
-  ScrollText, X, Sparkles, Table2,
+  ScrollText, X, Sparkles, Table2, RefreshCw,
 } from 'lucide-vue-next'
 import { useEntityChips } from '../composables/useEntityChips'
 import { renderEntityChip, escapeHtml } from '../utils/markdown'
@@ -251,6 +251,8 @@ const transcriptPartial = ref('')   // current non-final partial (shown while st
 const transcriptionError = ref<string | null>(null)
 // Set when a realtime session failed and is being retried via batch
 const isRetryingTranscription = ref(false)
+// True while the "Regenerate Note" reprocess call is in-flight
+const isReprocessingTranscripts = ref(false)
 
 // True while this note's audio is being post-processed (between stop and complete)
 const isProcessingThisNote = computed(
@@ -363,6 +365,17 @@ async function deleteTranscription(id: string): Promise<void> {
   await window.api.invoke('transcriptions:delete', { id })
   storedTranscriptions.value = storedTranscriptions.value.filter((t) => t.id !== id)
   expandedTranscriptIds.value = expandedTranscriptIds.value.filter((x) => x !== id)
+}
+
+async function reprocessTranscripts(): Promise<void> {
+  if (isReprocessingTranscripts.value || isProcessingThisNote.value) return
+  isReprocessingTranscripts.value = true
+  processingTranscriptionNoteId.value = props.noteId
+  try {
+    await window.api.invoke('transcriptions:reprocess', { noteId: props.noteId })
+  } finally {
+    isReprocessingTranscripts.value = false
+  }
 }
 
 function formatTranscriptTime(startedAt: string, endedAt: string | null): string {
@@ -2025,6 +2038,16 @@ onBeforeUnmount(() => {
       <div v-if="showTranscriptPanel && linkedCalendarEvent" class="transcript-side-panel">
         <div class="transcript-sp-header">
           <span class="transcript-sp-title">Transcripts</span>
+          <button
+            v-if="storedTranscriptions.length > 0"
+            class="transcript-sp-reprocess"
+            :disabled="isReprocessingTranscripts || isProcessingThisNote"
+            title="Regenerate note from all transcripts"
+            @click="reprocessTranscripts"
+          >
+            <RefreshCw :size="11" :class="{ 'transcript-sp-reprocess-spin': isReprocessingTranscripts || isProcessingThisNote }" />
+            Regenerate
+          </button>
           <button class="transcript-sp-close" title="Close" @click="showTranscriptPanel = false">
             <X :size="12" />
           </button>

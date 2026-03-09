@@ -595,6 +595,67 @@ function updateNoteWithTranscript(noteId: string, mergedContent: string, rawTran
   }
 }
 
+// ── Re-process entry point ─────────────────────────────────────────────────────
+
+/**
+ * Re-run the AI note generation using all stored transcription sessions for a note.
+ * Useful when the user wants to regenerate the meeting summary — e.g. after editing
+ * the note manually or after the model/configuration changes.
+ *
+ * Combines all raw transcripts (oldest first, labelled by session time when multiple),
+ * merges with the current note body, replaces the note content, and pushes
+ * `transcription:complete` to the renderer so the editor reloads.
+ */
+export async function reprocessAllTranscripts(noteId: string): Promise<void> {
+  const db = getDatabase()
+
+  const sessions = db
+    .prepare(
+      `SELECT raw_transcript, started_at FROM note_transcriptions
+       WHERE note_id = ? AND raw_transcript IS NOT NULL AND raw_transcript != ''
+       ORDER BY started_at ASC`,
+    )
+    .all(noteId) as { raw_transcript: string; started_at: string }[]
+
+  if (sessions.length === 0) {
+    pushToRenderer('transcription:complete', { noteId })
+    return
+  }
+
+  const combinedTranscript =
+    sessions.length === 1
+      ? sessions[0].raw_transcript
+      : sessions
+          .map((s, i) => {
+            const time = new Date(s.started_at).toLocaleTimeString(undefined, {
+              hour: 'numeric',
+              minute: '2-digit',
+            })
+            return `[Session ${i + 1} · ${time}]\n${s.raw_transcript}`
+          })
+          .join('\n\n')
+
+  const currentNote = db
+    .prepare('SELECT body_plain FROM notes WHERE id = ?')
+    .get(noteId) as { body_plain: string } | undefined
+  const noteBodyPlain = currentNote?.body_plain ?? ''
+
+  pushToRenderer('transcription:processing-step', { noteId, step: 'Regenerating meeting notes…' })
+  const mergedContent = await generateMergedNote(combinedTranscript, noteBodyPlain)
+
+  if (mergedContent) {
+    db.prepare('UPDATE note_transcriptions SET summary = ? WHERE note_id = ?').run(
+      mergedContent,
+      noteId,
+    )
+  }
+
+  pushToRenderer('transcription:processing-step', { noteId, step: 'Saving note…' })
+  updateNoteWithTranscript(noteId, mergedContent, combinedTranscript)
+  scheduleEmbedding(noteId)
+  pushToRenderer('transcription:complete', { noteId })
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────────
 
 export async function processTranscript(
