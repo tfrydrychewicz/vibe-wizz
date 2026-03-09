@@ -618,6 +618,7 @@ function executeTool(
            WHERE ai.id = ?`,
         )
         .get(id) as { id: string; title: string; status: string; due_date: string | null; assigned_entity_name: string | null; project_name: string | null }
+      pushToRenderer('action:created', { actionId: id, sourceNoteId: inp.source_note_id ?? null })
       return { type: 'created_action', payload: row }
     }
 
@@ -660,26 +661,36 @@ function executeTool(
       }
       const row = db
         .prepare(
-          `SELECT ai.id, ai.title, ai.status, ai.due_date,
+          `SELECT ai.id, ai.title, ai.status, ai.due_date, ai.source_note_id,
                   e.name AS assigned_entity_name, pe.name AS project_name
            FROM action_items ai
            LEFT JOIN entities e ON e.id = ai.assigned_entity_id
            LEFT JOIN entities pe ON pe.id = ai.project_entity_id
            WHERE ai.id = ?`,
         )
-        .get(id) as { id: string; title: string; status: string; due_date: string | null; assigned_entity_name: string | null; project_name: string | null } | undefined
+        .get(id) as { id: string; title: string; status: string; due_date: string | null; source_note_id: string | null; assigned_entity_name: string | null; project_name: string | null } | undefined
       if (!row) throw new Error(`Action item with id ${id} not found`)
-      return { type: 'updated_action', payload: row }
+      pushToRenderer('action:updated', { actionId: id, status: row.status, sourceNoteId: row.source_note_id })
+      if (updates.status !== undefined) {
+        pushToRenderer('action:status-changed', { actionId: id, status: row.status, sourceNoteId: row.source_note_id })
+      }
+      const { source_note_id: _snid, ...rowPayload } = row
+      return { type: 'updated_action', payload: rowPayload }
     }
 
     case 'delete_action_item': {
       const { id } = input as { id: string }
       const row = db
-        .prepare('SELECT id, title FROM action_items WHERE id = ?')
-        .get(id) as { id: string; title: string } | undefined
+        .prepare('SELECT id, title, source_note_id FROM action_items WHERE id = ?')
+        .get(id) as { id: string; title: string; source_note_id: string | null } | undefined
       if (!row) throw new Error(`Action item with id ${id} not found`)
       db.prepare('DELETE FROM action_items WHERE id = ?').run(id)
-      return { type: 'deleted_action', payload: row }
+      if (row.source_note_id) {
+        pushToRenderer('action:unlinked', { actionId: id, noteId: row.source_note_id })
+      }
+      pushToRenderer('action:deleted', { actionId: id })
+      const { source_note_id: _snid, ...rowPayload } = row
+      return { type: 'deleted_action', payload: rowPayload }
     }
 
     case 'ensure_action_item_for_task': {
@@ -692,6 +703,7 @@ function executeTool(
         )
         .get(source_note_id, task_text) as { id: string; title: string } | undefined
       if (existing) {
+        pushToRenderer('action:updated', { actionId: existing.id, status: null, sourceNoteId: source_note_id })
         return {
           type: 'ensured_action_found',
           payload: { id: existing.id, action_item_id: existing.id, title: existing.title, created: false },
@@ -705,6 +717,7 @@ function executeTool(
            (id, title, source_note_id, extraction_type, confidence, created_at, updated_at)
          VALUES (?, ?, ?, 'manual', 1.0, ?, ?)`,
       ).run(newId, task_text, source_note_id, now, now)
+      pushToRenderer('action:created', { actionId: newId, sourceNoteId: source_note_id })
       return {
         type: 'ensured_action_created',
         payload: { id: newId, action_item_id: newId, title: task_text, created: true },
@@ -788,6 +801,7 @@ function executeTool(
           `UPDATE entities SET name = ?, fields = ?, updated_at = ? WHERE id = ?`,
         ).run(updatedName, JSON.stringify(existingFields), now, id)
 
+        pushToRenderer('entity:updated', { id, name: updatedName })
         return { type: 'updated_entity', payload: { id, name: updatedName, type_name: typeName } }
       }
 

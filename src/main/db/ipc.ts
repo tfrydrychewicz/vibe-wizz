@@ -889,6 +889,7 @@ export function registerDbIpcHandlers(): void {
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ?`
       ).run(name, JSON.stringify(fields), id)
+      pushToRenderer('entity:updated', { id, name })
       return { ok: true }
     }
   )

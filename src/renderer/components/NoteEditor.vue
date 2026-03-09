@@ -1494,13 +1494,60 @@ registerPromoteHandler(async (taskText: string, pos: number, badgeRect: DOMRect)
   }
 })
 
-// Sync task item checked state when an action item's status changes from the dashboard.
+// Sync task item checked state when an action item's status changes from the dashboard or AI chat.
 const unsubscribeActionStatus = window.api.on('action:status-changed', (...args: unknown[]) => {
   const { actionId, status } = args[0] as { actionId: string; status: string }
   syncTaskItemChecked(actionId, status === 'done')
   // Update cache so the chip reflects the new status immediately
   const cached = taskDataCache.get(actionId)
   if (cached) taskDataCache.set(actionId, { ...cached, status: status as typeof cached.status })
+})
+
+// Re-sync task items and metadata cache when an action item is updated or created by the AI chat.
+// Uses syncTaskItemsWithDB() which only issues surgical ProseMirror transactions — no setContent()
+// call, so the editor scroll position and selection are fully preserved.
+const unsubscribeActionUpdated = window.api.on('action:updated', (...args: unknown[]) => {
+  const { actionId, sourceNoteId } = args[0] as { actionId: string; status: string | null; sourceNoteId: string | null }
+  // Re-sync if the changed action is linked to this note, or if this note has a taskItem node for it
+  if (sourceNoteId === props.noteId) {
+    void syncTaskItemsWithDB()
+    return
+  }
+  if (editor.value) {
+    let hasNode = false
+    editor.value.state.doc.descendants((node) => {
+      if (node.type.name === 'taskItem' && node.attrs.actionId === actionId) { hasNode = true; return false }
+      return !hasNode
+    })
+    if (hasNode) void syncTaskItemsWithDB()
+  }
+})
+
+const unsubscribeActionCreated = window.api.on('action:created', (...args: unknown[]) => {
+  const { sourceNoteId } = args[0] as { actionId: string; sourceNoteId: string | null }
+  // Refresh the task data cache so newly linked action items appear correctly if the note has them
+  if (sourceNoteId === props.noteId) void syncTaskItemsWithDB()
+})
+
+// Update @mention chip labels when an entity is renamed (from AI chat or EntityDetail form).
+// Uses setNodeMarkup — surgical transaction, no setContent() — scroll position is preserved.
+const unsubscribeEntityUpdated = window.api.on('entity:updated', (...args: unknown[]) => {
+  const { id: entityId, name } = args[0] as { id: string; name: string }
+  if (!editor.value) return
+  const { state, view } = editor.value
+  const tr = state.tr
+  let changed = false
+  state.doc.descendants((node, pos) => {
+    if (node.type.name === 'mention' && node.attrs.id === entityId && node.attrs.label !== name) {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, label: name })
+      changed = true
+    }
+    return true
+  })
+  if (changed) {
+    view.dispatch(tr)
+    scheduleSave()
+  }
 })
 
 // Clear the actionId attribute on the linked task item when the action is deleted from the dashboard.
@@ -1664,6 +1711,9 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDatePickerOutside)
   unsubscribeNer()
   unsubscribeActionStatus()
+  unsubscribeActionUpdated()
+  unsubscribeActionCreated()
+  unsubscribeEntityUpdated()
   unsubscribeActionUnlinked()
   unsubTranscriptPartial()
   unsubTranscriptComplete()
