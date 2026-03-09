@@ -73,6 +73,10 @@ onMounted(async () => {
     } else {
       agentSteps.value.push(step)
     }
+    // A completed step means any web search inside it is done — hide the indicator
+    if ((step.status === 'complete' || step.status === 'error') && webSearchQuery.value) {
+      webSearchQuery.value = ''
+    }
     scrollToBottom()
   })
 
