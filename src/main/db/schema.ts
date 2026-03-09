@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS entity_mentions (
   confidence          REAL NOT NULL DEFAULT 1.0,
   char_offset_start   INTEGER,
   char_offset_end     INTEGER,
+  matched_texts       TEXT,
   created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

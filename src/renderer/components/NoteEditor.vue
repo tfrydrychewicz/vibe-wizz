@@ -575,6 +575,7 @@ type AutoDetectionRow = {
   type_color: string | null
   confidence: number
   aliases: string[]
+  matched_texts: string[]
 }
 
 let savedFrom = 0
@@ -1073,6 +1074,7 @@ async function fetchAndSetAutoDetections(noteId: string): Promise<void> {
     typeColor: r.type_color,
     confidence: r.confidence,
     aliases: r.aliases.length > 0 ? r.aliases : undefined,
+    matchedTexts: r.matched_texts.length > 0 ? r.matched_texts : undefined,
   }))
   editor.value.commands.setAutoDetections(detections)
 }

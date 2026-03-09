@@ -570,6 +570,7 @@ export function registerDbIpcHandlers(): void {
            et.icon       AS type_icon,
            et.color      AS type_color,
            em.confidence,
+           em.matched_texts,
            e.fields      AS entity_fields,
            et.schema     AS entity_schema
          FROM entity_mentions em
@@ -582,19 +583,27 @@ export function registerDbIpcHandlers(): void {
       .all(id) as {
         entity_id: string; entity_name: string; type_id: string
         type_name: string; type_icon: string; type_color: string | null
-        confidence: number; entity_fields: string | null; entity_schema: string
+        confidence: number; matched_texts: string | null; entity_fields: string | null; entity_schema: string
       }[]
 
-    return rows.map((r) => ({
-      entity_id: r.entity_id,
-      entity_name: r.entity_name,
-      type_id: r.type_id,
-      type_name: r.type_name,
-      type_icon: r.type_icon,
-      type_color: r.type_color,
-      confidence: r.confidence,
-      aliases: getEntityNerAliases(r.entity_fields, r.entity_schema),
-    }))
+    return rows.map((r) => {
+      let matchedTexts: string[] = []
+      try {
+        const parsed: unknown = JSON.parse(r.matched_texts ?? '[]')
+        if (Array.isArray(parsed)) matchedTexts = parsed.filter((t): t is string => typeof t === 'string')
+      } catch { /* leave empty */ }
+      return {
+        entity_id: r.entity_id,
+        entity_name: r.entity_name,
+        type_id: r.type_id,
+        type_name: r.type_name,
+        type_icon: r.type_icon,
+        type_color: r.type_color,
+        confidence: r.confidence,
+        matched_texts: matchedTexts,
+        aliases: getEntityNerAliases(r.entity_fields, r.entity_schema),
+      }
+    })
   })
 
   // ─── Entity Types ───────────────────────────────────────────────────────────
@@ -798,11 +807,13 @@ export function registerDbIpcHandlers(): void {
    */
   ipcMain.handle('entities:search', (_event, { query, type_id }: { query: string; type_id?: string }) => {
     const db = getDatabase()
-    const params: unknown[] = [`%${query}%`]
+    const likeParam = `%${query}%`
+    const params: unknown[] = [likeParam, likeParam]
+    // Also search e.fields so alias values (emails, nicknames, ner_search fields) are matched.
     let sql = `SELECT e.id, e.name, e.type_id, et.name AS type_name, et.icon AS type_icon, et.color AS type_color
                FROM entities e
                JOIN entity_types et ON e.type_id = et.id
-               WHERE e.name LIKE ? COLLATE NOCASE
+               WHERE (e.name LIKE ? OR e.fields LIKE ?) COLLATE NOCASE
                  AND e.trashed_at IS NULL`
     if (type_id) {
       sql += ` AND e.type_id = ?`

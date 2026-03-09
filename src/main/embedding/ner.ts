@@ -15,12 +15,16 @@ const MAX_BODY_CHARS = 4000
 // Cap to avoid exceeding context limit with very large entity lists
 const MAX_ENTITIES = 150
 
-// Minimum confidence to keep a detection (filters out speculative guesses)
-const MIN_CONFIDENCE = 0.6
+// Minimum confidence to keep a detection.
+// Lowered to 0.5 to admit fuzzy matches (inflected forms, partial names, minor typos)
+// while still filtering out speculative guesses.
+const MIN_CONFIDENCE = 0.5
 
 export interface NerDetection {
   entityId: string
   confidence: number
+  /** Exact text fragments found in the note that triggered this match (declined forms, partial names, typos…). */
+  matchedTexts: string[]
 }
 
 /**
@@ -62,13 +66,32 @@ export async function detectEntityMentions(
             role: 'user',
             content:
               `Today is ${getCurrentDateString()}.\n\n` +
-              'Analyze the following note and identify which known entities are mentioned or clearly ' +
-              `referenced in it (by name, ${hasAliases ? 'alias (also_known_as field), ' : ''}pronoun, or unambiguous implication).\n\n` +
+              'Analyze the following note and identify which known entities are mentioned or referenced in it. ' +
+              'The note may be written in any language.\n\n' +
+              'Match each entity across ALL of these forms:\n' +
+              `- Exact canonical name${hasAliases ? ' or alias (also_known_as field)' : ''}\n` +
+              '- Grammatically declined or inflected forms — e.g. Polish "Jana" / "Janem" / "Janowi" for "Jan", ' +
+              '"Kowalskiego" for "Kowalski"; German genitive "des Herrn Smith"; Russian/Czech/Slovak/Ukrainian ' +
+              'case forms; any morphological variant of the name in any language\n' +
+              '- Partial name references — first name only, last name only, or any unambiguous subset ' +
+              '(e.g. just "Smith" when "John Smith" is the only Smith in the list)\n' +
+              '- Names missing one component — e.g. "John" matching "John Smith" when context is clear\n' +
+              '- Minor typos or phonetic spelling variants — e.g. "Jhon" for "John", "Kowalsky" for "Kowalski"\n' +
+              '- Pronouns or contextual implications that unambiguously refer to a specific entity\n\n' +
               `Known entities (JSON, one per line):\n${entityList}\n\n` +
               `Note title: ${noteTitle}\n\nNote content:\n${truncated}\n\n` +
               'Respond with ONLY a JSON array. Each element must have:\n' +
               '- "entity_id": the exact id string from the known entities list\n' +
-              '- "confidence": float 0.0–1.0 (1.0 = exact name match; lower for indirect references)\n\n' +
+              '- "confidence": float 0.0–1.0 using this scale:\n' +
+              '  1.0  = exact canonical name or alias match\n' +
+              '  0.85 = declined/inflected form or well-known abbreviation\n' +
+              '  0.75 = partial name (first or last name only) or minor typo/variant\n' +
+              '  0.6  = indirect reference or pronoun where the referent is clear\n' +
+              '  0.5  = plausible but ambiguous reference\n' +
+              '- "matched_texts": string array — the EXACT substrings from the note content that ' +
+              'matched this entity (copy them verbatim, preserving capitalisation and any diacritics). ' +
+              'Include every distinct surface form found (e.g. ["Jana", "Janowi"] for entity "Jan Kowalski"). ' +
+              'Use [] when the match is purely via pronoun or implication with no named fragment.\n\n' +
               'Do not include entities not in the known entities list. If none are mentioned, respond with [].',
           },
         ],
@@ -88,7 +111,7 @@ export async function detectEntityMentions(
 
     const validIds = new Set(entitySubset.map((e) => e.id))
     return (parsed as unknown[])
-      .filter((item): item is { entity_id: string; confidence: number } => {
+      .filter((item): item is { entity_id: string; confidence: number; matched_texts?: unknown } => {
         if (!item || typeof item !== 'object') return false
         const r = item as Record<string, unknown>
         return (
@@ -97,10 +120,17 @@ export async function detectEntityMentions(
           typeof r['confidence'] === 'number'
         )
       })
-      .map((item) => ({
-        entityId: item.entity_id,
-        confidence: Math.max(0, Math.min(1, item.confidence)),
-      }))
+      .map((item) => {
+        const rawMatched = item['matched_texts']
+        const matchedTexts: string[] = Array.isArray(rawMatched)
+          ? (rawMatched as unknown[]).filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+          : []
+        return {
+          entityId: item.entity_id,
+          confidence: Math.max(0, Math.min(1, item.confidence)),
+          matchedTexts,
+        }
+      })
       .filter((r) => r.confidence >= MIN_CONFIDENCE)
   })
 }

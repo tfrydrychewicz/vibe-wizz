@@ -37,17 +37,29 @@ const pluginKey = new PluginKey<PluginState>('autoMentionDecoration')
 /**
  * Return all text-level document spans where any of the search terms appear
  * (case-insensitive). Deduplicates by exact from:to position so overlapping
- * matches from aliases vs entity name are not double-decorated.
+ * matches are not double-decorated.
+ *
+ * Search priority:
+ *  1. matchedTexts — verbatim fragments returned by NER (declined forms, partials, typos…)
+ *  2. entityName + aliases — canonical name and alias field values
+ *
+ * This ensures the underline appears on "Janem" even when the entity is "Jan Kowalski".
  */
 function findEntitySpans(
   doc: ProseMirrorNode,
   entityName: string,
   aliases?: string[],
+  matchedTexts?: string[],
 ): { from: number; to: number }[] {
   const spans: { from: number; to: number }[] = []
   const seen = new Set<string>()
 
-  const searchTerms = [entityName, ...(aliases ?? [])].filter(Boolean)
+  // Prefer matched texts from NER; always include canonical name and aliases as fallback.
+  const searchTerms = [
+    ...(matchedTexts ?? []),
+    entityName,
+    ...(aliases ?? []),
+  ].filter(Boolean)
 
   for (const term of searchTerms) {
     const searchLower = term.toLowerCase()
@@ -87,7 +99,7 @@ function buildDecorations(doc: ProseMirrorNode, detections: AutoDetection[]): De
   const decos: Decoration[] = []
 
   for (const detection of detections) {
-    const spans = findEntitySpans(doc, detection.entityName, detection.aliases)
+    const spans = findEntitySpans(doc, detection.entityName, detection.aliases, detection.matchedTexts)
     for (const { from, to } of spans) {
       decos.push(
         Decoration.inline(from, to, {

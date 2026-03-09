@@ -10,6 +10,12 @@ export type AutoDetection = {
   confidence: number
   /** Field values with ner_search:true — used by the decoration to also underline alias text. */
   aliases?: string[]
+  /**
+   * Verbatim text fragments the NER model matched in the note (declined forms, partial names,
+   * typos…). Used by the decoration to underline the actual surface form rather than the
+   * canonical entity name when the two differ (e.g. "Janem" for "Jan Kowalski").
+   */
+  matchedTexts?: string[]
 }
 
 export type HoveredAutoDetection = AutoDetection & {

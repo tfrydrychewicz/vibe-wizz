@@ -308,12 +308,12 @@ async function runNer(
   }
 
   const insertMention = db.prepare(
-    `INSERT INTO entity_mentions (note_id, entity_id, mention_type, confidence)
-     VALUES (?, ?, 'auto_detected', ?)`
+    `INSERT INTO entity_mentions (note_id, entity_id, mention_type, confidence, matched_texts)
+     VALUES (?, ?, 'auto_detected', ?, ?)`
   )
   db.transaction(() => {
-    for (const { entityId, confidence } of detected) {
-      insertMention.run(noteId, entityId, confidence)
+    for (const { entityId, confidence, matchedTexts } of detected) {
+      insertMention.run(noteId, entityId, confidence, JSON.stringify(matchedTexts))
     }
   })()
 
