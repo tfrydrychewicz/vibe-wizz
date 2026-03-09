@@ -84,6 +84,12 @@ export const FEATURE_SLOTS = [
     capability: 'chat',
   },
   {
+    id: 'diagram_generate',
+    label: 'Diagram Generation',
+    description: 'Two-step AI generation of Excalidraw diagrams from a text description.',
+    capability: 'chat',
+  },
+  {
     id: 'embedding',
     label: 'Vector Embeddings',
     description: 'Generates vector embeddings for notes and chunks.',
@@ -114,6 +120,7 @@ export const DEFAULT_CHAINS: Record<FeatureSlotId, string[]> = {
   rerank:           ['claude-haiku-4-5-20251001'],
   task_clarify:     ['claude-haiku-4-5-20251001'],
   entity_review:    ['claude-haiku-4-5-20251001'],
+  diagram_generate: ['claude-sonnet-4-6'],
   embedding:        ['text-embedding-3-small'],
   image_generation: ['gpt-image-1'],
 }

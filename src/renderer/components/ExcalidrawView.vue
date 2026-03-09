@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
-import { PencilRuler, Pencil, Maximize2, X, Check, Loader2 } from 'lucide-vue-next'
+import { PencilRuler, Pencil, Maximize2, X, Check, Loader2, Sparkles } from 'lucide-vue-next'
 import {
   loadExcalidraw,
   consumeExcalidrawAutoOpen,
@@ -37,8 +37,58 @@ let pendingElements: readonly OrderedExcalidrawElement[] = []
 let pendingAppState: AppState | null = null
 let pendingFiles:    BinaryFiles     = {}
 
+// ─── AI Generate state ────────────────────────────────────────────────────────
+
+const isGenerating    = ref(false)
+const generatePrompt  = ref('')
+const generateError   = ref<string | null>(null)
+const showGenerateBox = ref(false)
+const generateInputRef = ref<HTMLTextAreaElement | null>(null)
+
+function openGenerateBox(): void {
+  generatePrompt.value  = ''
+  generateError.value   = null
+  showGenerateBox.value = true
+  void nextTick(() => generateInputRef.value?.focus())
+}
+
+function closeGenerateBox(): void {
+  showGenerateBox.value = false
+  generateError.value   = null
+  isGenerating.value    = false
+}
+
+async function generateDiagram(): Promise<void> {
+  const prompt = generatePrompt.value.trim()
+  if (!prompt) return
+
+  isGenerating.value  = true
+  generateError.value = null
+
+  const result = await (window.api.invoke('excalidraw:generate', { prompt }) as Promise<
+    { elements: string; appState: string } | { error: string }
+  >)
+
+  isGenerating.value = false
+
+  if ('error' in result) {
+    generateError.value = result.error
+    return
+  }
+
+  closeGenerateBox()
+  await openEditModal({ elementsJson: result.elements, appStateJson: result.appState })
+}
+
+// ─── Edit modal ───────────────────────────────────────────────────────────────
+
+interface InitialData {
+  elementsJson: string
+  appStateJson: string
+}
+
 /** Create a full-screen container below the modal header and mount React into it. */
-async function openEditModal(): Promise<void> {
+async function openEditModal(initial?: InitialData): Promise<void> {
   isEditing.value = true
   isLoading.value = true
 
@@ -46,13 +96,15 @@ async function openEditModal(): Promise<void> {
 
   if (!isEditing.value) { isLoading.value = false; return }
 
-  // Parse stored scene data.
+  // Parse stored scene data (or use AI-generated initial data).
   let initialElements: ExcalidrawElement[] = []
   let initialAppState: Partial<AppState>   = {}
   let initialFiles:    BinaryFiles         = {}
-  try { initialElements = JSON.parse(props.node.attrs.elements as string) } catch { /* empty */ }
-  try { initialAppState = JSON.parse(props.node.attrs.appState as string) } catch { /* empty */ }
-  try { initialFiles    = JSON.parse(props.node.attrs.files as string)    } catch { /* empty */ }
+  const elSrc  = initial?.elementsJson ?? props.node.attrs.elements as string
+  const asSrc  = initial?.appStateJson ?? props.node.attrs.appState  as string
+  try { initialElements = JSON.parse(elSrc)                          } catch { /* empty */ }
+  try { initialAppState = JSON.parse(asSrc)                          } catch { /* empty */ }
+  try { initialFiles    = JSON.parse(props.node.attrs.files as string)} catch { /* empty */ }
 
   pendingElements = initialElements as unknown as OrderedExcalidrawElement[]
   pendingAppState = null
@@ -218,8 +270,9 @@ function startResize(e: MouseEvent): void {
 
 function onGlobalKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
-    if (fullscreen.value) { closeLightbox(); return }
-    if (isEditing.value)  { cancelEdit();   return }
+    if (fullscreen.value)      { closeLightbox();    return }
+    if (isEditing.value)       { cancelEdit();       return }
+    if (showGenerateBox.value) { closeGenerateBox(); return }
   }
 }
 
@@ -265,7 +318,11 @@ onBeforeUnmount(() => {
           <Maximize2 :size="12" />
           View
         </button>
-        <button class="excalidraw-btn excalidraw-btn--primary" title="Edit drawing" @click="openEditModal">
+        <button class="excalidraw-btn excalidraw-btn--ai" title="Generate with AI" @click="openGenerateBox">
+          <Sparkles :size="12" />
+          Generate
+        </button>
+        <button class="excalidraw-btn excalidraw-btn--primary" title="Edit drawing" @click="openEditModal()">
           <Pencil :size="12" />
           Edit
         </button>
@@ -306,6 +363,55 @@ onBeforeUnmount(() => {
     </div>
 
   </NodeViewWrapper>
+
+  <!-- ── AI Generate overlay ──────────────────────────────────────────────── -->
+  <Teleport to="body">
+    <Transition name="excalidraw-gen">
+      <div
+        v-if="showGenerateBox"
+        class="excalidraw-gen-overlay"
+        @click.self="closeGenerateBox"
+      >
+        <div class="excalidraw-gen-box" role="dialog" aria-label="Generate diagram with AI">
+          <div class="excalidraw-gen-header">
+            <Sparkles :size="14" />
+            Generate Diagram with AI
+          </div>
+          <textarea
+            ref="generateInputRef"
+            v-model="generatePrompt"
+            class="form-textarea excalidraw-gen-input"
+            placeholder="Describe your diagram… e.g. 'User login flow with error handling' or 'Microservice architecture with API gateway, auth service, and database'"
+            rows="4"
+            :disabled="isGenerating"
+            @keydown.enter.meta.prevent="generateDiagram"
+            @keydown.esc.prevent="closeGenerateBox"
+          />
+          <div v-if="generateError" class="excalidraw-gen-error">
+            ⚠ {{ generateError }}
+          </div>
+          <div class="excalidraw-gen-footer">
+            <span class="excalidraw-gen-hint">⌘ Enter to generate · Esc to cancel</span>
+            <div class="excalidraw-gen-actions">
+              <button class="excalidraw-btn" :disabled="isGenerating" @click="closeGenerateBox">
+                <X :size="12" />
+                Cancel
+              </button>
+              <button
+                class="excalidraw-btn excalidraw-btn--ai"
+                :disabled="isGenerating || !generatePrompt.trim()"
+                @click="generateDiagram"
+              >
+                <Loader2 v-if="isGenerating" :size="12" class="excalidraw-spinner" />
+                <Sparkles v-else :size="12" />
+                {{ isGenerating ? 'Generating…' : 'Generate' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 
   <!-- ── Edit modal header (Teleport to body) ─────────────────────────────── -->
   <!-- The Excalidraw canvas is created imperatively below the header (top:44px) -->
@@ -440,6 +546,17 @@ onBeforeUnmount(() => {
 .excalidraw-btn--primary:hover:not(:disabled) {
   background: rgba(91, 141, 239, 0.1);
   color: var(--color-accent-hover);
+}
+
+.excalidraw-btn--ai {
+  color: #c084fc;
+  border-color: rgba(192, 132, 252, 0.35);
+}
+
+.excalidraw-btn--ai:hover:not(:disabled) {
+  background: rgba(192, 132, 252, 0.1);
+  color: #d8b4fe;
+  border-color: rgba(192, 132, 252, 0.6);
 }
 
 /* ── Preview area ────────────────────────────────────────────────────────────── */
@@ -670,7 +787,83 @@ onBeforeUnmount(() => {
   background: transparent !important;
 }
 
+/* ── AI Generate overlay ─────────────────────────────────────────────────────── */
+.excalidraw-gen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.excalidraw-gen-box {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.excalidraw-gen-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #c084fc;
+}
+
+.excalidraw-gen-input {
+  resize: vertical;
+  min-height: 90px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.excalidraw-gen-error {
+  font-size: 12px;
+  color: var(--color-danger);
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.excalidraw-gen-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.excalidraw-gen-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.excalidraw-gen-actions {
+  display: flex;
+  gap: 6px;
+}
+
 /* ── Transitions ─────────────────────────────────────────────────────────────── */
+.excalidraw-gen-enter-active,
+.excalidraw-gen-leave-active {
+  transition: opacity 0.15s ease;
+}
+.excalidraw-gen-enter-from,
+.excalidraw-gen-leave-to {
+  opacity: 0;
+}
+
 .excalidraw-lightbox-enter-active,
 .excalidraw-lightbox-leave-active {
   transition: opacity 0.18s ease;

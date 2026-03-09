@@ -3044,6 +3044,22 @@ export function registerDbIpcHandlers(): void {
     return { ok: true }
   })
 
+  /**
+   * excalidraw:generate — generates an Excalidraw diagram from a text prompt.
+   * Uses a two-step AI pipeline (plan → render) via the diagram_generate feature slot.
+   * Returns { elements, appState } JSON strings, or { error } on failure.
+   */
+  ipcMain.handle('excalidraw:generate', async (_event, { prompt }: { prompt: string }) => {
+    const db = getDatabase()
+    try {
+      const { generateExcalidrawDiagram } = await import('../embedding/diagramGenerator')
+      return await generateExcalidrawDiagram(prompt, db)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { error: msg }
+    }
+  })
+
   /** debug:reembed-all — force L1+L2 for every note, then run L3 cluster batch.
    *  Fire-and-forget: pushes app:reembed-start (with note count) then app:reembed-done. */
   ipcMain.handle('debug:reembed-all', async () => {
