@@ -2827,6 +2827,9 @@ export function registerDbIpcHandlers(): void {
         label: def?.label ?? p.id,
         apiKey: p.api_key,
         enabled: p.enabled === 1,
+        credentialType: def?.credentialType ?? 'api_key',
+        credentialDefault: def?.credentialDefault ?? '',
+        credentialPlaceholder: def?.credentialPlaceholder ?? 'API key',
         models: models.map((m) => ({
           id: m.id,
           label: m.label,

@@ -38,6 +38,9 @@ interface ProviderRow {
   apiKey: string
   enabled: boolean
   models: ProviderModel[]
+  credentialType?: 'api_key' | 'base_url'
+  credentialDefault?: string
+  credentialPlaceholder?: string
 }
 
 interface FeatureChainModel {
@@ -58,9 +61,10 @@ interface FeatureChain {
 }
 
 const PROVIDER_OPTIONS = [
-  { id: 'anthropic', label: 'Anthropic' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'gemini', label: 'Google Gemini' },
+  { id: 'anthropic', label: 'Anthropic', credentialDefault: '' },
+  { id: 'openai', label: 'OpenAI', credentialDefault: '' },
+  { id: 'gemini', label: 'Google Gemini', credentialDefault: '' },
+  { id: 'ollama', label: 'Ollama (local)', credentialDefault: 'http://localhost:11434' },
 ]
 
 const providers = ref<ProviderRow[]>([])
@@ -84,7 +88,13 @@ const allEnabledModels = computed(() =>
 function addProvider(id: string): void {
   if (providers.value.some((p) => p.id === id)) return
   const opt = PROVIDER_OPTIONS.find((o) => o.id === id)!
-  providers.value.push({ id, label: opt.label, apiKey: '', enabled: true, models: [] })
+  providers.value.push({
+    id,
+    label: opt.label,
+    apiKey: opt.credentialDefault ?? '',
+    enabled: true,
+    models: [],
+  })
   showAddProvider.value = false
 }
 
@@ -523,12 +533,15 @@ function onBackdropKeydown(e: KeyboardEvent): void {
               :providerLabel="p.label"
               :apiKey="p.apiKey"
               :models="p.models"
+              :credentialType="p.credentialType"
+              :credentialDefault="p.credentialDefault"
+              :credentialPlaceholder="p.credentialPlaceholder"
               @deleted="onProviderDeleted(p.id)"
             />
 
             <div v-if="providers.length === 0 && !showAddProvider" class="providers-empty">
               <p>No AI providers configured.</p>
-              <p>Add Anthropic, OpenAI, or Google Gemini to enable AI features.</p>
+              <p>Add Anthropic, OpenAI, Google Gemini, or Ollama (local, free) to enable AI features.</p>
             </div>
 
             <template v-if="showAddProvider">

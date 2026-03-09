@@ -8,6 +8,7 @@
 import { anthropicAdapter, ANTHROPIC_POPULAR_MODELS } from './providers/anthropic'
 import { openaiAdapter, OPENAI_POPULAR_MODELS } from './providers/openai'
 import { geminiAdapter, GEMINI_POPULAR_MODELS } from './providers/gemini'
+import { ollamaAdapter, OLLAMA_POPULAR_MODELS } from './providers/ollama'
 import type { ProviderAdapter, ModelDef } from './providers/types'
 
 // ── Provider definition ───────────────────────────────────────────────────────
@@ -18,6 +19,16 @@ export interface ProviderDef {
   /** Models to show in Settings when no live /models fetch has been run yet */
   popularModels: ModelDef[]
   adapter: ProviderAdapter
+  /**
+   * How the provider authenticates. Defaults to 'api_key'.
+   * - 'api_key': user enters a secret key (masked input, show/hide toggle)
+   * - 'base_url': user enters a URL stored in the api_key column (plain text input)
+   */
+  credentialType?: 'api_key' | 'base_url'
+  /** Pre-filled value shown when the provider is first added in Settings. */
+  credentialDefault?: string
+  /** Placeholder text for the credential input in Settings. */
+  credentialPlaceholder?: string
 }
 
 export const PROVIDER_DEFS: ProviderDef[] = [
@@ -38,6 +49,15 @@ export const PROVIDER_DEFS: ProviderDef[] = [
     label: 'Google Gemini',
     popularModels: GEMINI_POPULAR_MODELS,
     adapter: geminiAdapter,
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama (local)',
+    popularModels: OLLAMA_POPULAR_MODELS,
+    adapter: ollamaAdapter,
+    credentialType: 'base_url',
+    credentialDefault: 'http://localhost:11434',
+    credentialPlaceholder: 'http://localhost:11434',
   },
 ]
 

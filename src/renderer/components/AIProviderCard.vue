@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Eye, EyeOff, Loader2, X } from 'lucide-vue-next'
 
 interface ProviderModel {
@@ -14,11 +14,19 @@ const props = defineProps<{
   providerLabel: string
   apiKey: string
   models: ProviderModel[]
+  /** 'api_key' (default): masked secret input. 'base_url': plain URL input, no masking. */
+  credentialType?: 'api_key' | 'base_url'
+  /** Pre-filled value for new providers (e.g. 'http://localhost:11434' for Ollama). */
+  credentialDefault?: string
+  /** Placeholder text for the credential input. */
+  credentialPlaceholder?: string
 }>()
 
 const emit = defineEmits<{
   deleted: []
 }>()
+
+const isBaseUrl = computed(() => props.credentialType === 'base_url')
 
 const localKey = ref(props.apiKey)
 const showKey = ref(false)
@@ -29,7 +37,29 @@ const isFetching = ref(false)
 const fetchError = ref('')
 const showDeleteConfirm = ref(false)
 
+// For base_url providers, pre-fill the default when the card is freshly added (apiKey is empty).
+onMounted(() => {
+  if (isBaseUrl.value && !localKey.value && props.credentialDefault) {
+    localKey.value = props.credentialDefault
+  }
+})
+
 const hasFetchedModels = computed(() => fetchedModels.value.length > 0)
+
+// For base_url providers the button is always enabled (URL has a non-empty default).
+const fetchDisabled = computed(() =>
+  isFetching.value || (!isBaseUrl.value && !localKey.value.trim()),
+)
+
+const inputPlaceholder = computed(() =>
+  props.credentialPlaceholder ?? (isBaseUrl.value ? 'http://localhost:11434' : 'API key'),
+)
+
+const hintText = computed(() =>
+  isBaseUrl.value
+    ? 'Click Refresh to discover models installed in your local Ollama instance.'
+    : 'Enter your API key and click Test to fetch available models.',
+)
 
 type Capability = 'chat' | 'image' | 'embedding'
 const CAP_LABELS: Record<Capability, string> = { chat: 'Chat', image: 'Image generation', embedding: 'Embeddings' }
@@ -45,7 +75,8 @@ const modelGroups = computed(() => {
 })
 
 async function fetchModels(): Promise<void> {
-  if (!localKey.value.trim()) return
+  // For api_key providers, require a non-empty key. For base_url providers, always allow.
+  if (!isBaseUrl.value && !localKey.value.trim()) return
   isFetching.value = true
   fetchError.value = ''
   try {
@@ -117,13 +148,16 @@ function toggleModel(id: string): void {
     <div class="provider-key-row">
       <input
         v-model="localKey"
-        :type="showKey ? 'text' : 'password'"
+        :type="isBaseUrl || showKey ? 'text' : 'password'"
         class="modal-input key-input"
-        placeholder="API key"
+        :class="{ 'key-input--url': isBaseUrl }"
+        :placeholder="inputPlaceholder"
         autocomplete="off"
         spellcheck="false"
       />
+      <!-- Show/hide toggle: only for API key providers (URLs are not secrets) -->
       <button
+        v-if="!isBaseUrl"
         class="toggle-btn"
         :title="showKey ? 'Hide' : 'Show'"
         @click="showKey = !showKey"
@@ -133,11 +167,11 @@ function toggleModel(id: string): void {
       </button>
       <button
         class="fetch-btn"
-        :disabled="isFetching || !localKey.trim()"
+        :disabled="fetchDisabled"
         @click="fetchModels"
       >
         <Loader2 v-if="isFetching" :size="12" class="spin" />
-        <span>{{ hasFetchedModels ? 'Refresh' : 'Test' }}</span>
+        <span>{{ hasFetchedModels ? 'Refresh' : (isBaseUrl ? 'Refresh' : 'Test') }}</span>
       </button>
     </div>
 
@@ -161,7 +195,7 @@ function toggleModel(id: string): void {
         </label>
       </template>
     </div>
-    <p v-else class="provider-hint">Enter your API key and click Test to fetch available models.</p>
+    <p v-else class="provider-hint">{{ hintText }}</p>
 
   </div>
 </template>
@@ -257,6 +291,11 @@ function toggleModel(id: string): void {
   outline: none;
   font-family: monospace;
   transition: border-color 0.15s;
+}
+
+/* URL inputs use the regular font — they're not secrets and don't need monospace. */
+.key-input--url {
+  font-family: inherit;
 }
 
 .key-input:focus {
