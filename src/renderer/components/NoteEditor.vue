@@ -72,6 +72,8 @@ import TableContextMenu from './TableContextMenu.vue'
 import AIPromptModal from './AIPromptModal.vue'
 import { Callout } from '../extensions/Callout'
 import type { CalloutType } from '../extensions/Callout'
+import { ExcalidrawExtension } from '../extensions/ExcalidrawExtension'
+import { requestExcalidrawAutoOpen } from '../utils/excalidrawLoader'
 import {
   hoveredAutoDetection,
   scheduleHideAutoDetection,
@@ -93,7 +95,7 @@ import {
   Palette,
   Mic, MicOff, ChevronDown as ChevronDownIcon,
   ScrollText, X, Sparkles, Table2, RefreshCw, Workflow,
-  Info, AlertTriangle, CheckCircle2, XCircle, Lightbulb, BarChart2,
+  Info, AlertTriangle, CheckCircle2, XCircle, Lightbulb, BarChart2, PencilRuler,
 } from 'lucide-vue-next'
 import { useEntityChips } from '../composables/useEntityChips'
 import { renderEntityChip, escapeHtml } from '../utils/markdown'
@@ -735,6 +737,7 @@ const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   { id: 'chart', label: 'Chart', description: 'Insert an interactive Chart.js chart', icon: 'bar-chart-2' },
   { id: 'mermaid', label: 'Diagram', description: 'Insert a Mermaid diagram', icon: 'workflow' },
+  { id: 'excalidraw', label: 'Drawing', description: 'Insert an Excalidraw whiteboard', icon: 'pencil-ruler' },
 ]
 
 async function extractAndInsertActions(
@@ -887,6 +890,8 @@ function buildSlashCommandSuggestion() {
         insertChartBlock()
       } else if (item.id === 'mermaid') {
         insertMermaidDiagram()
+      } else if (item.id === 'excalidraw') {
+        insertExcalidrawDrawing()
       }
     },
     render: () => {
@@ -1071,6 +1076,7 @@ const editor = useEditor({
     TableHeader,
     TableCell,
     Callout,
+    ExcalidrawExtension,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -1367,6 +1373,15 @@ function insertChartBlock(): void {
     type: 'codeBlock',
     attrs: { language: 'chart' },
     content: [{ type: 'text', text: DEFAULT_CHART_SOURCE }],
+  }).run()
+}
+
+function insertExcalidrawDrawing(): void {
+  // Set the session flag BEFORE inserting so ExcalidrawView.onMounted picks it up.
+  requestExcalidrawAutoOpen()
+  editor.value?.chain().focus().insertContent({
+    type: 'excalidraw',
+    attrs: { elements: '[]', appState: '{}', files: '{}', previewSvg: '' },
   }).run()
 }
 
@@ -2016,6 +2031,13 @@ onBeforeUnmount(() => {
           @click="insertChartBlock()"
         >
           <BarChart2 :size="14" />
+        </button>
+        <button
+          class="tb-btn"
+          title="Insert Excalidraw drawing"
+          @click="insertExcalidrawDrawing()"
+        >
+          <PencilRuler :size="14" />
         </button>
       </div>
 

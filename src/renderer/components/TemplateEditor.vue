@@ -27,6 +27,8 @@ import LucideIcon from './LucideIcon.vue'
 import ToolbarDropdown from './ToolbarDropdown.vue'
 import { Callout } from '../extensions/Callout'
 import type { CalloutType } from '../extensions/Callout'
+import { ExcalidrawExtension } from '../extensions/ExcalidrawExtension'
+import { requestExcalidrawAutoOpen } from '../utils/excalidrawLoader'
 import {
   Undo2, Redo2,
   Pilcrow, Heading1, Heading2, Heading3,
@@ -40,7 +42,7 @@ import {
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
   RemoveFormatting,
   Table2,
-  Workflow, BarChart2,
+  Workflow, BarChart2, PencilRuler,
   Info, AlertTriangle, CheckCircle2, XCircle, Lightbulb,
 } from 'lucide-vue-next'
 import { computed } from 'vue'
@@ -155,6 +157,7 @@ const editor = useEditor({
     TableHeader,
     TableCell,
     Callout,
+    ExcalidrawExtension,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -200,6 +203,14 @@ function insertChartBlock(): void {
         },
       },
     }, null, 2) }],
+  }).run()
+}
+
+function insertExcalidrawDrawing(): void {
+  requestExcalidrawAutoOpen()
+  editor.value?.chain().focus().insertContent({
+    type: 'excalidraw',
+    attrs: { elements: '[]', appState: '{}', files: '{}', previewSvg: '' },
   }).run()
 }
 
@@ -418,6 +429,9 @@ onBeforeUnmount(() => {
         </button>
         <button class="tb-btn" title="Insert Chart.js chart" @click="insertChartBlock()">
           <BarChart2 :size="14" />
+        </button>
+        <button class="tb-btn" title="Insert Excalidraw drawing" @click="insertExcalidrawDrawing()">
+          <PencilRuler :size="14" />
         </button>
       </div>
 
