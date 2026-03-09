@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ref, watch, onBeforeUnmount, nextTick } from 'vue'
-import { useEditor, EditorContent } from '@tiptap/vue-3'
+import { useEditor, EditorContent, VueNodeViewRenderer } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
+import { CodeBlockLowlight } from '@tiptap/extension-code-block-lowlight'
+import { createLowlight, all } from 'lowlight'
+import CodeBlockView from './CodeBlockView.vue'
+
+const lowlight = createLowlight(all)
 import Placeholder from '@tiptap/extension-placeholder'
 import { TextStyle } from '@tiptap/extension-text-style'
 import { Color } from '@tiptap/extension-color'
@@ -96,7 +101,40 @@ const editor = useEditor({
   extensions: [
     StarterKit.configure({
       dropcursor: { color: '#5b8def', width: 2 },
+      codeBlock: false,
     }),
+    CodeBlockLowlight.extend({
+      addAttributes() {
+        return {
+          ...this.parent?.(),
+          hideCode: {
+            default: false,
+            parseHTML: (el) => el.getAttribute('data-hide-code') === 'true',
+            renderHTML: (attrs) => (attrs.hideCode ? { 'data-hide-code': 'true' } : {}),
+          },
+          mermaidTheme: {
+            default: 'dark',
+            parseHTML: (el) => el.getAttribute('data-mermaid-theme') ?? 'dark',
+            renderHTML: (attrs) =>
+              attrs.mermaidTheme && attrs.mermaidTheme !== 'dark'
+                ? { 'data-mermaid-theme': attrs.mermaidTheme }
+                : {},
+          },
+          mermaidHeight: {
+            default: null,
+            parseHTML: (el) => {
+              const v = el.getAttribute('data-mermaid-height')
+              return v ? parseInt(v, 10) : null
+            },
+            renderHTML: (attrs) =>
+              attrs.mermaidHeight ? { 'data-mermaid-height': String(attrs.mermaidHeight) } : {},
+          },
+        }
+      },
+      addNodeView() {
+        return VueNodeViewRenderer(CodeBlockView)
+      },
+    }).configure({ lowlight }),
     Placeholder.configure({ placeholder: 'Define your template content…' }),
     TextStyle,
     Color,

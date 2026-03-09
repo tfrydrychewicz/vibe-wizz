@@ -1386,7 +1386,7 @@ select:focus {
   color: #e06c75;
 }
 
-/* Code block */
+/* Code block — base styles; overridden by CodeBlockView scoped styles when node view is active */
 .note-body .tiptap pre {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -1403,6 +1403,50 @@ select:focus {
   color: var(--color-text);
   font-size: 13px;
 }
+
+/* Lowlight syntax highlighting — dark theme */
+.note-body .tiptap pre .hljs-comment,
+.note-body .tiptap pre .hljs-quote { color: #6a737d; font-style: italic; }
+
+.note-body .tiptap pre .hljs-keyword,
+.note-body .tiptap pre .hljs-selector-tag,
+.note-body .tiptap pre .hljs-built_in,
+.note-body .tiptap pre .hljs-name,
+.note-body .tiptap pre .hljs-tag { color: #c678dd; }
+
+.note-body .tiptap pre .hljs-string,
+.note-body .tiptap pre .hljs-title,
+.note-body .tiptap pre .hljs-section,
+.note-body .tiptap pre .hljs-attribute,
+.note-body .tiptap pre .hljs-literal,
+.note-body .tiptap pre .hljs-template-tag,
+.note-body .tiptap pre .hljs-template-variable,
+.note-body .tiptap pre .hljs-type,
+.note-body .tiptap pre .hljs-addition { color: #98c379; }
+
+.note-body .tiptap pre .hljs-deletion,
+.note-body .tiptap pre .hljs-selector-attr,
+.note-body .tiptap pre .hljs-selector-pseudo,
+.note-body .tiptap pre .hljs-meta { color: #e06c75; }
+
+.note-body .tiptap pre .hljs-doctag { color: #c678dd; }
+
+.note-body .tiptap pre .hljs-attr { color: #d19a66; }
+
+.note-body .tiptap pre .hljs-symbol,
+.note-body .tiptap pre .hljs-bullet,
+.note-body .tiptap pre .hljs-link { color: #56b6c2; }
+
+.note-body .tiptap pre .hljs-emphasis { font-style: italic; }
+.note-body .tiptap pre .hljs-strong { font-weight: bold; }
+
+.note-body .tiptap pre .hljs-number,
+.note-body .tiptap pre .hljs-regexp,
+.note-body .tiptap pre .hljs-variable,
+.note-body .tiptap pre .hljs-params { color: #e5c07b; }
+
+.note-body .tiptap pre .hljs-function,
+.note-body .tiptap pre .hljs-class .hljs-title { color: #61afef; }
 
 /* Blockquote */
 .note-body .tiptap blockquote {

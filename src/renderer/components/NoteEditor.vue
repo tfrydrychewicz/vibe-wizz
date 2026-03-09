@@ -11,6 +11,11 @@ import { useEditor, EditorContent, VueRenderer, VueNodeViewRenderer } from '@tip
 import { BubbleMenu } from '@tiptap/vue-3/menus'
 import Mention from '@tiptap/extension-mention'
 import StarterKit from '@tiptap/starter-kit'
+import { CodeBlockLowlight } from '@tiptap/extension-code-block-lowlight'
+import { createLowlight, all } from 'lowlight'
+import CodeBlockView from './CodeBlockView.vue'
+
+const lowlight = createLowlight(all)
 import { Extension } from '@tiptap/core'
 import type { Editor as CoreEditor } from '@tiptap/core'
 import Suggestion from '@tiptap/suggestion'
@@ -85,7 +90,7 @@ import {
   Check, ExternalLink, Trash2,
   Palette,
   Mic, MicOff, ChevronDown as ChevronDownIcon,
-  ScrollText, X, Sparkles, Table2, RefreshCw,
+  ScrollText, X, Sparkles, Table2, RefreshCw, Workflow,
 } from 'lucide-vue-next'
 import { useEntityChips } from '../composables/useEntityChips'
 import { renderEntityChip, escapeHtml } from '../utils/markdown'
@@ -942,7 +947,40 @@ const editor = useEditor({
   extensions: [
     StarterKit.configure({
       dropcursor: { color: '#5b8def', width: 2 },
+      codeBlock: false,
     }),
+    CodeBlockLowlight.extend({
+      addAttributes() {
+        return {
+          ...this.parent?.(),
+          hideCode: {
+            default: false,
+            parseHTML: (el) => el.getAttribute('data-hide-code') === 'true',
+            renderHTML: (attrs) => (attrs.hideCode ? { 'data-hide-code': 'true' } : {}),
+          },
+          mermaidTheme: {
+            default: 'dark',
+            parseHTML: (el) => el.getAttribute('data-mermaid-theme') ?? 'dark',
+            renderHTML: (attrs) =>
+              attrs.mermaidTheme && attrs.mermaidTheme !== 'dark'
+                ? { 'data-mermaid-theme': attrs.mermaidTheme }
+                : {},
+          },
+          mermaidHeight: {
+            default: null,
+            parseHTML: (el) => {
+              const v = el.getAttribute('data-mermaid-height')
+              return v ? parseInt(v, 10) : null
+            },
+            renderHTML: (attrs) =>
+              attrs.mermaidHeight ? { 'data-mermaid-height': String(attrs.mermaidHeight) } : {},
+          },
+        }
+      },
+      addNodeView() {
+        return VueNodeViewRenderer(CodeBlockView)
+      },
+    }).configure({ lowlight }),
     Placeholder.configure({ placeholder: 'Start writing…' }),
     TextStyle,
     Color,
@@ -1251,6 +1289,23 @@ function insertImage(): void {
 
 function insertTable(): void {
   editor.value?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+}
+
+const DEFAULT_MERMAID_SOURCE = [
+  'flowchart LR',
+  '  A[Start] --> B{Decision?}',
+  '  B -->|Yes| C[Do it]',
+  '  B -->|No| D[Skip]',
+  '  C --> E[End]',
+  '  D --> E',
+].join('\n')
+
+function insertMermaidDiagram(): void {
+  editor.value?.chain().focus().insertContent({
+    type: 'codeBlock',
+    attrs: { language: 'mermaid' },
+    content: [{ type: 'text', text: DEFAULT_MERMAID_SOURCE }],
+  }).run()
 }
 
 function onNoteBodyMouseDown(e: MouseEvent): void {
@@ -1877,6 +1932,13 @@ onBeforeUnmount(() => {
           @click="editor?.chain().focus().toggleCodeBlock().run()"
         >
           <Braces :size="14" />
+        </button>
+        <button
+          class="tb-btn"
+          title="Insert Mermaid diagram"
+          @click="insertMermaidDiagram()"
+        >
+          <Workflow :size="14" />
         </button>
       </div>
 
