@@ -5,14 +5,35 @@
 }
 
 :root {
+  /* ── Core palette ── */
   --color-bg: #1a1a1a;
   --color-sidebar: #161616;
   --color-surface: #242424;
+  --color-surface-raised: #2c2c2c;
+  --color-bg-elevated: #2a2a2a;
   --color-border: #2e2e2e;
+
+  /* ── Text ── */
   --color-text: #e8e8e8;
+  --color-text-primary: #e8e8e8;
   --color-text-muted: #888;
+  --color-text-secondary: #888;
+
+  /* ── Accent / primary ── */
   --color-accent: #5b8def;
   --color-accent-hover: #7aaeff;
+  --color-primary: #5b8def;
+
+  /* ── Semantic states ── */
+  --color-danger: #ef4444;
+  --color-danger-subtle: rgba(239, 68, 68, 0.1);
+  --color-danger-border: rgba(239, 68, 68, 0.35);
+  --color-success: #34d399;
+  --color-note: #50c0a0;
+
+  /* ── Interactive ── */
+  --color-hover: rgba(255, 255, 255, 0.05);
+
   --sidebar-width: 200px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 14px;
@@ -24,6 +45,9 @@ body {
   height: 100vh;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  /* Force all native form controls (selects, date pickers, checkboxes,
+     number spinners, scrollbars) to render in their dark variant */
+  color-scheme: dark;
 }
 
 /* ── Global scrollbar theme (dark) ── */
@@ -192,14 +216,18 @@ body {
 
 /* ── Buttons ── */
 .btn-primary {
-  margin-top: 16px;
   padding: 8px 18px;
   background: var(--color-accent);
   color: #fff;
   border: none;
   border-radius: 6px;
   font-size: 13px;
+  font-family: inherit;
   cursor: pointer;
+}
+
+.placeholder .btn-primary {
+  margin-top: 16px;
 }
 
 .btn-primary:hover {
@@ -225,6 +253,156 @@ body {
 .btn-secondary:hover {
   color: var(--color-text);
   border-color: var(--color-text-muted);
+}
+
+/* ── Global form element reset ──────────────────────────────────────────────
+   Ensures all native form elements inherit the app font and behave consistently.
+   Visual styling is left to component classes or the shared utilities below.
+──────────────────────────────────────────────────────────────────────────── */
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  box-sizing: border-box;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+}
+
+/* ── Shared form utility classes ─────────────────────────────────────────────
+   Use these in component templates to get consistent form-element appearance
+   without redefining the same properties in every component's scoped styles.
+   Override only what genuinely differs per context.
+──────────────────────────────────────────────────────────────────────────── */
+
+/* Standard text / email / date / number input */
+.form-input {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 13px;
+  padding: 7px 10px;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.form-input:focus {
+  border-color: var(--color-accent);
+}
+
+.form-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.form-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Standard select */
+.form-select {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+.form-select:focus {
+  border-color: var(--color-accent);
+}
+
+.form-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Standard textarea */
+.form-textarea {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 13px;
+  padding: 8px 10px;
+  width: 100%;
+  outline: none;
+  resize: vertical;
+  line-height: 1.5;
+  transition: border-color 0.15s;
+}
+
+.form-textarea:focus {
+  border-color: var(--color-accent);
+}
+
+.form-textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+/* Standard checkbox — custom dark-themed, consistent across all surfaces */
+.form-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  background: var(--color-surface);
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.form-checkbox:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.form-checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 8px;
+  border: 1.5px solid #fff;
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
+}
+
+.form-checkbox:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Standard label for form rows */
+.form-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  letter-spacing: 0.02em;
+  user-select: none;
 }
 
 /* ── Notes view (two-pane) ── */
@@ -343,8 +521,8 @@ body {
 }
 
 .note-list-item-delete:hover {
-  color: #ef4444;
-  background: color-mix(in srgb, #ef4444 15%, transparent);
+  color: var(--color-danger);
+  background: var(--color-danger-subtle);
 }
 
 .note-list-empty {
@@ -726,18 +904,18 @@ body {
 }
 
 .transcription-btn.recording {
-  background: rgba(239, 68, 68, 0.12);
-  border-color: rgba(239, 68, 68, 0.4);
-  color: #ef4444;
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
 }
 
 .transcription-btn.recording:hover {
-  background: rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.2);  /* slightly stronger than --color-danger-subtle */
 }
 
 .transcription-error-msg {
   font-size: 11px;
-  color: #ef4444;
+  color: var(--color-danger);
 }
 
 /* ── Note content row (editor + transcript side panel) ── */
@@ -875,11 +1053,11 @@ body {
 .transcript-summary-failed {
   margin: 8px 10px 4px;
   padding: 7px 10px;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
   border-radius: 6px;
   font-size: 11.5px;
-  color: #f87171;
+  color: var(--color-danger);
   line-height: 1.4;
 }
 
@@ -995,7 +1173,7 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #ef4444;
+  background: var(--color-danger);
   animation: pulse-dot 1.2s ease-in-out infinite;
   flex-shrink: 0;
 }
@@ -1131,7 +1309,7 @@ body {
 .transcript-live-label {
   font-size: 11px;
   font-weight: 600;
-  color: #ef4444;
+  color: var(--color-danger);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -1381,7 +1559,7 @@ body {
 }
 
 .tb-link-remove:hover {
-  color: #ef4444;
+  color: var(--color-danger);
 }
 
 /* ─── NER decoration — auto-detected entity name hints ──────────────────── */
@@ -1639,8 +1817,8 @@ body {
 }
 
 .wizz-note-selection-chip__remove:hover {
-  background: rgba(220, 80, 80, 0.15);
-  color: #e05555;
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 /* ── Composer model select wrapper (ChatSidebar + AIPromptModal) ── */
@@ -1704,8 +1882,8 @@ body {
 
 .rich-chip__remove:hover {
   opacity: 1;
-  background: rgba(220, 80, 80, 0.18);
-  color: #ef4444;
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 /* ── Textarea-based picker dropdown (@mention + [[note-link) ── */
@@ -1958,11 +2136,11 @@ body {
 }
 
 .agent-icon-complete {
-  color: #34d399;
+  color: var(--color-success);
 }
 
 .agent-icon-error {
-  color: #f87171;
+  color: var(--color-danger);
 }
 
 /* Checkmark draw-in animation */
@@ -2003,12 +2181,12 @@ body {
 
 .agent-step--complete .agent-step-type {
   background: rgba(52, 211, 153, 0.1);
-  color: #34d399;
+  color: var(--color-success);
 }
 
 .agent-step--error .agent-step-type {
-  background: rgba(248, 113, 113, 0.1);
-  color: #f87171;
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .agent-step-label {

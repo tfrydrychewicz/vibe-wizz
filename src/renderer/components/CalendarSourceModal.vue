@@ -758,7 +758,7 @@ async function save(): Promise<void> {
   align-items: center;
   gap: 5px;
   font-size: 12px;
-  color: #f87171;
+  color: var(--color-danger);
   margin-top: 2px;
 }
 
@@ -782,11 +782,35 @@ async function save(): Promise<void> {
 }
 
 .cal-checkbox {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--color-accent);
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  background: var(--color-surface);
   cursor: pointer;
   flex-shrink: 0;
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.cal-checkbox:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.cal-checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 8px;
+  border: 1.5px solid #fff;
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
 }
 
 .cal-name {
@@ -900,11 +924,11 @@ async function save(): Promise<void> {
 /* ── Save error ───────────────────────────────────────────────────────────── */
 .save-error {
   font-size: 12px;
-  color: #f87171;
+  color: var(--color-danger);
   margin: 0;
   padding: 8px 10px;
-  background: color-mix(in srgb, #f87171 10%, transparent);
-  border: 1px solid color-mix(in srgb, #f87171 25%, transparent);
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
   border-radius: 6px;
 }
 

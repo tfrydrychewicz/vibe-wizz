@@ -367,7 +367,7 @@ onMounted(load)
 
 .trash-action-delete:hover {
   background: rgba(240, 96, 112, 0.12);
-  color: #f06070;
+  color: var(--color-danger);
   border-color: rgba(240, 96, 112, 0.4);
 }
 
@@ -401,7 +401,7 @@ onMounted(load)
 
 .delete-confirm-msg {
   font-size: 12px;
-  color: #f06070;
+  color: var(--color-danger);
   line-height: 1.4;
 }
 </style>

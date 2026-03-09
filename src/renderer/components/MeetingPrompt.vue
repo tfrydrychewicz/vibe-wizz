@@ -159,7 +159,7 @@ onBeforeUnmount(() => {
 }
 
 .card-icon {
-  color: #ef4444;
+  color: var(--color-danger);
   display: flex;
   align-items: center;
   -webkit-app-region: no-drag;

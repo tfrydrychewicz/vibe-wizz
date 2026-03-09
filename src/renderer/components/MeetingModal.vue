@@ -1020,6 +1020,11 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
   outline: none;
   width: 100%;
   box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.field-input::placeholder {
+  color: var(--color-text-muted);
 }
 
 .field-input:focus {
@@ -1258,9 +1263,9 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 .save-error {
   padding: 8px 20px;
   font-size: 12px;
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.08);
-  border-top: 1px solid rgba(239, 68, 68, 0.2);
+  color: var(--color-danger);
+  background: var(--color-danger-subtle);
+  border-top: 1px solid var(--color-danger-border);
   flex-shrink: 0;
 }
 
@@ -1319,7 +1324,7 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 .recur-select {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
   font-family: inherit;
@@ -1424,7 +1429,7 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 .recur-date-input {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 3px 7px;
   font-size: 12px;
   font-family: inherit;
@@ -1440,7 +1445,7 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
   width: 56px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 3px 7px;
   font-size: 12px;
   font-family: inherit;
@@ -1532,7 +1537,7 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 }
 
 :global(.scope-dialog-opt.danger:hover .scope-opt-name) {
-  color: #ef4444;
+  color: var(--color-danger);
 }
 
 :global(.scope-opt-desc) {
@@ -1582,23 +1587,23 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 .btn-danger-sm {
   padding: 5px 10px;
   background: transparent;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 5px;
-  color: #ef4444;
+  border: 1px solid var(--color-danger-border);
+  border-radius: 6px;
+  color: var(--color-danger);
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
 }
 
 .btn-danger-sm:hover {
-  background: rgba(239, 68, 68, 0.08);
+  background: var(--color-danger-subtle);
 }
 
 .btn-ghost-sm {
   padding: 5px 10px;
   background: transparent;
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--color-text-muted);
   font-size: 12px;
   font-family: inherit;
@@ -1677,21 +1682,21 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
   gap: 5px;
   padding: 7px 12px;
   background: transparent;
-  border: 1px solid rgba(239, 68, 68, 0.4);
+  border: 1px solid var(--color-danger-border);
   border-radius: 6px;
-  color: #ef4444;
+  color: var(--color-danger);
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
 }
 
 .btn-danger-outline:hover {
-  background: rgba(239, 68, 68, 0.08);
+  background: var(--color-danger-subtle);
 }
 
 .btn-danger {
   padding: 7px 14px;
-  background: #ef4444;
+  background: var(--color-danger);
   color: #fff;
   border: none;
   border-radius: 6px;

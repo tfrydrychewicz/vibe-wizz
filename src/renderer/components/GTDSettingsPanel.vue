@@ -225,10 +225,21 @@ onMounted(load)
   color: var(--color-text);
   font-size: 13px;
   font-family: inherit;
-  padding: 6px 10px;
+  padding: 7px 28px 7px 10px;
   width: 100%;
   max-width: 280px;
   cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  transition: border-color 0.15s;
+}
+
+.select-input:focus {
+  border-color: var(--color-accent);
 }
 
 .type-preview {
@@ -247,13 +258,18 @@ onMounted(load)
   color: var(--color-text);
   font-size: 13px;
   font-family: inherit;
-  padding: 6px 10px;
+  padding: 7px 10px;
   width: 100%;
   max-width: 280px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.text-input::placeholder {
+  color: var(--color-text-muted);
 }
 
 .text-input:focus {
-  outline: none;
   border-color: var(--color-accent);
 }
 
@@ -264,13 +280,14 @@ onMounted(load)
   color: var(--color-text);
   font-size: 13px;
   font-family: inherit;
-  padding: 6px 10px;
+  padding: 7px 10px;
   width: 72px;
   text-align: center;
+  outline: none;
+  transition: border-color 0.15s;
 }
 
 .number-input:focus {
-  outline: none;
   border-color: var(--color-accent);
 }
 

@@ -126,7 +126,7 @@ function isTranscribingTab(tab: Tab): boolean {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #ef4444;
+  background: var(--color-danger);
   flex-shrink: 0;
   margin-right: 5px;
   animation: rec-pulse 1.4s ease-in-out infinite;

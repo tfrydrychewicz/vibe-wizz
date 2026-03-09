@@ -917,13 +917,19 @@ const formattedUpdatedAt = computed(() => {
 .field-select {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--color-text);
   font-size: 12px;
   font-family: inherit;
-  padding: 3px 8px 3px 6px;
+  padding: 4px 24px 4px 8px;
   cursor: pointer;
   outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  transition: border-color 0.15s;
 }
 
 .field-select:focus {
@@ -933,12 +939,13 @@ const formattedUpdatedAt = computed(() => {
 .field-date {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--color-text);
   font-size: 12px;
   font-family: inherit;
-  padding: 3px 6px;
+  padding: 4px 6px;
   outline: none;
+  transition: border-color 0.15s;
 }
 
 .field-date:focus {
@@ -973,13 +980,18 @@ const formattedUpdatedAt = computed(() => {
 .entity-search-input {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--color-text);
   font-size: 12px;
   font-family: inherit;
   padding: 4px 8px;
   width: 160px;
   outline: none;
+  transition: border-color 0.15s;
+}
+
+.entity-search-input::placeholder {
+  color: var(--color-text-muted);
 }
 
 .entity-search-input:focus {
@@ -1152,8 +1164,8 @@ const formattedUpdatedAt = computed(() => {
 }
 
 .waiting-toggle--on {
-  background: rgba(139,92,246,0.12);
-  border-color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.12);
+  border-color: rgba(139, 92, 246, 0.6);
   color: #8b5cf6;
 }
 
@@ -1286,7 +1298,7 @@ const formattedUpdatedAt = computed(() => {
 
 .btn-delete:hover {
   opacity: 1;
-  color: #e85555;
+  color: var(--color-danger);
 }
 
 .delete-confirm-label {
@@ -1295,7 +1307,7 @@ const formattedUpdatedAt = computed(() => {
 }
 
 .btn-delete-confirm {
-  background: #e85555;
+  background: var(--color-danger);
   color: #fff;
   border: none;
   border-radius: 4px;
@@ -1306,6 +1318,6 @@ const formattedUpdatedAt = computed(() => {
 }
 
 .btn-delete-confirm:hover {
-  background: #cc3333;
+  background: #c53030;
 }
 </style>

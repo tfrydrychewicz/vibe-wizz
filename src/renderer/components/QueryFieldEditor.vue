@@ -248,7 +248,7 @@ watch(
 
 .wql-parse-error {
   font-size: 11px;
-  color: #f06070;
+  color: var(--color-danger);
   font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
   line-height: 1.4;
 }

@@ -112,7 +112,7 @@ async function restore(): Promise<void> {
 }
 
 .trashed-icon {
-  color: #f06070;
+  color: var(--color-danger);
   flex-shrink: 0;
 }
 
@@ -133,7 +133,7 @@ async function restore(): Promise<void> {
 
 .trashed-label {
   font-size: 11px;
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .trashed-popup-actions {
@@ -145,9 +145,9 @@ async function restore(): Promise<void> {
   align-items: center;
   gap: 5px;
   background: rgba(240, 96, 112, 0.12);
-  border: 1px solid #f06070;
+  border: 1px solid var(--color-danger);
   border-radius: 5px;
-  color: #f06070;
+  color: var(--color-danger);
   font-size: 12px;
   font-family: inherit;
   padding: 5px 12px;

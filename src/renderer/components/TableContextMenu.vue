@@ -126,7 +126,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onOutsideMousedo
 }
 
 .tcm-item.danger {
-  color: #ef4444;
+  color: var(--color-danger);
 }
 
 .tcm-item.danger:hover {

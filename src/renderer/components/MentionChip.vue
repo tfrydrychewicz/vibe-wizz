@@ -45,7 +45,7 @@ function onClick(e: MouseEvent): void {
 }
 
 .mention-trashed {
-  color: #f06070;
+  color: var(--color-danger);
   background: rgba(240, 96, 112, 0.12);
 }
 

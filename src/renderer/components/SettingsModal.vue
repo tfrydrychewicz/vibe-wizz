@@ -1240,7 +1240,12 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   padding: 7px 10px;
   outline: none;
   font-family: inherit;
+  width: 100%;
   transition: border-color 0.15s;
+}
+
+.modal-input::placeholder {
+  color: var(--color-text-muted);
 }
 
 .modal-input:focus {
@@ -1277,11 +1282,40 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   margin-top: 6px;
 }
 .toggle-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
   width: 15px;
   height: 15px;
-  accent-color: var(--color-primary, #4f6ef7);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  background: var(--color-surface);
   cursor: pointer;
   flex-shrink: 0;
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.toggle-checkbox:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.toggle-checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 8px;
+  border: 1.5px solid #fff;
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
+}
+
+.toggle-checkbox:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 .toggle-label {
   font-size: 13px;
@@ -1295,7 +1329,7 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   margin-bottom: 4px;
 }
 .web-search-enabled-hint {
-  color: var(--color-primary, #4f6ef7);
+  color: var(--color-accent);
 }
 
 /* ── Model picker (same visual style as slot picker) ─────────────────────── */
@@ -1563,7 +1597,7 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   display: flex;
   align-items: center;
   gap: 3px;
-  color: #f87171;
+  color: var(--color-danger);
   font-size: 11px;
   max-width: 200px;
   overflow: hidden;
@@ -1596,8 +1630,8 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   color: var(--color-text);
 }
 .source-action-btn.danger:hover {
-  background: color-mix(in srgb, #f87171 12%, transparent);
-  color: #f87171;
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 .source-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -1608,8 +1642,8 @@ function onBackdropKeydown(e: KeyboardEvent): void {
   justify-content: space-between;
   gap: 12px;
   padding: 8px 12px;
-  background: color-mix(in srgb, #f87171 8%, transparent);
-  border-top: 1px solid color-mix(in srgb, #f87171 20%, transparent);
+  background: var(--color-danger-subtle);
+  border-top: 1px solid var(--color-danger-border);
   font-size: 12px;
   color: var(--color-text-muted);
 }
@@ -1635,7 +1669,7 @@ function onBackdropKeydown(e: KeyboardEvent): void {
 
 .dc-delete {
   padding: 4px 10px;
-  background: #f87171;
+  background: var(--color-danger);
   border: none;
   border-radius: 5px;
   color: #fff;

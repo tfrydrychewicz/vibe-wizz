@@ -1019,7 +1019,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
 }
 .energy-pill--low.energy-pill--active    { background: rgba(59,130,246,0.12); color: #3b82f6; border-color: #3b82f6; }
 .energy-pill--medium.energy-pill--active { background: rgba(245,158,11,0.12); color: #f59e0b; border-color: #f59e0b; }
-.energy-pill--high.energy-pill--active   { background: rgba(239,68,68,0.12); color: #ef4444; border-color: #ef4444; }
+.energy-pill--high.energy-pill--active   { background: var(--color-danger-subtle); color: var(--color-danger); border-color: var(--color-danger); }
 .energy-pill:hover { border-color: var(--color-accent); color: var(--color-accent); }
 
 .btn-clear-filters {
@@ -1265,5 +1265,5 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
   font-family: inherit;
   cursor: pointer;
 }
-.btn-delete:hover { background: rgba(239,68,68,0.08); color: #ef4444; border-color: rgba(239,68,68,0.25); }
+.btn-delete:hover { background: var(--color-danger-subtle); color: var(--color-danger); border-color: var(--color-danger-border); }
 </style>

@@ -27,7 +27,7 @@ const config = computed(() => {
       const map = {
         low:    { color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
         medium: { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
-        high:   { color: '#ef4444', bg: 'rgba(239,68,68,0.12)'  },
+        high:   { color: 'var(--color-danger)', bg: 'var(--color-danger-subtle)' },
       }
       const c = props.energyLevel ? map[props.energyLevel] : map.medium
       return { icon: Zap, ...c }

@@ -1364,14 +1364,14 @@ defineExpose({ focusEvent, openEvent, loadEvents })
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #ef4444;
+  background: var(--color-danger);
   flex-shrink: 0;
 }
 
 .now-line {
   flex: 1;
   height: 1px;
-  background: #ef4444;
+  background: var(--color-danger);
 }
 
 .event-header-row {

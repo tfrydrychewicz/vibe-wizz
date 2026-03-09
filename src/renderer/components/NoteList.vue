@@ -299,7 +299,7 @@ defineExpose({ refresh })
 
 .trash-confirm-msg {
   font-size: 12px;
-  color: #f06070;
+  color: var(--color-danger);
   line-height: 1.4;
 }
 
@@ -322,7 +322,7 @@ defineExpose({ refresh })
 .trash-confirm-yes {
   background: rgba(240, 96, 112, 0.15);
   border: 1px solid rgba(240, 96, 112, 0.5);
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .trash-confirm-yes:hover {

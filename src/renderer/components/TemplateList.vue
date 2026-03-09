@@ -197,7 +197,7 @@ defineExpose({ refresh })
 }
 
 .template-item-delete:hover {
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .template-list-empty {
@@ -220,7 +220,7 @@ defineExpose({ refresh })
 
 .delete-confirm-msg {
   font-size: 12px;
-  color: #f06070;
+  color: var(--color-danger);
   line-height: 1.4;
 }
 
@@ -243,7 +243,7 @@ defineExpose({ refresh })
 .delete-confirm-yes {
   background: rgba(240, 96, 112, 0.15);
   border: 1px solid rgba(240, 96, 112, 0.5);
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .delete-confirm-yes:hover {

@@ -420,7 +420,7 @@ function onSubTaskCreated(task: ActionItem): void {
 }
 
 .due-badge--overdue {
-  color: #ef4444;
+  color: var(--color-danger);
   background: rgba(239,68,68,0.1);
 }
 

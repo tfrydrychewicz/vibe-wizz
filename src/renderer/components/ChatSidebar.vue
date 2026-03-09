@@ -871,12 +871,12 @@ function renderUserMessage(msg: ChatMessage): string {
 }
 
 .chat-web-search-badge {
-  color: var(--color-primary, #4f6ef7);
+  color: var(--color-accent);
 }
 
 .chat-web-search-badge:hover {
-  color: var(--color-primary, #4f6ef7);
-  background: color-mix(in srgb, var(--color-primary, #4f6ef7) 12%, transparent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 .chat-model-select {
@@ -1296,7 +1296,7 @@ function renderUserMessage(msg: ChatMessage): string {
 
 .chat-drop-error {
   font-size: 11px;
-  color: #ef4444;
+  color: var(--color-danger);
   background: rgba(239, 68, 68, 0.08);
   border-radius: 4px;
   padding: 5px 10px;

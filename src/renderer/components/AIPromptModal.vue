@@ -371,7 +371,7 @@ function doSubmit(): void {
 
 .ai-modal-error {
   font-size: 12px;
-  color: #ef4444;
+  color: var(--color-danger);
   background: rgba(239, 68, 68, 0.08);
   border-radius: 5px;
   padding: 6px 10px;

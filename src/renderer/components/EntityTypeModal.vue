@@ -764,13 +764,17 @@ onMounted(async () => {
 .modal-input {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--color-text);
   font-size: 13px;
   padding: 7px 10px;
   outline: none;
   font-family: inherit;
   transition: border-color 0.15s;
+}
+
+.modal-input::placeholder {
+  color: var(--color-text-muted);
 }
 
 .modal-input:focus {
@@ -919,12 +923,12 @@ onMounted(async () => {
 }
 
 .field-remove-btn:hover {
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .modal-error {
   font-size: 12px;
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .modal-footer {
@@ -959,22 +963,22 @@ onMounted(async () => {
 }
 
 .btn-delete:hover {
-  background: rgba(240, 96, 112, 0.1);
-  color: #f06070;
-  border-color: rgba(240, 96, 112, 0.4);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+  border-color: var(--color-danger-border);
 }
 
 .delete-confirm-msg {
   font-size: 12px;
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .btn-delete-confirm {
   padding: 6px 12px;
-  background: rgba(240, 96, 112, 0.15);
-  border: 1px solid rgba(240, 96, 112, 0.5);
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
   border-radius: 5px;
-  color: #f06070;
+  color: var(--color-danger);
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
@@ -982,7 +986,7 @@ onMounted(async () => {
 }
 
 .btn-delete-confirm:hover:not(:disabled) {
-  background: rgba(240, 96, 112, 0.25);
+  background: rgba(239, 68, 68, 0.2);
 }
 
 .btn-delete-confirm:disabled {
@@ -1080,17 +1084,17 @@ onMounted(async () => {
   border: 1px solid var(--color-border);
   border-radius: 6px;
   color: var(--color-text);
-  font-size: 12.5px;
+  font-size: 13px;
   font-family: inherit;
   line-height: 1.5;
   padding: 7px 10px;
   resize: vertical;
   min-height: 64px;
+  outline: none;
   transition: border-color 0.15s;
 }
 
 .reviews-guidance-textarea:focus {
-  outline: none;
   border-color: var(--color-accent);
 }
 
@@ -1101,7 +1105,7 @@ onMounted(async () => {
 
 .reviews-guidance-error {
   font-size: 11.5px;
-  color: #ef4444;
+  color: var(--color-danger);
   margin: 0;
 }
 
@@ -1179,10 +1183,40 @@ onMounted(async () => {
 }
 
 .toggle-checkbox {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--color-accent);
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  background: var(--color-surface);
   cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.toggle-checkbox:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.toggle-checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 8px;
+  border: 1.5px solid #fff;
+  border-top: none;
+  border-left: none;
+  transform: rotate(45deg);
+}
+
+.toggle-checkbox:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .toggle-label {

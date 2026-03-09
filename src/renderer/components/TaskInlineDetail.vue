@@ -674,5 +674,5 @@ onBeforeUnmount(() => {
   opacity: 0.6;
 }
 
-.btn-unlink:hover { opacity: 1; color: #ef4444; }
+.btn-unlink:hover { opacity: 1; color: var(--color-danger); }
 </style>

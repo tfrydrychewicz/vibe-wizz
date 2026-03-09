@@ -472,7 +472,7 @@ watch(
   border: 1px solid rgba(220, 38, 38, 0.2);
   border-radius: 5px;
   font-size: 12px;
-  color: #dc2626;
+  color: var(--color-danger);
 }
 
 /* ── Body ── */
@@ -575,7 +575,7 @@ watch(
 }
 
 .btn-review-delete:hover {
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .btn-delete-confirm {
@@ -585,7 +585,7 @@ watch(
   border-radius: 4px;
   border: 1px solid rgba(240, 96, 112, 0.5);
   background: rgba(240, 96, 112, 0.1);
-  color: #f06070;
+  color: var(--color-danger);
   cursor: pointer;
   white-space: nowrap;
 }

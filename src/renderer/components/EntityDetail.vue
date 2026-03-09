@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { Trash2, X, ExternalLink } from 'lucide-vue-next'
+import { Trash2, X, ExternalLink, Plus } from 'lucide-vue-next'
 import LucideIcon from './LucideIcon.vue'
 import EntityReviewPanel from './EntityReviewPanel.vue'
 import { entityTrashStatus } from '../stores/mentionStore'
@@ -364,6 +364,24 @@ function clearNoteRef(fieldName: string): void {
   refNoteMap.value[fieldName] = null
 }
 
+const creatingNoteRef = ref<Record<string, boolean>>({})
+
+async function createNoteRef(e: MouseEvent, fieldName: string): Promise<void> {
+  creatingNoteRef.value[fieldName] = true
+  try {
+    const note = (await window.api.invoke('notes:create', {})) as { id: string; title: string }
+    fieldValues.value[fieldName] = note.id
+    refNoteMap.value[fieldName] = { id: note.id, title: note.title || 'Untitled' }
+    refSearch.value[fieldName] = ''
+    refSearchOpen.value[fieldName] = false
+    await save()
+    const mode: OpenMode = e.metaKey || e.ctrlKey ? 'new-tab' : 'new-pane'
+    emit('open-note', { noteId: note.id, title: note.title || 'Untitled', mode })
+  } finally {
+    creatingNoteRef.value[fieldName] = false
+  }
+}
+
 // ── Open handlers ────────────────────────────────────────────────────────────
 
 function openEntityRef(e: MouseEvent, fieldName: string): void {
@@ -628,34 +646,44 @@ watch(() => props.entityId, async (id) => {
                   <X :size="11" />
                 </button>
               </div>
-              <div v-else class="ref-search-wrap">
-                <input
-                  v-model="refSearch[field.name]"
-                  class="entity-field-input ref-search-input"
-                  :placeholder="refNoteMap[field.name] ? 'Change…' : 'Search note…'"
-                  @input="searchNoteRef(field.name)"
-                  @focus="searchNoteRef(field.name)"
-                  @blur="closeSearch(field.name)"
-                />
-                <div
-                  v-if="refSearchOpen[field.name] && refResults[field.name]?.length"
-                  class="ref-dropdown"
-                >
-                  <button
-                    v-for="item in (refResults[field.name] as RefNoteData[])"
-                    :key="item.id"
-                    class="ref-dropdown-item"
-                    @mousedown.prevent="selectNoteRef(field.name, item)"
+              <div v-else class="note-ref-search-row">
+                <div class="ref-search-wrap">
+                  <input
+                    v-model="refSearch[field.name]"
+                    class="entity-field-input ref-search-input"
+                    :placeholder="refNoteMap[field.name] ? 'Change…' : 'Search note…'"
+                    @input="searchNoteRef(field.name)"
+                    @focus="searchNoteRef(field.name)"
+                    @blur="closeSearch(field.name)"
+                  />
+                  <div
+                    v-if="refSearchOpen[field.name] && refResults[field.name]?.length"
+                    class="ref-dropdown"
                   >
-                    {{ item.title }}
-                  </button>
+                    <button
+                      v-for="item in (refResults[field.name] as RefNoteData[])"
+                      :key="item.id"
+                      class="ref-dropdown-item"
+                      @mousedown.prevent="selectNoteRef(field.name, item)"
+                    >
+                      {{ item.title }}
+                    </button>
+                  </div>
+                  <div
+                    v-else-if="refSearchOpen[field.name] && refSearch[field.name] && !refResults[field.name]?.length"
+                    class="ref-dropdown ref-dropdown-empty"
+                  >
+                    No results
+                  </div>
                 </div>
-                <div
-                  v-else-if="refSearchOpen[field.name] && refSearch[field.name] && !refResults[field.name]?.length"
-                  class="ref-dropdown ref-dropdown-empty"
+                <button
+                  class="btn-new-note-ref"
+                  :disabled="creatingNoteRef[field.name]"
+                  title="Create new note and link it (Cmd=new tab)"
+                  @mousedown.prevent="createNoteRef($event, field.name)"
                 >
-                  No results
-                </div>
+                  <Plus :size="13" />
+                </button>
               </div>
             </div>
 
@@ -838,7 +866,7 @@ watch(() => props.entityId, async (id) => {
 
 .note-chip {
   background: rgba(80, 192, 160, 0.1);
-  border-color: rgba(80, 192, 160, 0.35);
+  border-color: rgba(80, 192, 160, 0.35);  /* --color-note tint */
 }
 
 .ref-chip-open {
@@ -860,11 +888,11 @@ watch(() => props.entityId, async (id) => {
 }
 
 .entity-chip .ref-chip-open {
-  color: #5b8def;
+  color: var(--color-accent);
 }
 
 .note-chip .ref-chip-open {
-  color: #50c0a0;
+  color: var(--color-note);
 }
 
 .ref-chip-open:hover {
@@ -886,8 +914,45 @@ watch(() => props.entityId, async (id) => {
 }
 
 .ref-chip-remove:hover {
-  color: #f06070;
-  background: rgba(240, 96, 112, 0.08);
+  color: var(--color-danger);
+  background: var(--color-danger-subtle);
+}
+
+.note-ref-search-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.note-ref-search-row .ref-search-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-new-note-ref {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.btn-new-note-ref:hover:not(:disabled) {
+  background: rgba(80, 192, 160, 0.1);
+  color: var(--color-note);
+  border-color: rgba(80, 192, 160, 0.4);
+}
+
+.btn-new-note-ref:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .ref-search-wrap {
@@ -952,9 +1017,9 @@ watch(() => props.entityId, async (id) => {
 }
 
 .btn-trash:hover:not(:disabled) {
-  background: rgba(240, 96, 112, 0.1);
-  color: #f06070;
-  border-color: rgba(240, 96, 112, 0.4);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+  border-color: var(--color-danger-border);
 }
 
 .btn-trash:disabled {
@@ -964,15 +1029,15 @@ watch(() => props.entityId, async (id) => {
 
 .entity-trash-confirm-msg {
   font-size: 12px;
-  color: #f06070;
+  color: var(--color-danger);
 }
 
 .btn-trash-confirm {
   padding: 6px 12px;
-  background: rgba(240, 96, 112, 0.15);
-  border: 1px solid rgba(240, 96, 112, 0.5);
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
   border-radius: 5px;
-  color: #f06070;
+  color: var(--color-danger);
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
@@ -980,7 +1045,7 @@ watch(() => props.entityId, async (id) => {
 }
 
 .btn-trash-confirm:hover {
-  background: rgba(240, 96, 112, 0.25);
+  background: rgba(239, 68, 68, 0.2);
 }
 
 /* ── Computed fields ─────────────────────────────────────────────────────── */
@@ -993,6 +1058,6 @@ watch(() => props.entityId, async (id) => {
 
 .computed-error {
   font-size: 12px;
-  color: #f06070;
+  color: var(--color-danger);
 }
 </style>

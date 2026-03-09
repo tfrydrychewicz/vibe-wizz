@@ -265,7 +265,7 @@ onMounted(load)
   border-bottom: 1px solid var(--color-border);
 }
 
-.section-header--danger { color: #ef4444; }
+.section-header--danger { color: var(--color-danger); }
 .section-header--warn   { color: #f59e0b; }
 .section-header--waiting { color: #8b5cf6; }
 .section-header--someday { color: #6b7280; }
@@ -365,8 +365,8 @@ onMounted(load)
 }
 
 .btn-delete-someday:hover {
-  background: rgba(239,68,68,0.08);
-  color: #ef4444;
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
   border-color: rgba(239,68,68,0.3);
 }
 </style>

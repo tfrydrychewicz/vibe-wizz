@@ -167,7 +167,7 @@ function formatDate(iso: string): string {
   border: 1px solid rgba(220, 80, 60, 0.3);
   border-radius: 6px;
   font-size: 12px;
-  color: #f87171;
+  color: var(--color-danger);
   line-height: 1.4;
 }
 
@@ -187,7 +187,7 @@ function formatDate(iso: string): string {
   flex-shrink: 0;
   background: none;
   border: none;
-  color: #f87171;
+  color: var(--color-danger);
   opacity: 0.6;
   cursor: pointer;
   padding: 0 2px;

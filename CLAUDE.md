@@ -189,6 +189,125 @@ function onOpenSomething(e: MouseEvent, id: string): void {
 
 This applies to: list item clicks (`NoteList`, `EntityList`), "Open →" buttons in popups (`EntityMentionPopup`), any future "Go to" links, search result items, backlink entries, etc. **Do not add a new content-opening entry point without wiring up all three modes.**
 
+### Design System & Styles — ALWAYS FOLLOW
+
+The renderer uses a single flat CSS file (`src/renderer/style.css`) as the source of truth for all design tokens, utility classes, and shared component styles. **Never invent new tokens, colours, or form patterns inline in a component.**
+
+#### CSS design tokens (defined in `:root`)
+
+| Token | Value | Use for |
+|-------|-------|---------|
+| `--color-bg` | `#1a1a1a` | App / page background |
+| `--color-sidebar` | `#161616` | Sidebar background |
+| `--color-surface` | `#242424` | Cards, inputs, dropdowns |
+| `--color-surface-raised` | `#2c2c2c` | Popovers, tooltips on surface |
+| `--color-bg-elevated` | `#2a2a2a` | Floating panels on bg |
+| `--color-border` | `#2e2e2e` | All borders / dividers |
+| `--color-text` / `--color-text-primary` | `#e8e8e8` | Primary text |
+| `--color-text-muted` / `--color-text-secondary` | `#888` | Secondary / placeholder text |
+| `--color-accent` / `--color-primary` | `#5b8def` | Accent, focus ring, active state |
+| `--color-accent-hover` | `#7aaeff` | Accent hover |
+| `--color-danger` | `#ef4444` | Destructive actions, errors |
+| `--color-danger-subtle` | `rgba(239,68,68,0.1)` | Danger background tint |
+| `--color-danger-border` | `rgba(239,68,68,0.35)` | Danger border tint |
+| `--color-success` | `#34d399` | Success / complete states |
+| `--color-note` | `#50c0a0` | Note-link chips and accents |
+| `--color-hover` | `rgba(255,255,255,0.05)` | Hover background on any surface |
+
+**Rules:**
+- Always reference tokens with `var(--color-*)`. Never write raw hex values in component CSS.
+- Only `style.css` defines the `:root` block. Never add `--color-*` variables inside a component's `<style scoped>`.
+- Extend the token set in `style.css` `:root` when a genuinely new semantic concept is needed; don't create one-off local variables.
+
+#### Shared form utility classes (defined in `style.css`)
+
+Use these classes directly on native elements. Override only what genuinely differs per context via a small scoped rule — never redefine the full property set locally.
+
+| Class | Element | When to use |
+|-------|---------|-------------|
+| `.form-input` | `<input>` | Any standard text / email / date / number input |
+| `.form-select` | `<select>` | Any select dropdown (includes custom chevron SVG) |
+| `.form-textarea` | `<textarea>` | Any multi-line text area |
+| `.form-checkbox` | `<input type="checkbox">` | Standalone checkbox outside a toggle-row |
+| `.form-label` | `<label>` / `<span>` | Field labels above inputs |
+
+**Standard values enforced by the utilities** (do not deviate):
+- Background: `var(--color-surface)` (or `var(--color-bg)` for inputs inside modals that sit on a surface)
+- Border: `1px solid var(--color-border)`, `border-radius: 6px`
+- Padding: `7px 10px` (compact panels may use `4–5px 8px` but keep the radius)
+- Focus: `border-color: var(--color-accent)`, no browser default outline
+- Placeholder: `color: var(--color-text-muted)`
+- Transition: `border-color 0.15s`
+- Font: `inherit` (guaranteed by the global element reset)
+
+#### Checkbox / toggle pattern
+
+All checkboxes in the app use a **custom dark-themed checkbox** — `appearance: none` with a hand-drawn checkmark via `::after`. The authoritative implementation lives in:
+
+- **`style.css` `.form-checkbox`** — global utility for standalone use
+- **`AIProviderCard.vue` `.toggle-checkbox`** — reference implementation for modal toggles
+
+When adding a new checkbox in any component, copy the scoped `.toggle-checkbox` pattern from `SettingsModal.vue` or use `.form-checkbox` directly. **Never use `accent-color` alone** — it leaves the unchecked state as a native white box in Electron's dark context.
+
+```css
+/* Correct pattern for any new checkbox */
+.my-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px; height: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  background: var(--color-surface);
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+.my-checkbox:checked { background: var(--color-accent); border-color: var(--color-accent); }
+.my-checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px; top: 1px; width: 5px; height: 8px;
+  border: 1.5px solid #fff;
+  border-top: none; border-left: none;
+  transform: rotate(45deg);
+}
+```
+
+#### `color-scheme: dark`
+
+`body { color-scheme: dark }` is set globally. This forces Chromium/Electron to render **all** native form widgets (select popups, date pickers, number spinners, scrollbars) in their dark system variant. Do not remove it.
+
+#### Danger / destructive styling
+
+Use the three danger tokens; never write raw red hex values:
+
+```css
+color: var(--color-danger);              /* text / icon */
+background: var(--color-danger-subtle);  /* button/row hover bg */
+border-color: var(--color-danger-border); /* button/row hover border */
+```
+
+A "danger button hover" pattern:
+```css
+.btn-delete:hover {
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+  border-color: var(--color-danger-border);
+}
+```
+
+#### Where styles live
+
+| Situation | Where to put it |
+|-----------|----------------|
+| Token (color, spacing constant) | `style.css` `:root` |
+| Class used by ≥2 components | `style.css` as a global utility |
+| Class used only inside one component | `<style scoped>` in that component |
+| Override of a global utility | Small scoped rule; reference same tokens |
+| `:deep()` targeting a global class | **Forbidden** — edit `style.css` instead |
+| Duplicate of an existing global class | **Forbidden** — use the existing class |
+
 ### Abstraction, Reusability & Consistency Rule — ALWAYS FOLLOW, FOR EVERY CHANGE
 
 **This is not a chip-specific rule. It applies to every change, big or small — logic, styles, types, IPC helpers, AI prompt builders, click handlers, anything.**
@@ -199,11 +318,13 @@ The default decision order is:
 3. **Create new, make it reusable immediately** — if nothing exists, build it as a shared abstraction from day one; never write something inline that a second surface will need.
 
 Concrete rules:
-- If a pattern already exists (file attachment, `@mention`, `[[` note-link, chip display, dropdown picker, open-mode click handling, AI context formatting…), use it — never reinvent it inline.
+- If a pattern already exists (file attachment, `@mention`, `[[` note-link, chip display, dropdown picker, open-mode click handling, AI context formatting, form input styling…), use it — never reinvent it inline.
 - Shared logic → composable (e.g. `useFileAttachment`, `useInputMention`, `useInputNoteLink`, `useEntityChips`).
 - Shared visual element rendered via Vue template → component (e.g. `AttachmentBar`, `TaskAttributeChip`, `LucideIcon`).
 - Shared HTML emitted via `v-html` → generator function in a utility module (e.g. `renderEntityChip`, `renderNoteChip` in `markdown.ts`).
 - Shared CSS → global `style.css`; never duplicate rules with `:deep()` in individual components.
+- Shared form elements → use `.form-input`, `.form-select`, `.form-textarea`, `.form-checkbox`, `.form-label` from `style.css`; override only context-specific values in scoped styles.
+- Shared colours → always `var(--color-*)` tokens; never raw hex. Add new tokens to `style.css` `:root` if the semantic concept is new.
 - Shared types → exported from the canonical source, never redeclared locally.
 - Shared constants (class names, string keys, slot identifiers) → exported constants, never hardcoded strings in two places.
 - Click-handler selectors for `v-html` content → data-attribute selectors (`[data-entity-name]`), never class selectors (decouples HTML structure from behaviour).

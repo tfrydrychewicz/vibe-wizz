@@ -214,8 +214,8 @@ function toggleModel(id: string): void {
   padding: 2px 8px;
   border-radius: 4px;
   border: 1px solid transparent;
-  background: color-mix(in srgb, #f87171 12%, transparent);
-  color: #f87171;
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
   cursor: pointer;
   font-family: inherit;
 }
@@ -318,7 +318,7 @@ function toggleModel(id: string): void {
 
 .provider-error {
   font-size: 11px;
-  color: #f87171;
+  color: var(--color-danger);
   margin: 0 0 6px;
 }
 
@@ -382,8 +382,8 @@ function toggleModel(id: string): void {
 }
 
 .toggle-checkbox:checked {
-  background: var(--color-accent, #4f6ef7);
-  border-color: var(--color-accent, #4f6ef7);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 .toggle-checkbox:checked::after {

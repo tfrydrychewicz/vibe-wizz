@@ -655,7 +655,7 @@ async function onBriefClick(e: MouseEvent): Promise<void> {
   border: 1px solid rgba(220, 38, 38, 0.25);
   border-radius: 6px;
   font-size: 12px;
-  color: #dc2626;
+  color: var(--color-danger);
   max-width: 620px;
   width: 100%;
 }
