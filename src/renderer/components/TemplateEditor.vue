@@ -25,6 +25,8 @@ import TableHeader from '@tiptap/extension-table-header'
 import IconPicker from './IconPicker.vue'
 import LucideIcon from './LucideIcon.vue'
 import ToolbarDropdown from './ToolbarDropdown.vue'
+import { Callout } from '../extensions/Callout'
+import type { CalloutType } from '../extensions/Callout'
 import {
   Undo2, Redo2,
   Pilcrow, Heading1, Heading2, Heading3,
@@ -38,6 +40,8 @@ import {
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
   RemoveFormatting,
   Table2,
+  Workflow, BarChart2,
+  Info, AlertTriangle, CheckCircle2, XCircle, Lightbulb,
 } from 'lucide-vue-next'
 import { computed } from 'vue'
 
@@ -150,6 +154,7 @@ const editor = useEditor({
     TableRow,
     TableHeader,
     TableCell,
+    Callout,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -166,6 +171,44 @@ function scheduleSave(): void {
 
 function insertTable(): void {
   editor.value?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+}
+
+function insertMermaidDiagram(): void {
+  editor.value?.chain().focus().insertContent({
+    type: 'codeBlock',
+    attrs: { language: 'mermaid' },
+    content: [{ type: 'text', text: 'flowchart LR\n  A[Start] --> B{Decision?}\n  B -->|Yes| C[Do it]\n  B -->|No| D[Skip]\n  C --> E[End]\n  D --> E' }],
+  }).run()
+}
+
+function insertChartBlock(): void {
+  editor.value?.chain().focus().insertContent({
+    type: 'codeBlock',
+    attrs: { language: 'chart' },
+    content: [{ type: 'text', text: JSON.stringify({
+      type: 'bar',
+      data: {
+        labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+        datasets: [{ label: 'Revenue', data: [12, 19, 8, 15, 22, 17], backgroundColor: 'rgba(91,141,239,0.7)', borderColor: 'rgba(91,141,239,1)', borderWidth: 1 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#e8e8e8' } } },
+        scales: {
+          x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          y: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        },
+      },
+    }, null, 2) }],
+  }).run()
+}
+
+function insertCallout(calloutType: CalloutType = 'info'): void {
+  editor.value?.chain().focus().insertContent({
+    type: 'callout',
+    attrs: { calloutType },
+    content: [{ type: 'paragraph' }],
+  }).run()
 }
 
 async function flushSave(overrideId?: string): Promise<void> {
@@ -370,7 +413,39 @@ onBeforeUnmount(() => {
         >
           <Braces :size="14" />
         </button>
+        <button class="tb-btn" title="Insert Mermaid diagram" @click="insertMermaidDiagram()">
+          <Workflow :size="14" />
+        </button>
+        <button class="tb-btn" title="Insert Chart.js chart" @click="insertChartBlock()">
+          <BarChart2 :size="14" />
+        </button>
       </div>
+
+      <!-- Callout dropdown -->
+      <ToolbarDropdown :active="editor?.isActive('callout') ?? false">
+        <template #label>
+          <component :is="editor?.isActive('callout', { calloutType: 'warning' }) ? AlertTriangle
+            : editor?.isActive('callout', { calloutType: 'success' }) ? CheckCircle2
+            : editor?.isActive('callout', { calloutType: 'danger' }) ? XCircle
+            : editor?.isActive('callout', { calloutType: 'tip' }) ? Lightbulb
+            : Info" :size="14" />
+        </template>
+        <button class="tb-dropdown-item" @click="insertCallout('info')">
+          <Info :size="14" class="tb-di-svg" />Note
+        </button>
+        <button class="tb-dropdown-item" @click="insertCallout('warning')">
+          <AlertTriangle :size="14" class="tb-di-svg" />Warning
+        </button>
+        <button class="tb-dropdown-item" @click="insertCallout('success')">
+          <CheckCircle2 :size="14" class="tb-di-svg" />Success
+        </button>
+        <button class="tb-dropdown-item" @click="insertCallout('danger')">
+          <XCircle :size="14" class="tb-di-svg" />Danger
+        </button>
+        <button class="tb-dropdown-item" @click="insertCallout('tip')">
+          <Lightbulb :size="14" class="tb-di-svg" />Tip
+        </button>
+      </ToolbarDropdown>
 
       <div class="tb-sep" />
 

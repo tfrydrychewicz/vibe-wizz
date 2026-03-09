@@ -70,6 +70,8 @@ import TableHeader from '@tiptap/extension-table-header'
 import { isInTable, CellSelection } from '@tiptap/pm/tables'
 import TableContextMenu from './TableContextMenu.vue'
 import AIPromptModal from './AIPromptModal.vue'
+import { Callout } from '../extensions/Callout'
+import type { CalloutType } from '../extensions/Callout'
 import {
   hoveredAutoDetection,
   scheduleHideAutoDetection,
@@ -91,6 +93,7 @@ import {
   Palette,
   Mic, MicOff, ChevronDown as ChevronDownIcon,
   ScrollText, X, Sparkles, Table2, RefreshCw, Workflow,
+  Info, AlertTriangle, CheckCircle2, XCircle, Lightbulb, BarChart2,
 } from 'lucide-vue-next'
 import { useEntityChips } from '../composables/useEntityChips'
 import { renderEntityChip, escapeHtml } from '../utils/markdown'
@@ -717,6 +720,21 @@ const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   { id: 'action', label: 'Extract action items', description: 'AI-extract tasks (alias)', icon: 'sparkles' },
   { id: 'date', label: 'Insert date', description: 'Pick a date to insert at cursor', icon: 'calendar' },
+  {
+    id: 'callout',
+    label: 'Callout',
+    description: 'Insert a callout block',
+    icon: 'message-square',
+    subItems: [
+      { id: 'callout:info',    label: 'Note',    description: 'Informational note',  icon: 'info' },
+      { id: 'callout:warning', label: 'Warning', description: 'Warning block',       icon: 'alert-triangle' },
+      { id: 'callout:success', label: 'Success', description: 'Success block',       icon: 'check-circle-2' },
+      { id: 'callout:danger',  label: 'Danger',  description: 'Danger / error block', icon: 'x-circle' },
+      { id: 'callout:tip',     label: 'Tip',     description: 'Tip or pro tip',      icon: 'lightbulb' },
+    ],
+  },
+  { id: 'chart', label: 'Chart', description: 'Insert an interactive Chart.js chart', icon: 'bar-chart-2' },
+  { id: 'mermaid', label: 'Diagram', description: 'Insert a Mermaid diagram', icon: 'workflow' },
 ]
 
 async function extractAndInsertActions(
@@ -857,6 +875,18 @@ function buildSlashCommandSuggestion() {
           }).run()
       } else if (item.id === 'date') {
         openDatePicker()
+      } else if (item.id.startsWith('callout:')) {
+        const calloutType = item.id.split(':')[1] as CalloutType
+        ;(ed as unknown as { chain(): { focus(): { insertContent(c: unknown): { run(): void } } } })
+          .chain().focus().insertContent({
+            type: 'callout',
+            attrs: { calloutType },
+            content: [{ type: 'paragraph' }],
+          }).run()
+      } else if (item.id === 'chart') {
+        insertChartBlock()
+      } else if (item.id === 'mermaid') {
+        insertMermaidDiagram()
       }
     },
     render: () => {
@@ -1040,6 +1070,7 @@ const editor = useEditor({
     TableRow,
     TableHeader,
     TableCell,
+    Callout,
   ],
   content: { type: 'doc', content: [] },
   onUpdate() {
@@ -1305,6 +1336,45 @@ function insertMermaidDiagram(): void {
     type: 'codeBlock',
     attrs: { language: 'mermaid' },
     content: [{ type: 'text', text: DEFAULT_MERMAID_SOURCE }],
+  }).run()
+}
+
+const DEFAULT_CHART_SOURCE = JSON.stringify({
+  type: 'bar',
+  data: {
+    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+    datasets: [{
+      label: 'Revenue',
+      data: [12, 19, 8, 15, 22, 17],
+      backgroundColor: 'rgba(91, 141, 239, 0.7)',
+      borderColor: 'rgba(91, 141, 239, 1)',
+      borderWidth: 1,
+    }],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: '#e8e8e8' } } },
+    scales: {
+      x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+      y: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+    },
+  },
+}, null, 2)
+
+function insertChartBlock(): void {
+  editor.value?.chain().focus().insertContent({
+    type: 'codeBlock',
+    attrs: { language: 'chart' },
+    content: [{ type: 'text', text: DEFAULT_CHART_SOURCE }],
+  }).run()
+}
+
+function insertCallout(calloutType: CalloutType = 'info'): void {
+  editor.value?.chain().focus().insertContent({
+    type: 'callout',
+    attrs: { calloutType },
+    content: [{ type: 'paragraph' }],
   }).run()
 }
 
@@ -1940,7 +2010,40 @@ onBeforeUnmount(() => {
         >
           <Workflow :size="14" />
         </button>
+        <button
+          class="tb-btn"
+          title="Insert Chart.js chart"
+          @click="insertChartBlock()"
+        >
+          <BarChart2 :size="14" />
+        </button>
       </div>
+
+      <!-- Callout dropdown -->
+      <ToolbarDropdown :active="editor?.isActive('callout') ?? false">
+        <template #label>
+          <component :is="editor?.isActive('callout', { calloutType: 'warning' }) ? AlertTriangle
+            : editor?.isActive('callout', { calloutType: 'success' }) ? CheckCircle2
+            : editor?.isActive('callout', { calloutType: 'danger' }) ? XCircle
+            : editor?.isActive('callout', { calloutType: 'tip' }) ? Lightbulb
+            : Info" :size="14" />
+        </template>
+        <button class="tb-dropdown-item" @click="insertCallout('info')">
+          <Info :size="14" class="tb-di-svg" />Note
+        </button>
+        <button class="tb-dropdown-item" @click="insertCallout('warning')">
+          <AlertTriangle :size="14" class="tb-di-svg" />Warning
+        </button>
+        <button class="tb-dropdown-item" @click="insertCallout('success')">
+          <CheckCircle2 :size="14" class="tb-di-svg" />Success
+        </button>
+        <button class="tb-dropdown-item" @click="insertCallout('danger')">
+          <XCircle :size="14" class="tb-di-svg" />Danger
+        </button>
+        <button class="tb-dropdown-item" @click="insertCallout('tip')">
+          <Lightbulb :size="14" class="tb-di-svg" />Tip
+        </button>
+      </ToolbarDropdown>
 
       <div class="tb-sep" />
 

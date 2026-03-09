@@ -45,6 +45,7 @@
     "@tiptap/starter-kit": "^3.20.0",
     "@tiptap/vue-3": "^3.20.0",
     "better-sqlite3": "^12.6.2",
+    "chart.js": "^4.5.1",
     "linkedom": "^0.18.12",
     "lowlight": "^3.3.0",
     "lucide-vue-next": "^0.575.0",

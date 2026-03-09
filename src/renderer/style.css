@@ -28,6 +28,9 @@
   --color-danger: #ef4444;
   --color-danger-subtle: rgba(239, 68, 68, 0.1);
   --color-danger-border: rgba(239, 68, 68, 0.35);
+  --color-warning: #f59e0b;
+  --color-warning-subtle: rgba(245, 158, 11, 0.1);
+  --color-warning-border: rgba(245, 158, 11, 0.35);
   --color-success: #34d399;
   --color-note: #50c0a0;
 

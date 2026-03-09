@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import type { Chart } from 'chart.js'
 import { NodeViewWrapper, NodeViewContent, nodeViewProps } from '@tiptap/vue-3'
 import { ChevronDown, ChevronUp, Maximize2, X } from 'lucide-vue-next'
 import { renderMermaid } from '../utils/mermaid'
+import { renderChart } from '../utils/chartRenderer'
 
 const props = defineProps(nodeViewProps)
 
@@ -11,6 +13,7 @@ const props = defineProps(nodeViewProps)
 const LANGUAGES = [
   { value: '',            label: 'Auto-detect' },
   { value: 'mermaid',    label: 'Mermaid (diagram)' },
+  { value: 'chart',      label: 'Chart.js (chart)' },
   { value: 'bash',       label: 'Bash / Shell' },
   { value: 'c',          label: 'C' },
   { value: 'cpp',        label: 'C++' },
@@ -44,6 +47,9 @@ const LANGUAGES = [
 
 const selectedLanguage = computed(() => props.node.attrs.language ?? '')
 const isMermaid = computed(() => selectedLanguage.value === 'mermaid')
+const isChart   = computed(() => selectedLanguage.value === 'chart')
+// Whether the block has a live preview (either kind).
+const hasPreview = computed(() => isMermaid.value || isChart.value)
 
 function onLanguageChange(e: Event): void {
   props.updateAttributes({ language: (e.target as HTMLSelectElement).value || null })
@@ -78,6 +84,7 @@ function onThemeChange(e: Event): void {
 // ─── Hide-code toggle ─────────────────────────────────────────────────────────
 
 const hideCode = computed(() => !!props.node.attrs.hideCode)
+const hasError  = computed(() => !!mermaidError.value || !!chartError.value)
 
 function toggleHideCode(): void {
   props.updateAttributes({ hideCode: !props.node.attrs.hideCode })
@@ -85,14 +92,10 @@ function toggleHideCode(): void {
 
 // ─── Mermaid rendering ────────────────────────────────────────────────────────
 
-// Unique id per instance — mermaid uses it as the SVG element id.
-const mermaidId = `mermaid-${Math.random().toString(36).slice(2)}`
-
+const mermaidId  = `mermaid-${Math.random().toString(36).slice(2)}`
 const mermaidSvg   = ref('')
 const mermaidError = ref('')
 const mermaidBusy  = ref(false)
-
-let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 async function renderDiagram(): Promise<void> {
   if (!isMermaid.value) return
@@ -116,40 +119,77 @@ async function renderDiagram(): Promise<void> {
   }
 }
 
+// ─── Chart rendering ──────────────────────────────────────────────────────────
+
+const chartCanvasRef = ref<HTMLCanvasElement | null>(null)
+const chartInstance  = ref<Chart | null>(null)
+const chartError     = ref('')
+const chartBusy      = ref(false)
+
+async function renderChartBlock(): Promise<void> {
+  if (!isChart.value) return
+  const source = props.node.textContent?.trim()
+  if (!source) {
+    chartInstance.value?.destroy()
+    chartInstance.value = null
+    chartError.value = ''
+    return
+  }
+
+  // Wait for canvas to be in the DOM.
+  await nextTick()
+  if (!chartCanvasRef.value) return
+
+  chartBusy.value = true
+  const result = renderChart(chartCanvasRef.value, source, chartInstance.value)
+  chartBusy.value = false
+
+  if (result.error === null) {
+    chartInstance.value = result.chart
+    chartError.value = ''
+  } else {
+    chartInstance.value = null
+    chartError.value = result.error
+  }
+}
+
+// ─── Shared debounce for both renderers ───────────────────────────────────────
+
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
 function scheduledRender(): void {
   if (debounceTimer !== null) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => { renderDiagram() }, 400)
+  debounceTimer = setTimeout(() => {
+    if (isMermaid.value) void renderDiagram()
+    else if (isChart.value) void renderChartBlock()
+  }, 400)
 }
 
 watch(() => props.node.textContent, scheduledRender)
-watch(isMermaid, (val) => { if (val) scheduledRender() })
+watch(isMermaid, (val) => { if (val) void renderDiagram() })
+watch(isChart,   (val) => { if (val) void renderChartBlock() })
 watch(selectedTheme, () => { if (isMermaid.value) scheduledRender() })
 
 onMounted(() => {
-  if (isMermaid.value) renderDiagram()
+  if (isMermaid.value) void renderDiagram()
+  else if (isChart.value) void renderChartBlock()
 })
 
 // ─── Resize handle ────────────────────────────────────────────────────────────
 
-const MIN_PREVIEW_HEIGHT = 80
+const MIN_PREVIEW_HEIGHT  = 80
 const DEFAULT_PREVIEW_HEIGHT = 200
-const SCROLL_ZONE = 80   // px from edge of scroll container to start auto-scroll
-const MAX_SCROLL_PX = 14 // px per rAF frame at maximum speed
+const SCROLL_ZONE  = 80
+const MAX_SCROLL_PX = 14
 
-// Persisted height from node attribute; null = default (auto/min-height CSS).
+// `mermaidHeight` attribute is reused for both mermaid and chart preview height.
 const persistedHeight = computed(() => props.node.attrs.mermaidHeight as number | null)
-
-// Local ref updated every mousemove — never triggers TipTap transactions.
 const dragHeight = ref<number | null>(null)
-
-// The height actually applied to the preview div during and after drag.
 const currentHeight = computed(() => dragHeight.value ?? persistedHeight.value)
-
 const isResizing = ref(false)
 
 const resizeHandleRef = ref<HTMLElement | null>(null)
 
-/** Walk up the DOM to find the nearest vertically-scrollable ancestor. */
 function findScrollParent(el: Element): Element {
   let cur: Element | null = el.parentElement
   while (cur && cur !== document.documentElement) {
@@ -167,29 +207,23 @@ function startResize(e: MouseEvent): void {
   const startY = e.clientY
   const startH = currentHeight.value ?? DEFAULT_PREVIEW_HEIGHT
 
-  // Snapshot the scroll container once at drag start.
   const scrollEl: Element = resizeHandleRef.value
     ? findScrollParent(resizeHandleRef.value)
     : document.documentElement
 
-  // Shared mutable state between rAF tick and mousemove handler.
   let lastClientY = e.clientY
   let rafId: number | null = null
 
   function tick(): void {
-    // Auto-scroll when cursor is near the top or bottom edge of the container.
     const rect = scrollEl.getBoundingClientRect()
     const distBottom = rect.bottom - lastClientY
     const distTop    = lastClientY - rect.top
 
     if (distBottom < SCROLL_ZONE && distBottom > 0) {
-      const speed = Math.ceil(MAX_SCROLL_PX * (1 - distBottom / SCROLL_ZONE))
-      scrollEl.scrollBy(0, speed)
+      scrollEl.scrollBy(0, Math.ceil(MAX_SCROLL_PX * (1 - distBottom / SCROLL_ZONE)))
     } else if (distTop < SCROLL_ZONE && distTop > 0) {
-      const speed = Math.ceil(MAX_SCROLL_PX * (1 - distTop / SCROLL_ZONE))
-      scrollEl.scrollBy(0, -speed)
+      scrollEl.scrollBy(0, -Math.ceil(MAX_SCROLL_PX * (1 - distTop / SCROLL_ZONE)))
     }
-
     rafId = requestAnimationFrame(tick)
   }
   rafId = requestAnimationFrame(tick)
@@ -197,13 +231,15 @@ function startResize(e: MouseEvent): void {
   function onMove(ev: MouseEvent): void {
     lastClientY = ev.clientY
     dragHeight.value = Math.max(MIN_PREVIEW_HEIGHT, startH + (ev.clientY - startY))
+
+    // After resizing the container, tell Chart.js to re-layout.
+    if (isChart.value) chartInstance.value?.resize()
   }
 
   function onUp(): void {
     isResizing.value = false
     if (rafId !== null) cancelAnimationFrame(rafId)
     if (dragHeight.value !== null) {
-      // Commit only once — single ProseMirror transaction on release.
       props.updateAttributes({ mermaidHeight: dragHeight.value })
       dragHeight.value = null
     }
@@ -215,32 +251,21 @@ function startResize(e: MouseEvent): void {
   window.addEventListener('mouseup', onUp)
 }
 
-// ─── Fullscreen lightbox ──────────────────────────────────────────────────────
+// ─── Fullscreen lightbox (Mermaid only) ───────────────────────────────────────
 
 const fullscreen = ref(false)
-
-// The inline preview and the overlay must use different SVG ids.
-// Mermaid embeds the id in both the `id` attribute AND the internal
-// `<style>` block selectors. Duplicate ids in the DOM cause the style
-// rules to target the wrong element, making the overlay SVG invisible.
-const mermaidFsId = `${mermaidId}-fs`
+const mermaidFsId   = `${mermaidId}-fs`
 const fullscreenSvg = computed(() =>
   mermaidSvg.value ? mermaidSvg.value.replaceAll(mermaidId, mermaidFsId) : ''
 )
 
-function openFullscreen(): void {
-  fullscreen.value = true
-}
-
-function closeFullscreen(): void {
-  fullscreen.value = false
-}
+function openFullscreen(): void  { fullscreen.value = true  }
+function closeFullscreen(): void { fullscreen.value = false }
 
 function onOverlayKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') closeFullscreen()
 }
 
-// Close on Escape from anywhere while overlay is open
 function onGlobalKeydown(e: KeyboardEvent): void {
   if (fullscreen.value && e.key === 'Escape') closeFullscreen()
 }
@@ -248,9 +273,11 @@ function onGlobalKeydown(e: KeyboardEvent): void {
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
 })
+
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   if (debounceTimer !== null) clearTimeout(debounceTimer)
+  chartInstance.value?.destroy()
 })
 </script>
 
@@ -260,15 +287,15 @@ onBeforeUnmount(() => {
     <!-- Header ──────────────────────────────────────────────────────────── -->
     <div
       class="code-block-header"
-      :class="{ 'code-block-header--seamless': isMermaid && hideCode && !mermaidError }"
+      :class="{ 'code-block-header--seamless': hasPreview && hideCode && !hasError }"
       contenteditable="false"
     >
-      <!-- Left: hide/show toggle (mermaid only) -->
+      <!-- Left: hide/show toggle (mermaid or chart) -->
       <button
-        v-if="isMermaid"
+        v-if="hasPreview"
         class="code-block-hide-toggle"
-        :disabled="!!mermaidError"
-        :title="mermaidError ? 'Fix the syntax error before hiding the code' : undefined"
+        :disabled="hasError"
+        :title="hasError ? 'Fix the error before hiding the code' : undefined"
         @click="toggleHideCode"
       >
         <component :is="hideCode ? ChevronDown : ChevronUp" :size="11" />
@@ -301,17 +328,15 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Code ────────────────────────────────────────────────────────────── -->
-    <!-- v-show (not v-if): NodeViewContent must always stay mounted so
-         TipTap's ProseMirror can track the cursor inside the block. -->
-    <pre v-show="!isMermaid || !hideCode || !!mermaidError"><NodeViewContent as="code" /></pre>
+    <pre v-show="!hasPreview || !hideCode || hasError"><NodeViewContent as="code" /></pre>
 
     <!-- Mermaid preview ─────────────────────────────────────────────────── -->
     <div
       v-if="isMermaid"
-      class="mermaid-preview"
+      class="preview-pane"
       :class="{
-        'mermaid-preview--resizing': isResizing,
-        'mermaid-preview--sized': !!currentHeight,
+        'preview-pane--resizing': isResizing,
+        'preview-pane--sized': !!currentHeight,
       }"
       :style="{
         background: previewBg,
@@ -319,15 +344,12 @@ onBeforeUnmount(() => {
       }"
       contenteditable="false"
     >
-      <!-- Loading -->
-      <div v-if="mermaidBusy && !mermaidSvg && !mermaidError" class="mermaid-loading">
+      <div v-if="mermaidBusy && !mermaidSvg && !mermaidError" class="preview-hint">
         Rendering diagram…
       </div>
-      <!-- Empty source -->
-      <div v-else-if="!mermaidSvg && !mermaidError && !mermaidBusy" class="mermaid-loading">
+      <div v-else-if="!mermaidSvg && !mermaidError && !mermaidBusy" class="preview-hint">
         Start typing Mermaid code above to preview the diagram.
       </div>
-      <!-- Rendered SVG (clickable) -->
       <div
         v-else-if="mermaidSvg"
         class="mermaid-svg"
@@ -339,21 +361,52 @@ onBeforeUnmount(() => {
         @keydown.space.prevent="openFullscreen"
         v-html="mermaidSvg"
       />
-      <!-- Error -->
-      <div v-else-if="mermaidError" class="mermaid-error">
-        <span class="mermaid-error-icon">⚠</span>
-        <pre class="mermaid-error-text">{{ mermaidError }}</pre>
+      <div v-else-if="mermaidError" class="preview-error">
+        <span class="preview-error-icon">⚠</span>
+        <pre class="preview-error-text">{{ mermaidError }}</pre>
       </div>
 
-      <!-- Resize handle -->
-      <div ref="resizeHandleRef" class="mermaid-resize-handle" @mousedown="startResize">
-        <div class="mermaid-resize-grip" />
+      <div ref="resizeHandleRef" class="preview-resize-handle" @mousedown="startResize">
+        <div class="preview-resize-grip" />
+      </div>
+    </div>
+
+    <!-- Chart preview ───────────────────────────────────────────────────── -->
+    <div
+      v-if="isChart"
+      class="preview-pane preview-pane--chart"
+      :class="{
+        'preview-pane--resizing': isResizing,
+        'preview-pane--sized': !!currentHeight,
+      }"
+      :style="{ height: currentHeight ? currentHeight + 'px' : undefined }"
+      contenteditable="false"
+    >
+      <div v-if="chartBusy && !chartInstance && !chartError" class="preview-hint">
+        Rendering chart…
+      </div>
+      <div v-else-if="!chartInstance && !chartError && !chartBusy" class="preview-hint">
+        Start typing a Chart.js JSON config above to preview the chart.
+      </div>
+      <div v-if="chartError" class="preview-error">
+        <span class="preview-error-icon">⚠</span>
+        <pre class="preview-error-text">{{ chartError }}</pre>
+      </div>
+      <!-- Canvas is always rendered (hidden via v-show) so chartInstance can reference it -->
+      <canvas
+        ref="chartCanvasRef"
+        v-show="!!chartInstance && !chartError"
+        class="chart-canvas"
+      />
+
+      <div ref="resizeHandleRef" class="preview-resize-handle" @mousedown="startResize">
+        <div class="preview-resize-grip" />
       </div>
     </div>
 
   </NodeViewWrapper>
 
-  <!-- Fullscreen lightbox ─────────────────────────────────────────────────── -->
+  <!-- Fullscreen lightbox (Mermaid only) ──────────────────────────────────── -->
   <Teleport to="body">
     <Transition name="mermaid-overlay">
       <div
@@ -477,37 +530,43 @@ onBeforeUnmount(() => {
   font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
-/* Mermaid preview ---------------------------------------------------------- */
-.mermaid-preview {
+/* Shared preview pane ------------------------------------------------------ */
+.preview-pane {
   position: relative;
   padding: 20px 24px 28px; /* bottom padding for resize handle */
   display: flex;
-  flex-direction: column;   /* children stack vertically */
+  flex-direction: column;
   justify-content: center;
   align-items: center;
-  min-height: 120px;
+  min-height: 140px;
   border-top: 1px solid var(--color-border);
   overflow: hidden;
 }
 
-.mermaid-preview--resizing {
+.preview-pane--chart {
+  background: var(--color-surface);
+  padding: 16px 16px 28px;
+}
+
+.preview-pane--resizing {
   user-select: none;
 }
 
-/* When the preview has an explicit height, make the SVG fill it */
-.mermaid-preview--sized .mermaid-svg {
+/* When the preview has an explicit height, make content fill it */
+.preview-pane--sized .mermaid-svg,
+.preview-pane--sized .chart-canvas {
   flex: 1;
-  min-height: 0;  /* allow flex child to shrink below intrinsic size */
+  min-height: 0;
 }
 
-.mermaid-preview--sized .mermaid-svg :deep(svg) {
-  /* viewBox + preserveAspectRatio="xMidYMid meet" keeps aspect ratio intact */
+.preview-pane--sized .mermaid-svg :deep(svg) {
   width: 100% !important;
   height: 100% !important;
   max-width: 100% !important;
   max-height: 100% !important;
 }
 
+/* Mermaid SVG --------------------------------------------------------------- */
 .mermaid-svg {
   width: 100%;
   overflow-x: auto;
@@ -524,21 +583,27 @@ onBeforeUnmount(() => {
 }
 
 .mermaid-svg :deep(svg) {
-  /* Respect mermaid's own max-width (diagram-content-sized) but prevent
-     overflow. Do NOT force width: 100% — that stretches compact diagrams. */
   max-width: 100% !important;
   height: auto !important;
   display: block;
 }
 
-.mermaid-loading {
+/* Chart canvas ------------------------------------------------------------- */
+.chart-canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+/* Shared preview messages -------------------------------------------------- */
+.preview-hint {
   color: var(--color-text-muted);
   font-size: 12px;
   font-style: italic;
   align-self: center;
 }
 
-.mermaid-error {
+.preview-error {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -549,14 +614,14 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-.mermaid-error-icon {
+.preview-error-icon {
   color: var(--color-danger);
   font-size: 14px;
   flex-shrink: 0;
   line-height: 1.4;
 }
 
-.mermaid-error-text {
+.preview-error-text {
   margin: 0;
   color: var(--color-danger);
   font-size: 12px;
@@ -569,7 +634,7 @@ onBeforeUnmount(() => {
 }
 
 /* Resize handle ------------------------------------------------------------ */
-.mermaid-resize-handle {
+.preview-resize-handle {
   position: absolute;
   bottom: 0;
   left: 0;
@@ -583,11 +648,11 @@ onBeforeUnmount(() => {
   transition: opacity 0.15s;
 }
 
-.mermaid-preview:hover .mermaid-resize-handle {
+.preview-pane:hover .preview-resize-handle {
   opacity: 1;
 }
 
-.mermaid-resize-grip {
+.preview-resize-grip {
   width: 32px;
   height: 3px;
   border-radius: 2px;
@@ -595,7 +660,7 @@ onBeforeUnmount(() => {
   transition: background 0.15s;
 }
 
-.mermaid-resize-handle:hover .mermaid-resize-grip {
+.preview-resize-handle:hover .preview-resize-grip {
   background: var(--color-text-muted);
 }
 
@@ -607,7 +672,7 @@ onBeforeUnmount(() => {
   background: rgba(0, 0, 0, 0.9);
   display: flex;
   flex-direction: column;
-  padding: 52px 24px 24px;   /* top: room for close button */
+  padding: 52px 24px 24px;
   cursor: zoom-out;
 }
 
@@ -646,8 +711,6 @@ onBeforeUnmount(() => {
 }
 
 .mermaid-overlay-svg :deep(svg) {
-  /* Fill the container; mermaid's viewBox + preserveAspectRatio="xMidYMid meet"
-     keeps the diagram proportional — no stretching. */
   width: 100% !important;
   height: 100% !important;
   max-width: 100% !important;
@@ -655,7 +718,6 @@ onBeforeUnmount(() => {
   display: block;
 }
 
-/* Overlay transition */
 .mermaid-overlay-enter-active,
 .mermaid-overlay-leave-active {
   transition: opacity 0.18s ease;
