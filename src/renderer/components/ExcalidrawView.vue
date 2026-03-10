@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
 import { PencilRuler, Pencil, Maximize2, X, Check, Loader2, Sparkles } from 'lucide-vue-next'
 import {
@@ -11,6 +11,8 @@ import {
   type AppState,
   type BinaryFiles,
 } from '../utils/excalidrawLoader'
+import RichTextInput from './RichTextInput.vue'
+import type { RichInputContent } from './RichTextInput.vue'
 
 const props = defineProps(nodeViewProps)
 
@@ -37,29 +39,29 @@ let pendingElements: readonly OrderedExcalidrawElement[] = []
 let pendingAppState: AppState | null = null
 let pendingFiles:    BinaryFiles     = {}
 
-// ─── AI Generate state ────────────────────────────────────────────────────────
+// ─── AI Generate state (lives inside the edit modal) ─────────────────────────
 
-const isGenerating    = ref(false)
-const generatePrompt  = ref('')
-const generateError   = ref<string | null>(null)
-const showGenerateBox = ref(false)
-const generateInputRef = ref<HTMLTextAreaElement | null>(null)
+const isGenerating     = ref(false)
+const generateError    = ref<string | null>(null)
+const showGeneratePanel = ref(false)
+const generateInputRef  = ref<InstanceType<typeof RichTextInput> | null>(null)
 
-function openGenerateBox(): void {
-  generatePrompt.value  = ''
-  generateError.value   = null
-  showGenerateBox.value = true
+function openGeneratePanel(): void {
+  generateError.value    = null
+  showGeneratePanel.value = true
   void nextTick(() => generateInputRef.value?.focus())
 }
 
-function closeGenerateBox(): void {
-  showGenerateBox.value = false
-  generateError.value   = null
-  isGenerating.value    = false
+function closeGeneratePanel(): void {
+  showGeneratePanel.value = false
+  generateError.value    = null
+  isGenerating.value     = false
+  generateInputRef.value?.clear()
 }
 
 async function generateDiagram(): Promise<void> {
-  const prompt = generatePrompt.value.trim()
+  const content: RichInputContent | undefined = generateInputRef.value?.getContent()
+  const prompt = content?.text?.trim() ?? ''
   if (!prompt) return
 
   isGenerating.value  = true
@@ -76,8 +78,43 @@ async function generateDiagram(): Promise<void> {
     return
   }
 
-  closeGenerateBox()
-  await openEditModal({ elementsJson: result.elements, appStateJson: result.appState })
+  closeGeneratePanel()
+
+  // Re-render Excalidraw canvas with the generated diagram
+  const { ExcalidrawComponent, createElement, createRoot } = await loadExcalidraw()
+  let newElements: ExcalidrawElement[] = []
+  let newAppState: Partial<AppState>   = {}
+  try { newElements = JSON.parse(result.elements) } catch { /* empty */ }
+  try { newAppState = JSON.parse(result.appState)  } catch { /* empty */ }
+
+  if (excalidrawContainer) {
+    reactRoot?.unmount()
+    reactRoot = createRoot(excalidrawContainer)
+    reactRoot.render(
+      createElement(ExcalidrawComponent, {
+        initialData: {
+          elements: newElements,
+          appState: { ...newAppState, theme: 'dark', collaborators: new Map() },
+          files:    {},
+        },
+        theme: 'dark',
+        onChange: (
+          els: readonly OrderedExcalidrawElement[],
+          state: AppState,
+          files: BinaryFiles,
+        ) => {
+          pendingElements = els
+          pendingAppState = state
+          pendingFiles    = files
+        },
+      }),
+    )
+    pendingElements = newElements as unknown as OrderedExcalidrawElement[]
+    pendingFiles    = {}
+  } else {
+    // Edit modal not open yet — open it with the generated data
+    await openEditModal({ elementsJson: result.elements, appStateJson: result.appState })
+  }
 }
 
 // ─── Edit modal ───────────────────────────────────────────────────────────────
@@ -162,11 +199,15 @@ async function saveAndClose(): Promise<void> {
 
     const svgEl = await exportToSvg({
       elements:  pendingElements as unknown as ExcalidrawElement[],
-      // exportBackground: false → transparent SVG; the block's surface color shows through.
-      appState:  { ...(pendingAppState ?? {}), exportBackground: false },
+      // Export with light theme (no SVG-level filter) and transparent background.
+      // The CSS filter on the preview wrapper applies invert(93%) hue-rotate(180deg),
+      // matching the dark-mode canvas exactly. exportBackground:false keeps the SVG
+      // transparent so the note's own surface shows through instead of a solid square.
+      appState:  { ...(pendingAppState ?? {}), exportBackground: false, theme: 'light' },
       files:     Object.keys(pendingFiles).length ? pendingFiles : null,
       exportPadding: 16,
     })
+    svgEl.setAttribute('data-wizz-v', '3')
     const svgString = new XMLSerializer().serializeToString(svgEl)
 
     props.updateAttributes({
@@ -266,13 +307,60 @@ function startResize(e: MouseEvent): void {
   window.addEventListener('mouseup', onUp)
 }
 
+// ─── Auto-generate SVG preview ───────────────────────────────────────────────
+// When a node has elements but no previewSvg (e.g. inserted by AI chat via the
+// main process, which cannot run Excalidraw's DOM-based exportToSvg), we run
+// the export here in the renderer automatically and persist the result so the
+// block shows a visual preview without requiring the user to open edit mode.
+
+  const isAutoGenerating = ref(false)
+
+async function autoGeneratePreview(): Promise<void> {
+  const elStr  = props.node.attrs.elements as string
+  const svgStr = props.node.attrs.previewSvg as string
+  // Regenerate if empty OR if the SVG is missing the v3 marker, meaning it was generated
+  // by an older code path with incorrect export settings.
+  const isStale = !svgStr || !svgStr.includes('data-wizz-v="3"')
+  if (!elStr || elStr === '[]' || (!isStale) || isAutoGenerating.value) return
+
+  isAutoGenerating.value = true
+  try {
+    const { exportToSvg } = await loadExcalidraw()
+
+    let parsedElements: ExcalidrawElement[] = []
+    let parsedFiles: BinaryFiles            = {}
+    try { parsedElements = JSON.parse(elStr)                              } catch { return }
+    try { parsedFiles    = JSON.parse(props.node.attrs.files as string)   } catch { /* empty */ }
+
+    let parsedAppState: Record<string, unknown> = {}
+    try { parsedAppState = JSON.parse(props.node.attrs.appState as string) } catch { /* use defaults */ }
+
+    const svgEl = await exportToSvg({
+      elements:  parsedElements,
+      appState:  { ...parsedAppState, exportBackground: false, theme: 'light' },
+      files:     Object.keys(parsedFiles).length ? parsedFiles : null,
+      exportPadding: 16,
+    })
+    svgEl.setAttribute('data-wizz-v', '3')
+    const svgString = new XMLSerializer().serializeToString(svgEl)
+    props.updateAttributes({ previewSvg: svgString })
+  } catch (err) {
+    console.warn('[ExcalidrawView] auto-preview generation failed:', err)
+  } finally {
+    isAutoGenerating.value = false
+  }
+}
+
+// Re-run when elements attr changes (e.g. note reloaded after note:diagram-added)
+watch(() => props.node.attrs.elements, () => { void autoGeneratePreview() })
+
 // ─── Global keyboard handler ──────────────────────────────────────────────────
 
 function onGlobalKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
-    if (fullscreen.value)      { closeLightbox();    return }
-    if (isEditing.value)       { cancelEdit();       return }
-    if (showGenerateBox.value) { closeGenerateBox(); return }
+    if (fullscreen.value)        { closeLightbox();      return }
+    if (showGeneratePanel.value) { closeGeneratePanel(); return }
+    if (isEditing.value)         { cancelEdit();         return }
   }
 }
 
@@ -286,6 +374,10 @@ onMounted(() => {
   // (session-only) so it is never written to the database.
   if (consumeExcalidrawAutoOpen()) {
     void openEditModal()
+  } else {
+    // Auto-generate preview for nodes that have elements but no SVG yet
+    // (e.g. created by the AI chat tool in the main process)
+    void autoGeneratePreview()
   }
 })
 
@@ -318,10 +410,6 @@ onBeforeUnmount(() => {
           <Maximize2 :size="12" />
           View
         </button>
-        <button class="excalidraw-btn excalidraw-btn--ai" title="Generate with AI" @click="openGenerateBox">
-          <Sparkles :size="12" />
-          Generate
-        </button>
         <button class="excalidraw-btn excalidraw-btn--primary" title="Edit drawing" @click="openEditModal()">
           <Pencil :size="12" />
           Edit
@@ -336,10 +424,16 @@ onBeforeUnmount(() => {
       :style="{ height: currentHeight ? currentHeight + 'px' : undefined }"
       contenteditable="false"
     >
-      <!-- Empty state -->
+      <!-- Empty state / auto-generating -->
       <div v-if="!hasDrawing" class="excalidraw-empty-state">
-        <Pencil :size="32" class="excalidraw-empty-icon" />
-        <span>Click <strong>Edit</strong> to start drawing</span>
+        <template v-if="isAutoGenerating">
+          <Loader2 :size="28" class="excalidraw-empty-icon excalidraw-spinner" />
+          <span>Rendering preview…</span>
+        </template>
+        <template v-else>
+          <Pencil :size="32" class="excalidraw-empty-icon" />
+          <span>Click <strong>Edit</strong> to start drawing</span>
+        </template>
       </div>
 
       <!-- SVG preview -->
@@ -364,58 +458,9 @@ onBeforeUnmount(() => {
 
   </NodeViewWrapper>
 
-  <!-- ── AI Generate overlay ──────────────────────────────────────────────── -->
-  <Teleport to="body">
-    <Transition name="excalidraw-gen">
-      <div
-        v-if="showGenerateBox"
-        class="excalidraw-gen-overlay"
-        @click.self="closeGenerateBox"
-      >
-        <div class="excalidraw-gen-box" role="dialog" aria-label="Generate diagram with AI">
-          <div class="excalidraw-gen-header">
-            <Sparkles :size="14" />
-            Generate Diagram with AI
-          </div>
-          <textarea
-            ref="generateInputRef"
-            v-model="generatePrompt"
-            class="form-textarea excalidraw-gen-input"
-            placeholder="Describe your diagram… e.g. 'User login flow with error handling' or 'Microservice architecture with API gateway, auth service, and database'"
-            rows="4"
-            :disabled="isGenerating"
-            @keydown.enter.meta.prevent="generateDiagram"
-            @keydown.esc.prevent="closeGenerateBox"
-          />
-          <div v-if="generateError" class="excalidraw-gen-error">
-            ⚠ {{ generateError }}
-          </div>
-          <div class="excalidraw-gen-footer">
-            <span class="excalidraw-gen-hint">⌘ Enter to generate · Esc to cancel</span>
-            <div class="excalidraw-gen-actions">
-              <button class="excalidraw-btn" :disabled="isGenerating" @click="closeGenerateBox">
-                <X :size="12" />
-                Cancel
-              </button>
-              <button
-                class="excalidraw-btn excalidraw-btn--ai"
-                :disabled="isGenerating || !generatePrompt.trim()"
-                @click="generateDiagram"
-              >
-                <Loader2 v-if="isGenerating" :size="12" class="excalidraw-spinner" />
-                <Sparkles v-else :size="12" />
-                {{ isGenerating ? 'Generating…' : 'Generate' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Transition>
-  </Teleport>
-
-  <!-- ── Edit modal header (Teleport to body) ─────────────────────────────── -->
+  <!-- ── Edit modal header + AI generate panel (Teleport to body) ────────── -->
   <!-- The Excalidraw canvas is created imperatively below the header (top:44px) -->
-  <!-- so there are no Vue scoped-CSS / Teleport timing issues. -->
+  <!-- so there are no Vue scoped-CSS / Teleport timing issues.                  -->
   <Teleport to="body">
     <div
       v-if="isEditing"
@@ -435,6 +480,15 @@ onBeforeUnmount(() => {
             <Loader2 :size="13" class="excalidraw-spinner" />
             Loading…
           </div>
+          <button
+            class="excalidraw-btn excalidraw-btn--ai"
+            :disabled="isLoading"
+            title="Generate diagram with AI"
+            @click="showGeneratePanel ? closeGeneratePanel() : openGeneratePanel()"
+          >
+            <Sparkles :size="13" />
+            {{ showGeneratePanel ? 'Hide Generator' : '✨ Generate' }}
+          </button>
           <button class="excalidraw-btn" :disabled="isSaving || isLoading" @click="cancelEdit">
             <X :size="13" />
             Cancel
@@ -450,6 +504,35 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
+
+      <!-- AI generate panel — slides down from the header -->
+      <Transition name="excalidraw-gen">
+        <div v-if="showGeneratePanel" class="excalidraw-gen-panel" contenteditable="false">
+          <RichTextInput
+            ref="generateInputRef"
+            class="excalidraw-gen-rich-input"
+            placeholder="Describe your diagram… e.g. 'User login flow with error handling' or 'Microservice architecture with auth, API gateway, and database'"
+            :disabled="isGenerating"
+            @submit="generateDiagram"
+            @escape="closeGeneratePanel"
+          />
+          <div v-if="generateError" class="excalidraw-gen-error">
+            ⚠ {{ generateError }}
+          </div>
+          <div class="excalidraw-gen-footer">
+            <span class="excalidraw-gen-hint">⌘ Enter to generate · Esc to close</span>
+            <button
+              class="excalidraw-btn excalidraw-btn--ai"
+              :disabled="isGenerating"
+              @click="generateDiagram"
+            >
+              <Loader2 v-if="isGenerating" :size="12" class="excalidraw-spinner" />
+              <Sparkles v-else :size="12" />
+              {{ isGenerating ? 'Generating…' : 'Generate' }}
+            </button>
+          </div>
+        </div>
+      </Transition>
     </div>
   </Teleport>
 
@@ -613,13 +696,18 @@ onBeforeUnmount(() => {
   opacity: 0.85;
 }
 
+.excalidraw-svg-preview {
+  /* Apply the same filter Excalidraw's dark-mode canvas uses. The SVG is exported
+     with theme:'light' (white background, raw element colors); the CSS filter here
+     inverts everything identically to how the editor canvas renders dark mode.
+     CSS filter on a wrapper div works for inline SVGs; the SVG filter attribute does not. */
+  filter: invert(93%) hue-rotate(180deg);
+}
+
 .excalidraw-svg-preview :deep(svg) {
   max-width: 100% !important;
   height: auto !important;
   display: block;
-  /* Strip the white background Excalidraw bakes into exported SVGs so the
-     block's own dark surface colour shows through instead. */
-  background: transparent !important;
 }
 
 .excalidraw-preview--sized .excalidraw-svg-preview {
@@ -665,13 +753,14 @@ onBeforeUnmount(() => {
 }
 
 /* ── Edit modal ──────────────────────────────────────────────────────────────── */
-/* The overlay only holds the header bar (44 px tall). The canvas sits below   */
-/* it in a plain DOM div created imperatively (z-index: 1199).                 */
+/* The overlay holds the header bar + the sliding generate panel.              */
+/* The canvas sits below in a plain DOM div created imperatively (z:1199).     */
 .excalidraw-modal-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
+  bottom: 0;
   z-index: 1200;
   background: transparent;
   pointer-events: none; /* let clicks through to the React canvas below */
@@ -780,52 +869,46 @@ onBeforeUnmount(() => {
   border-radius: 8px;
 }
 
+.excalidraw-lightbox-svg {
+  filter: invert(93%) hue-rotate(180deg);
+}
+
 .excalidraw-lightbox-svg :deep(svg) {
   max-width: 100% !important;
   max-height: 100% !important;
   display: block;
-  background: transparent !important;
 }
 
 /* ── AI Generate overlay ─────────────────────────────────────────────────────── */
-.excalidraw-gen-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1300;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.excalidraw-gen-box {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  width: 100%;
-  max-width: 520px;
+/* ── AI Generate panel (below modal header, above the canvas) ───────────────── */
+.excalidraw-gen-panel {
+  position: absolute;
+  top: 44px; /* directly below the header */
+  left: 0;
+  right: 0;
+  z-index: 1201;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-border);
+  padding: 12px 16px 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  pointer-events: all; /* re-enable interaction */
 }
 
-.excalidraw-gen-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.excalidraw-gen-rich-input {
+  min-height: 80px;
+  max-height: 160px;
+  overflow-y: auto;
   font-size: 13px;
-  font-weight: 500;
-  color: #c084fc;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 7px 10px;
 }
-
-.excalidraw-gen-input {
-  resize: vertical;
-  min-height: 90px;
-  font-size: 13px;
-  line-height: 1.5;
+.excalidraw-gen-rich-input:focus-within {
+  border-color: var(--color-accent);
 }
 
 .excalidraw-gen-error {
@@ -849,19 +932,15 @@ onBeforeUnmount(() => {
   color: var(--color-text-muted);
 }
 
-.excalidraw-gen-actions {
-  display: flex;
-  gap: 6px;
-}
-
 /* ── Transitions ─────────────────────────────────────────────────────────────── */
 .excalidraw-gen-enter-active,
 .excalidraw-gen-leave-active {
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
 .excalidraw-gen-enter-from,
 .excalidraw-gen-leave-to {
   opacity: 0;
+  transform: translateY(-6px);
 }
 
 .excalidraw-lightbox-enter-active,

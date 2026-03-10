@@ -94,7 +94,7 @@ import {
   Check, ExternalLink, Trash2,
   Palette,
   Mic, MicOff, ChevronDown as ChevronDownIcon,
-  ScrollText, X, Sparkles, Table2, RefreshCw, Workflow,
+  ScrollText, X, Sparkles, Table2, RefreshCw, Workflow, Loader2,
   Info, AlertTriangle, CheckCircle2, XCircle, Lightbulb, BarChart2, PencilRuler,
 } from 'lucide-vue-next'
 import { useEntityChips } from '../composables/useEntityChips'
@@ -563,6 +563,27 @@ const datePickerValue = ref('')
 const datePickerInputRef = ref<HTMLInputElement | null>(null)
 const datePickerPopupRef = ref<HTMLDivElement | null>(null)
 
+// ── AI Diagram Prompt state ──────────────────────────────────────────────────
+const showDiagramPrompt   = ref(false)
+const diagramPromptRef    = ref<HTMLInputElement | null>(null)
+const diagramPromptText   = ref('')
+const diagramPromptError  = ref<string | null>(null)
+
+function openDiagramPrompt(): void {
+  diagramPromptText.value  = ''
+  diagramPromptError.value = null
+  showDiagramPrompt.value  = true
+  void nextTick(() => diagramPromptRef.value?.focus())
+}
+
+async function submitDiagramPrompt(): Promise<void> {
+  const prompt = diagramPromptText.value.trim()
+  if (!prompt) return
+  showDiagramPrompt.value = false
+  diagramPromptError.value = null
+  await insertAIDiagramWithPrompt(prompt)
+}
+
 // ── AI Inline Modal state ────────────────────────────────────────────────────
 const showAIModal = ref(false)
 const aiModalLoading = ref(false)
@@ -737,7 +758,16 @@ const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   { id: 'chart', label: 'Chart', description: 'Insert an interactive Chart.js chart', icon: 'bar-chart-2' },
   { id: 'mermaid', label: 'Diagram', description: 'Insert a Mermaid diagram', icon: 'workflow' },
-  { id: 'excalidraw', label: 'Drawing', description: 'Insert an Excalidraw whiteboard', icon: 'pencil-ruler' },
+  {
+    id: 'excalidraw',
+    label: 'Drawing',
+    description: 'Insert an Excalidraw whiteboard',
+    icon: 'pencil-ruler',
+    subItems: [
+      { id: 'excalidraw:blank',  label: 'Blank drawing',    description: 'Open empty Excalidraw canvas', icon: 'pencil-ruler' },
+      { id: 'excalidraw:ai',     label: 'Generate with AI', description: 'Describe a diagram, AI draws it', icon: 'sparkles' },
+    ],
+  },
 ]
 
 async function extractAndInsertActions(
@@ -890,8 +920,10 @@ function buildSlashCommandSuggestion() {
         insertChartBlock()
       } else if (item.id === 'mermaid') {
         insertMermaidDiagram()
-      } else if (item.id === 'excalidraw') {
+      } else if (item.id === 'excalidraw' || item.id === 'excalidraw:blank') {
         insertExcalidrawDrawing()
+      } else if (item.id === 'excalidraw:ai') {
+        openDiagramPrompt()
       }
     },
     render: () => {
@@ -1385,6 +1417,33 @@ function insertExcalidrawDrawing(): void {
   }).run()
 }
 
+const isInsertingAIDiagram = ref(false)
+
+async function insertAIDiagramWithPrompt(prompt: string): Promise<void> {
+  if (!prompt.trim() || isInsertingAIDiagram.value) return
+  isInsertingAIDiagram.value = true
+  try {
+    const result = await (window.api.invoke('excalidraw:generate', { prompt }) as Promise<
+      { elements: string; appState: string } | { error: string }
+    >)
+    if ('error' in result) {
+      console.error('[NoteEditor] AI diagram generation failed:', result.error)
+      return
+    }
+    editor.value?.chain().focus().insertContent({
+      type: 'excalidraw',
+      attrs: {
+        elements:   result.elements,
+        appState:   result.appState,
+        files:      '{}',
+        previewSvg: '',
+      },
+    }).run()
+  } finally {
+    isInsertingAIDiagram.value = false
+  }
+}
+
 function insertCallout(calloutType: CalloutType = 'info'): void {
   editor.value?.chain().focus().insertContent({
     type: 'callout',
@@ -1737,6 +1796,13 @@ const unsubscribeActionUnlinked = window.api.on('action:unlinked', (...args: unk
   }
 })
 
+// Reload note body when the AI chat has appended an Excalidraw diagram to this note.
+const unsubDiagramAdded = window.api.on('note:diagram-added', (...args: unknown[]) => {
+  const { noteId } = args[0] as { noteId: string }
+  if (noteId !== props.noteId) return
+  void loadNote(noteId)
+})
+
 // Called after every loadNote to reconcile task-item checked states with the DB
 // and populate taskDataCache so ActionTaskItem chips show live metadata.
 async function syncTaskItemsWithDB(): Promise<void> {
@@ -1881,6 +1947,7 @@ onBeforeUnmount(() => {
   unsubscribeActionCreated()
   unsubscribeEntityUpdated()
   unsubscribeActionUnlinked()
+  unsubDiagramAdded()
   unsubTranscriptPartial()
   unsubTranscriptComplete()
   unsubTranscriptError()
@@ -2431,6 +2498,48 @@ onBeforeUnmount(() => {
       @submit="onAIPromptSubmit"
       @close="closeAIModal"
     />
+
+  <!-- ── AI Diagram Prompt ───────────────────────────────────────────────── -->
+  <Teleport to="body">
+    <Transition name="diagram-prompt">
+      <div
+        v-if="showDiagramPrompt"
+        class="diagram-prompt-overlay"
+        @click.self="showDiagramPrompt = false"
+      >
+        <div class="diagram-prompt-box" role="dialog" aria-label="Generate diagram with AI">
+          <div class="diagram-prompt-header">
+            <Sparkles :size="14" />
+            Generate Diagram with AI
+          </div>
+          <input
+            ref="diagramPromptRef"
+            v-model="diagramPromptText"
+            class="form-input diagram-prompt-input"
+            placeholder="Describe your diagram — e.g. 'User login flow with MFA and error handling'"
+            :disabled="isInsertingAIDiagram"
+            @keydown.enter="submitDiagramPrompt"
+            @keydown.esc="showDiagramPrompt = false"
+          />
+          <div v-if="diagramPromptError" class="diagram-prompt-error">
+            ⚠ {{ diagramPromptError }}
+          </div>
+          <div class="diagram-prompt-footer">
+            <span class="diagram-prompt-hint">Enter to generate · Esc to cancel</span>
+            <button
+              class="diagram-prompt-btn"
+              :disabled="isInsertingAIDiagram || !diagramPromptText.trim()"
+              @click="submitDiagramPrompt"
+            >
+              <Loader2 v-if="isInsertingAIDiagram" :size="12" class="diagram-prompt-spinner" />
+              <Sparkles v-else :size="12" />
+              {{ isInsertingAIDiagram ? 'Generating…' : 'Generate' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
   </div>
 </template>
 
@@ -2745,5 +2854,91 @@ onBeforeUnmount(() => {
   float: left;
   height: 0;
   font-size: 13px;
+}
+
+/* ── AI Diagram Prompt ───────────────────────────────────────────────────── */
+.diagram-prompt-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9100;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.diagram-prompt-box {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  width: 100%;
+  max-width: 500px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.diagram-prompt-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #c084fc;
+}
+.diagram-prompt-input {
+  font-size: 13px;
+  width: 100%;
+}
+.diagram-prompt-error {
+  font-size: 12px;
+  color: var(--color-danger);
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.diagram-prompt-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.diagram-prompt-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.diagram-prompt-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 5px;
+  border: 1px solid rgba(192, 132, 252, 0.4);
+  background: rgba(192, 132, 252, 0.15);
+  color: #c084fc;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.diagram-prompt-btn:hover:not(:disabled) {
+  background: rgba(192, 132, 252, 0.25);
+}
+.diagram-prompt-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+@keyframes diagram-prompt-spin { to { transform: rotate(360deg); } }
+.diagram-prompt-spinner {
+  animation: diagram-prompt-spin 0.8s linear infinite;
+}
+.diagram-prompt-enter-active,
+.diagram-prompt-leave-active {
+  transition: opacity 0.15s ease;
+}
+.diagram-prompt-enter-from,
+.diagram-prompt-leave-to {
+  opacity: 0;
 }
 </style>

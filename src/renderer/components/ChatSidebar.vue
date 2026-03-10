@@ -56,6 +56,14 @@ let unsubAgentPhase: (() => void) | null = null
 let unsubWebSearch: (() => void) | null = null
 
 onMounted(async () => {
+  // If a previous chat request was pending when the sidebar was closed, reset the
+  // loading state so the panel doesn't open stuck in a permanent loading spinner.
+  if (isLoading.value) {
+    isLoading.value = false
+    agentSteps.value = []
+    agentPhase.value = 'idle'
+  }
+
   const webSearchSetting = await window.api.invoke('settings:get', { key: 'web_search_enabled' }) as string | null
   webSearchEnabled.value = webSearchSetting === 'true'
 
@@ -267,11 +275,12 @@ function actionCardMeta(type: ExecutedAction['type']): ActionCardMeta {
     case 'updated_entity':        return { icon: 'UserCheck',     label: 'Updated entity',          variant: 'blue',                        linkLabel: ''              }
     case 'ensured_action_created': return { icon: 'Link',         label: 'Created & linked task',   variant: 'green', linkView: 'actions',  linkLabel: 'Open Actions'  }
     case 'ensured_action_found':   return { icon: 'Link2',        label: 'Linked existing task',    variant: 'blue',  linkView: 'actions',  linkLabel: 'Open Actions'  }
+    case 'created_excalidraw':     return { icon: 'PenTool',      label: 'Created Excalidraw diagram', variant: 'green',                    linkLabel: 'Open Note'     }
   }
 }
 
 function onActionCardLink(e: MouseEvent, action: ExecutedAction): void {
-  if (action.type === 'created_note') {
+  if (action.type === 'created_note' || action.type === 'created_excalidraw') {
     const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
     emit('open-note', { noteId: String(action.payload.id), title: action.payload.title ?? 'Untitled', mode })
   } else {

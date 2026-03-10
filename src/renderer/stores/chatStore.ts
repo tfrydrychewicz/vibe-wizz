@@ -21,6 +21,7 @@ export interface ExecutedAction {
     | 'updated_entity'
     | 'ensured_action_created'   // ensure_action_item_for_task — new row inserted
     | 'ensured_action_found'     // ensure_action_item_for_task — existing row found
+    | 'created_excalidraw'       // create_excalidraw_diagram — diagram appended to note
   payload: {
     id: number | string
     /** Present on ensured_action_* actions; echoed to Claude as action_item_id */

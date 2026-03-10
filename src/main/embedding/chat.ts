@@ -97,6 +97,7 @@ export type ExecutedAction = {
     | 'updated_entity'
     | 'ensured_action_created'   // ensure_action_item_for_task — new row inserted
     | 'ensured_action_found'     // ensure_action_item_for_task — existing row found
+    | 'created_excalidraw'       // create_excalidraw_diagram — diagram appended to note
   payload: {
     id: number | string
     /** Returned to Claude as `action_item_id` so it can chain into update_action_item */
@@ -472,6 +473,32 @@ const WIZZ_TOOLS: ToolDef[] = [
       required: ['title', 'content'],
     },
   },
+  {
+    name: 'create_excalidraw_diagram',
+    description:
+      'Generate an Excalidraw diagram from a text description and append it to a note. ' +
+      'Use when the user asks to draw, diagram, visualise, or create a flowchart / architecture diagram / process map. ' +
+      'The diagram is generated via AI (two-step plan + render) and inserted as an interactive Excalidraw block in the note. ' +
+      'If note_id is not provided, create a new note first with create_note and pass its id here.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'Natural-language description of the diagram — e.g. "User login flow with MFA and error handling"',
+        },
+        note_id: {
+          type: 'string',
+          description: 'ID of the note to append the diagram to (UUID). Create the note first if needed.',
+        },
+        caption: {
+          type: 'string',
+          description: 'Optional short caption/description to add as a paragraph above the diagram.',
+        },
+      },
+      required: ['prompt', 'note_id'],
+    },
+  },
 ]
 
 // ── Tool executor ────────────────────────────────────────────────────────────
@@ -736,6 +763,12 @@ function executeTool(
       ).run(id, inp.title, JSON.stringify(doc), inp.content, now)
       scheduleEmbedding(id)
       return { type: 'created_note', payload: { id, title: inp.title } }
+    }
+
+    case 'create_excalidraw_diagram': {
+      // Handled as a proper async case in the tool loop (see below).
+      // This branch is never reached — the tool loop intercepts it first.
+      return { type: 'created_excalidraw', payload: { id: '', title: '' } }
     }
 
     default: {
@@ -1403,6 +1436,47 @@ export async function sendChatMessage(
           } catch (err) {
             isError = true
             resultContent = err instanceof Error ? err.message : String(err)
+          }
+        } else if (tc.name === 'create_excalidraw_diagram') {
+          // Async special case — diagram generation makes its own AI call;
+          // must be awaited here to avoid competing with the main chat loop.
+          const inp = tc.input as { prompt: string; note_id: string; caption?: string }
+          try {
+            const { generateExcalidrawDiagram } = await import('./diagramGenerator')
+            const db2 = getDatabase()
+            const { elements, appState } = await generateExcalidrawDiagram(inp.prompt, db2)
+
+            const noteRow = db2
+              .prepare('SELECT id, body FROM notes WHERE id = ? AND archived_at IS NULL')
+              .get(inp.note_id) as { id: string; body: string } | undefined
+            if (!noteRow) throw new Error(`Note ${inp.note_id} not found`)
+
+            let doc: { type: string; content: unknown[] }
+            try { doc = JSON.parse(noteRow.body) as typeof doc } catch { throw new Error('Invalid note body') }
+
+            const newNodes: unknown[] = []
+            if (inp.caption) {
+              newNodes.push({ type: 'paragraph', content: [{ type: 'text', text: inp.caption }] })
+            }
+            newNodes.push({
+              type: 'excalidraw',
+              attrs: { elements, appState, files: '{}', previewSvg: '', drawingHeight: null },
+            })
+            doc.content.push(...newNodes)
+
+            const now = new Date().toISOString()
+            db2.prepare('UPDATE notes SET body = ?, updated_at = ? WHERE id = ?')
+              .run(JSON.stringify(doc), now, noteRow.id)
+            scheduleEmbedding(noteRow.id)
+            pushToRenderer('note:diagram-added', { noteId: noteRow.id })
+
+            const action: ExecutedAction = { type: 'created_excalidraw', payload: { id: inp.note_id, title: 'Diagram created' } }
+            actions.push(action)
+            resultContent = JSON.stringify({ success: true, note_id: inp.note_id })
+          } catch (err) {
+            isError = true
+            resultContent = err instanceof Error ? err.message : String(err)
+            console.error('[chat] create_excalidraw_diagram failed:', err)
           }
         } else {
           try {

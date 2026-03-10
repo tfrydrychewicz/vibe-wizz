@@ -128,12 +128,71 @@ async function planDiagram(
  * The model already decided the logical layout (row/col); we just apply the math.
  * This is far more reliable than asking an LLM to compute precise bounding boxes.
  */
+/** Find where a line from center (cx,cy) in direction (dx,dy) exits a rectangle + gap. */
+function rectEdgePoint(
+  cx: number, cy: number, w: number, h: number,
+  dx: number, dy: number, gap: number,
+): [number, number] {
+  if (dx === 0 && dy === 0) return [cx, cy]
+  const hw = w / 2, hh = h / 2
+  const scaleX = dx !== 0 ? hw / Math.abs(dx) : Infinity
+  const scaleY = dy !== 0 ? hh / Math.abs(dy) : Infinity
+  const scale  = Math.min(scaleX, scaleY)
+  const ex = cx + dx * scale
+  const ey = cy + dy * scale
+  const len = Math.sqrt(dx * dx + dy * dy)
+  return [ex + (dx / len) * gap, ey + (dy / len) * gap]
+}
+
+const BYPASS_MARGIN = 90  // pixels outside the rightmost column for back-edge routing
+
+/**
+ * Compute the points[] array for an arrow.
+ * - Same-column downward → direct line
+ * - Cross-column downward → mid-row elbow (down then across then down)
+ * - Back-edges (going up or same row) → right-side bypass
+ *
+ * All points are relative to (sx, sy) — the arrow origin.
+ */
+function routeArrow(
+  sx: number, sy: number,
+  ex: number, ey: number,
+  fromNode: PlanNode, toNode: PlanNode,
+  allNodes: PlanNode[],
+): number[][] {
+  const p = (ax: number, ay: number): [number, number] => [ax - sx, ay - sy]
+
+  // ── Direct downward (same column, going down) ─────────────────────────────
+  if (fromNode.col === toNode.col && toNode.row > fromNode.row) {
+    return [[0, 0], p(ex, ey)]
+  }
+
+  // ── Forward diagonal (different column, going down) ───────────────────────
+  if (toNode.row > fromNode.row) {
+    // Elbow at a Y midpoint between the two centre rows
+    const fromCY = ORIG_Y + fromNode.row * CELL_H
+    const toCY   = ORIG_Y + toNode.row   * CELL_H
+    const midY   = (fromCY + toCY) / 2
+    return [[0, 0], p(sx, midY), p(ex, midY), p(ex, ey)]
+  }
+
+  // ── Back-edge: going up or sideways ──────────────────────────────────────
+  // Route via a vertical lane to the right of all nodes
+  const maxCol   = Math.max(...allNodes.map((n) => n.col))
+  const bypassX  = ORIG_X + maxCol * CELL_W + NODE_W / 2 + BYPASS_MARGIN
+  return [[0, 0], p(bypassX, sy), p(bypassX, ey), p(ex, ey)]
+}
+
 function renderPlanToElements(plan: DiagramPlan): object[] {
   const elements: object[] = []
 
-  // Map nodeId → generated Excalidraw shape ID (same as nodeId for simplicity)
+  // Map nodeId → generated Excalidraw shape ID
   const shapeIds = new Map<string, string>()
   plan.nodes.forEach((n) => shapeIds.set(n.id, `shape-${n.id}`))
+
+  // Track bound arrow IDs per shape so we can populate boundElements
+  const shapeBoundArrows = new Map<string, string[]>()
+  plan.nodes.forEach((n) => shapeBoundArrows.set(shapeIds.get(n.id)!, []))
 
   // ── Nodes ────────────────────────────────────────────────────────────────
   for (const node of plan.nodes) {
@@ -166,30 +225,46 @@ function renderPlanToElements(plan: DiagramPlan): object[] {
       locked:          false,
     }
 
+    // boundElements filled in after arrows are built
+    const shapeBoundRef = shapeBoundArrows.get(shapeId)!
+
+    // Actual shape dimensions (diamonds are padded outward)
+    const shapeW = node.shape === 'diamond' ? NODE_W + DIAMOND_PADDING * 2 : NODE_W
+    const shapeH = node.shape === 'diamond' ? NODE_H + DIAMOND_PADDING * 2 : NODE_H
+    const shapeX = cx - shapeW / 2
+    const shapeY = cy - shapeH / 2
+
     if (node.shape === 'diamond') {
       elements.push({
         ...base,
-        type:   'diamond',
-        x:      cx - (NODE_W / 2 + DIAMOND_PADDING),
-        y:      cy - (NODE_H / 2 + DIAMOND_PADDING),
-        width:  NODE_W + DIAMOND_PADDING * 2,
-        height: NODE_H + DIAMOND_PADDING * 2,
+        type:          'diamond',
+        x:             shapeX,
+        y:             shapeY,
+        width:         shapeW,
+        height:        shapeH,
+        boundElements: shapeBoundRef as unknown as object[],
       })
     } else {
-      elements.push({ ...base, type: node.shape })
+      elements.push({ ...base, type: node.shape, boundElements: shapeBoundRef as unknown as object[] })
     }
 
-    // Inline text label — use containerId so Excalidraw centres it
+    // Text label positioned explicitly at the shape's geometric centre.
+    // We avoid containerId because Excalidraw only re-centres it on load when
+    // the shape's boundElements also lists { type:'text', id } — complex to
+    // maintain. Instead we compute (x,y) directly so it is always correct.
+    const FONT_SIZE  = 15
+    const LINE_H     = 1.25
+    const TEXT_H     = FONT_SIZE * LINE_H   // ~18.75 px for one line
     const textId = `text-${node.id}`
     elements.push({
       id:             textId,
       type:           'text',
-      x:              cx - NODE_W / 2,
-      y:              cy - NODE_H / 2,
-      width:          NODE_W,
-      height:         NODE_H,
+      x:              shapeX,               // full shape width for h-centering
+      y:              cy - TEXT_H / 2,      // vertically centred at shape centre
+      width:          shapeW,
+      height:         TEXT_H,
       text:           node.label,
-      fontSize:       15,
+      fontSize:       FONT_SIZE,
       fontFamily:     1,
       textAlign:      'center',
       verticalAlign:  'middle',
@@ -209,14 +284,14 @@ function renderPlanToElements(plan: DiagramPlan): object[] {
       updated:        Date.now(),
       link:           null,
       locked:         false,
-      containerId:    shapeId,
-      lineHeight:     1.25,
+      containerId:    null,
+      lineHeight:     LINE_H,
     })
   }
 
   // ── Edges / Arrows ───────────────────────────────────────────────────────
   for (let i = 0; i < plan.edges.length; i++) {
-    const edge  = plan.edges[i]
+    const edge   = plan.edges[i]
     const fromId = shapeIds.get(edge.from)
     const toId   = shapeIds.get(edge.to)
     if (!fromId || !toId) continue
@@ -224,22 +299,47 @@ function renderPlanToElements(plan: DiagramPlan): object[] {
     const fromNode = plan.nodes.find((n) => n.id === edge.from)!
     const toNode   = plan.nodes.find((n) => n.id === edge.to)!
 
-    // Arrow start/end are approximate midpoints; Excalidraw binding snaps to edges
-    const fx = ORIG_X + fromNode.col * CELL_W
-    const fy = ORIG_Y + fromNode.row * CELL_H
-    const tx = ORIG_X + toNode.col   * CELL_W
-    const ty = ORIG_Y + toNode.row   * CELL_H
+    // Shape centres
+    const fcx = ORIG_X + fromNode.col * CELL_W
+    const fcy = ORIG_Y + fromNode.row * CELL_H
+    const tcx = ORIG_X + toNode.col   * CELL_W
+    const tcy = ORIG_Y + toNode.row   * CELL_H
+
+    // Direction vector (centre → centre)
+    const dx = tcx - fcx
+    const dy = tcy - fcy
+
+    // Effective half-extents (diamonds are padded)
+    const fromW = fromNode.shape === 'diamond' ? NODE_W + DIAMOND_PADDING * 2 : NODE_W
+    const fromH = fromNode.shape === 'diamond' ? NODE_H + DIAMOND_PADDING * 2 : NODE_H
+    const toW   = toNode.shape   === 'diamond' ? NODE_W + DIAMOND_PADDING * 2 : NODE_W
+    const toH   = toNode.shape   === 'diamond' ? NODE_H + DIAMOND_PADDING * 2 : NODE_H
+
+    const GAP = 8
+    const [sx, sy] = rectEdgePoint(fcx, fcy, fromW, fromH,  dx,  dy, GAP)
+    const [ex, ey] = rectEdgePoint(tcx, tcy, toW,   toH,   -dx, -dy, GAP)
 
     const arrowId = `arrow-${i}-${edge.from}-${edge.to}`
+    const routedPoints = routeArrow(sx, sy, ex, ey, fromNode, toNode, plan.nodes)
+
+    // Bounding box from all waypoints
+    const absXs = routedPoints.map(([px]) => sx + px)
+    const absYs = routedPoints.map(([, py]) => sy + py)
+    const arrowW = Math.max(...absXs) - Math.min(...absXs)
+    const arrowH = Math.max(...absYs) - Math.min(...absYs)
+
+    // Register this arrow in both shapes' boundElements
+    shapeBoundArrows.get(fromId)!.push(arrowId)
+    shapeBoundArrows.get(toId)!.push(arrowId)
 
     elements.push({
       id:              arrowId,
       type:            'arrow',
-      x:               fx,
-      y:               fy,
-      width:           tx - fx,
-      height:          ty - fy,
-      points:          [[0, 0], [tx - fx, ty - fy]],
+      x:               sx,
+      y:               sy,
+      width:           arrowW || 1,
+      height:          arrowH || 1,
+      points:          routedPoints,
       strokeColor:     '#1e1e1e',
       backgroundColor: 'transparent',
       fillStyle:       'solid',
@@ -256,17 +356,29 @@ function renderPlanToElements(plan: DiagramPlan): object[] {
       updated:         Date.now(),
       link:            null,
       locked:          false,
-      startBinding:    { elementId: fromId, gap: 8, focus: 0 },
-      endBinding:      { elementId: toId,   gap: 8, focus: 0 },
+      startBinding:    { elementId: fromId, gap: GAP, focus: 0 },
+      endBinding:      { elementId: toId,   gap: GAP, focus: 0 },
       startArrowhead:  null,
       endArrowhead:    'arrow',
       elbowed:         false,
     })
 
-    // Optional edge label
+    // Optional edge label — offset perpendicular to arrow direction so it sits
+    // beside the arrow rather than on top of it
     if (edge.label) {
-      const midX = (fx + tx) / 2
-      const midY = (fy + ty) / 2
+      // Use midpoint of the path (between second and third waypoints when available)
+      const midPtIdx = Math.floor(routedPoints.length / 2)
+      const [mpx0, mpy0] = routedPoints[midPtIdx - 1] ?? [0, 0]
+      const [mpx1, mpy1] = routedPoints[midPtIdx]     ?? routedPoints[routedPoints.length - 1]
+      const segDx = mpx1 - mpx0
+      const segDy = mpy1 - mpy0
+      const segLen = Math.sqrt(segDx * segDx + segDy * segDy) || 1
+      // Perpendicular unit vector (90° CW)
+      const perpX = segDy / segLen
+      const perpY = -segDx / segLen
+      const LABEL_OFFSET = 18
+      const midX = sx + (mpx0 + mpx1) / 2 + perpX * LABEL_OFFSET
+      const midY = sy + (mpy0 + mpy1) / 2 + perpY * LABEL_OFFSET
       elements.push({
         id:             `elabel-${i}`,
         type:           'text',
@@ -301,6 +413,16 @@ function renderPlanToElements(plan: DiagramPlan): object[] {
     }
   }
 
+  // Back-fill boundElements on every shape element now that all arrow IDs are known
+  for (const el of elements) {
+    const e = el as Record<string, unknown>
+    if (!e['id'] || typeof e['id'] !== 'string') continue
+    const bound = shapeBoundArrows.get(e['id'] as string)
+    if (bound && bound.length > 0) {
+      e['boundElements'] = bound.map((id) => ({ type: 'arrow', id }))
+    }
+  }
+
   return elements
 }
 
@@ -325,6 +447,7 @@ export async function generateExcalidrawDiagram(
     currentItemStrokeColor: '#1e1e1e',
     currentItemBackgroundColor: 'transparent',
     exportBackground: false,
+    theme: 'light',
   }
 
   return {
