@@ -563,7 +563,7 @@ defineExpose({ getContent, getHtml, setContent, clear, focus, isEmpty })
 
 .rich-input {
   width: 100%;
-  min-height: 36px;
+  min-height: var(--rich-input-min-height, 36px);
   max-height: 120px;
   overflow-y: auto;
   padding: 8px 10px;

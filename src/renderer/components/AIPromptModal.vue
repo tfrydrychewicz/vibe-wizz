@@ -25,7 +25,7 @@ const props = defineProps<{
   mode: 'insert' | 'replace'
   title?: string
   placeholder?: string
-  width?: string
+  inputMinHeight?: string
   errorMessage?: string
 }>()
 
@@ -131,7 +131,6 @@ function doSubmit(): void {
     <div
       class="ai-modal-popup"
       :class="{ 'ai-modal-popup--drag': isDragOver }"
-      :style="width ? { width } : undefined"
       @mousedown.stop
       @dragover.prevent="isDragOver = true"
       @dragleave="isDragOver = false"
@@ -147,6 +146,7 @@ function doSubmit(): void {
       <!-- Unified input box (Cursor-style): attachments + rich text + toolbar -->
       <div
         class="ai-modal-input-wrap"
+        :style="inputMinHeight ? { '--rich-input-min-height': inputMinHeight } : undefined"
         @dragover.prevent="isDragOver = true"
         @dragleave="isDragOver = false"
         @drop.prevent="onDrop"
