@@ -513,6 +513,7 @@ onBeforeUnmount(() => {
       mode="insert"
       title="Generate Diagram"
       placeholder="Describe your diagram… e.g. 'User login flow with error handling' or 'Microservice architecture with auth, API gateway, and database'"
+      width="640px"
       :loading="isGenerating"
       :error-message="generateError ?? undefined"
       @submit="generateDiagram"

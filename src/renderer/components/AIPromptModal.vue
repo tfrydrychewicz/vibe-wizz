@@ -25,6 +25,7 @@ const props = defineProps<{
   mode: 'insert' | 'replace'
   title?: string
   placeholder?: string
+  width?: string
   errorMessage?: string
 }>()
 
@@ -130,6 +131,7 @@ function doSubmit(): void {
     <div
       class="ai-modal-popup"
       :class="{ 'ai-modal-popup--drag': isDragOver }"
+      :style="width ? { width } : undefined"
       @mousedown.stop
       @dragover.prevent="isDragOver = true"
       @dragleave="isDragOver = false"
