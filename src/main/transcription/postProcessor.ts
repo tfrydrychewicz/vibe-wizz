@@ -161,6 +161,81 @@ function parseInlineMarkdown(text: string, ctx?: ParseContext): TipTapNode[] {
   return nodes.length > 0 ? nodes : [{ type: 'text', text }]
 }
 
+/** Count leading spaces (treating \t as 2 spaces). */
+function leadingSpaces(line: string): number {
+  let n = 0
+  for (const ch of line) {
+    if (ch === ' ') n++
+    else if (ch === '\t') n += 2
+    else break
+  }
+  return n
+}
+
+/**
+ * Recursively collect bullet list items from `lines` starting at `startIndex`.
+ * Items whose leading indent equals `baseIndent` are top-level at this call;
+ * lines with greater indent are gathered into a nested bulletList appended to
+ * the preceding item's content array.
+ */
+function parseBulletItems(
+  lines: string[],
+  startIndex: number,
+  baseIndent: number,
+  ctx?: ParseContext,
+): { items: TipTapNode[]; nextIndex: number } {
+  const items: TipTapNode[] = []
+  let i = startIndex
+
+  while (i < lines.length) {
+    const rawLine = lines[i]
+    const trimmed = rawLine.trim()
+
+    // Blank line — end this list level
+    if (!trimmed) {
+      i++
+      break
+    }
+
+    const indent = leadingSpaces(rawLine)
+
+    // Less indented than our base → caller handles
+    if (indent < baseIndent) break
+
+    // Must start with a bullet marker at this indent level
+    if (!trimmed.startsWith('- ') && !trimmed.startsWith('* ')) break
+
+    const itemText = trimmed.slice(2)
+    const itemContent: TipTapNode[] = [
+      { type: 'paragraph', content: parseInlineMarkdown(itemText, ctx) },
+    ]
+    i++
+
+    // Look ahead: collect any deeper-indented lines as a nested bulletList
+    while (i < lines.length) {
+      const nextRaw = lines[i]
+      const nextTrimmed = nextRaw.trim()
+      if (!nextTrimmed) break
+      const nextIndent = leadingSpaces(nextRaw)
+      if (nextIndent <= baseIndent) break
+      if (nextTrimmed.startsWith('- ') || nextTrimmed.startsWith('* ')) {
+        const sub = parseBulletItems(lines, i, nextIndent, ctx)
+        if (sub.items.length > 0) {
+          itemContent.push({ type: 'bulletList', content: sub.items })
+        }
+        i = sub.nextIndex
+      } else {
+        // Indented continuation text — skip past it
+        i++
+      }
+    }
+
+    items.push({ type: 'listItem', content: itemContent })
+  }
+
+  return { items, nextIndex: i }
+}
+
 function paragraph(text: string, ctx?: ParseContext): TipTapNode {
   return { type: 'paragraph', content: parseInlineMarkdown(text, ctx) }
 }
@@ -278,25 +353,12 @@ export function parseMarkdownToTipTap(markdown: string, ctx?: ParseContext): Tip
       continue
     }
 
-    // Bullet list — collect consecutive - or * items into a bulletList node
+    // Bullet list — collect consecutive - or * items, with nested sub-list support
     if (line.startsWith('- ') || line.startsWith('* ')) {
-      const items: TipTapNode[] = []
-      while (i < lines.length) {
-        const bl = lines[i].trim()
-        if (bl.startsWith('- ') || bl.startsWith('* ')) {
-          items.push({
-            type: 'listItem',
-            content: [{ type: 'paragraph', content: parseInlineMarkdown(bl.slice(2), ctx) }],
-          })
-          i++
-        } else if (!bl) {
-          i++
-          break
-        } else {
-          break
-        }
-      }
+      const baseIndent = leadingSpaces(lines[i])
+      const { items, nextIndex } = parseBulletItems(lines, i, baseIndent, ctx)
       if (items.length > 0) nodes.push({ type: 'bulletList', content: items })
+      i = nextIndex
       continue
     }
 
