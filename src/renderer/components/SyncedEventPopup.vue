@@ -47,10 +47,18 @@ const popupEl = ref<HTMLElement | null>(null)
 
 const posStyle = computed(() => {
   const POPUP_W = 320
-  const POPUP_H = 340
-  const x = Math.min(props.position.x + 8, window.innerWidth - POPUP_W - 8)
-  const y = Math.min(props.position.y, window.innerHeight - POPUP_H - 8)
-  return { left: `${Math.max(8, x)}px`, top: `${Math.max(8, y)}px` }
+  const MARGIN = 8
+  const x = Math.min(props.position.x + MARGIN, window.innerWidth - POPUP_W - MARGIN)
+  // Don't use a fixed height estimate — instead clamp top so the popup stays on
+  // screen and let max-height + overflow handle the rest.
+  const maxTop = window.innerHeight - 120 - MARGIN
+  const y = Math.min(props.position.y, maxTop)
+  const clampedY = Math.max(MARGIN, y)
+  return {
+    left: `${Math.max(MARGIN, x)}px`,
+    top: `${clampedY}px`,
+    maxHeight: `${window.innerHeight - clampedY - MARGIN}px`,
+  }
 })
 
 // ── Derived display values ────────────────────────────────────────────────────
@@ -201,7 +209,7 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 
 <template>
   <div ref="popupEl" class="synced-popup" :style="posStyle">
-    <!-- Header -->
+    <!-- Header (sticky, never scrolls away) -->
     <div class="sp-header">
       <div class="sp-title-row">
         <Cloud :size="13" class="sp-cloud-icon" />
@@ -212,90 +220,93 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
       </button>
     </div>
 
-    <!-- Date / time -->
-    <div class="sp-datetime">{{ dateTime }}</div>
+    <!-- Scrollable body (datetime + attendees + meeting notes) -->
+    <div class="sp-body">
+      <!-- Date / time -->
+      <div class="sp-datetime">{{ dateTime }}</div>
 
-    <!-- Attendees -->
-    <div v-if="attendees.length" class="sp-section">
-      <div class="sp-section-label">
-        <Users :size="11" />
-        Attendees
-      </div>
-      <div class="sp-attendees">
-        <template v-for="a in attendees" :key="a.email">
-          <!-- Entity chip — clickable when mapping resolved this email -->
-          <button
-            v-if="attendeeEntityMap.get(a.email)"
-            class="sp-attendee-chip sp-attendee-entity"
-            :style="attendeeEntityMap.get(a.email)!.type_color ? {
-              color: attendeeEntityMap.get(a.email)!.type_color!,
-              background: `${attendeeEntityMap.get(a.email)!.type_color}18`,
-              borderColor: `${attendeeEntityMap.get(a.email)!.type_color}55`,
-            } : {}"
-            :title="a.email"
-            @click="openEntity($event, attendeeEntityMap.get(a.email)!)"
-          >{{ attendeeEntityMap.get(a.email)!.name }}</button>
-          <!-- Plain chip -->
-          <span
-            v-else
-            class="sp-attendee-chip"
-            :title="a.email"
-          >{{ a.name || a.email }}</span>
-        </template>
-      </div>
-    </div>
-
-    <!-- Meeting Notes -->
-    <div class="sp-section">
-      <div class="sp-section-label">
-        <FileText :size="11" />
-        Meeting Notes
-      </div>
-
-      <!-- Linked note -->
-      <div v-if="linkedNoteId && linkedNoteTitle" class="sp-linked-note">
-        <button class="sp-note-chip" @click="openNote($event)">
-          <ExternalLink :size="11" />
-          {{ linkedNoteTitle }}
-        </button>
-        <button class="sp-unlink-btn" title="Unlink note" @click="unlinkNote">
-          <Unlink :size="11" />
-        </button>
-      </div>
-
-      <!-- No note linked: create or attach -->
-      <template v-else>
-        <button class="sp-link-btn sp-create-note-btn" :disabled="creatingNote" @click="createMeetingNote($event)">
-          <FileText :size="11" />
-          {{ creatingNote ? 'Creating…' : 'Create Meeting Notes' }}
-        </button>
-        <button v-if="!showSearch" class="sp-attach-btn" @click="showSearch = true">
-          or attach existing…
-        </button>
-        <template v-else>
-          <div class="sp-search-row">
-            <Search :size="12" class="sp-search-icon" />
-            <input
-              v-model="noteQuery"
-              class="sp-search-input"
-              placeholder="Search notes…"
-              autofocus
-              @input="onNoteQueryInput"
-            />
-          </div>
-          <div v-if="noteResults.length" class="sp-note-results">
+      <!-- Attendees -->
+      <div v-if="attendees.length" class="sp-section">
+        <div class="sp-section-label">
+          <Users :size="11" />
+          Attendees
+        </div>
+        <div class="sp-attendees">
+          <template v-for="a in attendees" :key="a.email">
+            <!-- Entity chip — clickable when mapping resolved this email -->
             <button
-              v-for="note in noteResults"
-              :key="note.id"
-              class="sp-note-result"
-              @click="linkNote(note)"
-            >{{ note.title }}</button>
-          </div>
+              v-if="attendeeEntityMap.get(a.email)"
+              class="sp-attendee-chip sp-attendee-entity"
+              :style="attendeeEntityMap.get(a.email)!.type_color ? {
+                color: attendeeEntityMap.get(a.email)!.type_color!,
+                background: `${attendeeEntityMap.get(a.email)!.type_color}18`,
+                borderColor: `${attendeeEntityMap.get(a.email)!.type_color}55`,
+              } : {}"
+              :title="a.email"
+              @click="openEntity($event, attendeeEntityMap.get(a.email)!)"
+            >{{ attendeeEntityMap.get(a.email)!.name }}</button>
+            <!-- Plain chip -->
+            <span
+              v-else
+              class="sp-attendee-chip"
+              :title="a.email"
+            >{{ a.name || a.email }}</span>
+          </template>
+        </div>
+      </div>
+
+      <!-- Meeting Notes -->
+      <div class="sp-section">
+        <div class="sp-section-label">
+          <FileText :size="11" />
+          Meeting Notes
+        </div>
+
+        <!-- Linked note -->
+        <div v-if="linkedNoteId && linkedNoteTitle" class="sp-linked-note">
+          <button class="sp-note-chip" @click="openNote($event)">
+            <ExternalLink :size="11" />
+            {{ linkedNoteTitle }}
+          </button>
+          <button class="sp-unlink-btn" title="Unlink note" @click="unlinkNote">
+            <Unlink :size="11" />
+          </button>
+        </div>
+
+        <!-- No note linked: create or attach -->
+        <template v-else>
+          <button class="sp-link-btn sp-create-note-btn" :disabled="creatingNote" @click="createMeetingNote($event)">
+            <FileText :size="11" />
+            {{ creatingNote ? 'Creating…' : 'Create Meeting Notes' }}
+          </button>
+          <button v-if="!showSearch" class="sp-attach-btn" @click="showSearch = true">
+            or attach existing…
+          </button>
+          <template v-else>
+            <div class="sp-search-row">
+              <Search :size="12" class="sp-search-icon" />
+              <input
+                v-model="noteQuery"
+                class="sp-search-input"
+                placeholder="Search notes…"
+                autofocus
+                @input="onNoteQueryInput"
+              />
+            </div>
+            <div v-if="noteResults.length" class="sp-note-results">
+              <button
+                v-for="note in noteResults"
+                :key="note.id"
+                class="sp-note-result"
+                @click="linkNote(note)"
+              >{{ note.title }}</button>
+            </div>
+          </template>
         </template>
-      </template>
+      </div>
     </div>
 
-    <!-- Source badge -->
+    <!-- Source badge (sticky, always visible at bottom) -->
     <div class="sp-footer">
       <Cloud :size="10" class="sp-footer-icon" />
       <span>{{ sourceName ?? 'Synced from external calendar' }}</span>
@@ -307,7 +318,7 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 .synced-popup {
   position: fixed;
   z-index: 1200;
-  width: 300px;
+  width: 320px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 10px;
@@ -368,6 +379,14 @@ async function createMeetingNote(e: MouseEvent): Promise<void> {
 .sp-close:hover {
   background: var(--color-hover);
   color: var(--color-text);
+}
+
+/* ── Scrollable body ─────────────────────────────────────────────────────── */
+
+.sp-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 /* ── Datetime ────────────────────────────────────────────────────────────── */
