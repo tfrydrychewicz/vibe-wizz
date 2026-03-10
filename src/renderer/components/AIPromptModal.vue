@@ -23,6 +23,8 @@ export interface AIPromptSubmit {
 const props = defineProps<{
   loading: boolean
   mode: 'insert' | 'replace'
+  title?: string
+  placeholder?: string
   errorMessage?: string
 }>()
 
@@ -136,7 +138,7 @@ function doSubmit(): void {
       <div class="ai-modal-header">
         <Sparkles :size="14" class="ai-modal-icon" />
         <span class="ai-modal-title">
-          {{ mode === 'replace' ? 'AI: Replace selection' : 'AI: Insert content' }}
+          {{ title ?? (mode === 'replace' ? 'AI: Replace selection' : 'AI: Insert content') }}
         </span>
       </div>
 
@@ -160,9 +162,9 @@ function doSubmit(): void {
         <!-- Rich text input (borderless — box provides the border) -->
         <RichTextInput
           ref="richInput"
-          :placeholder="mode === 'replace'
+          :placeholder="placeholder ?? (mode === 'replace'
             ? 'Describe how to rewrite the selection…'
-            : 'Describe what to write here…'"
+            : 'Describe what to write here…')"
           :disabled="loading"
           @submit="doSubmit"
           @escape="emit('close')"

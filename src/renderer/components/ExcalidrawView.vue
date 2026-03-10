@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
 import { PencilRuler, Pencil, Maximize2, X, Check, Loader2, Sparkles } from 'lucide-vue-next'
 import {
@@ -11,8 +11,8 @@ import {
   type AppState,
   type BinaryFiles,
 } from '../utils/excalidrawLoader'
-import RichTextInput from './RichTextInput.vue'
-import type { RichInputContent } from './RichTextInput.vue'
+import AIPromptModal from './AIPromptModal.vue'
+import type { AIPromptSubmit } from './AIPromptModal.vue'
 
 const props = defineProps(nodeViewProps)
 
@@ -39,37 +39,35 @@ let pendingElements: readonly OrderedExcalidrawElement[] = []
 let pendingAppState: AppState | null = null
 let pendingFiles:    BinaryFiles     = {}
 
-// ─── AI Generate state (lives inside the edit modal) ─────────────────────────
+// ─── AI Generate state ────────────────────────────────────────────────────────
 
-const isGenerating     = ref(false)
-const generateError    = ref<string | null>(null)
-const showGeneratePanel = ref(false)
-const generateInputRef  = ref<InstanceType<typeof RichTextInput> | null>(null)
+const isGenerating      = ref(false)
+const generateError     = ref<string | null>(null)
+const showGenerateModal = ref(false)
 
-function openGeneratePanel(): void {
+function openGenerateModal(): void {
   generateError.value    = null
-  showGeneratePanel.value = true
-  void nextTick(() => generateInputRef.value?.focus())
+  showGenerateModal.value = true
 }
 
-function closeGeneratePanel(): void {
-  showGeneratePanel.value = false
+function closeGenerateModal(): void {
+  showGenerateModal.value = false
   generateError.value    = null
   isGenerating.value     = false
-  generateInputRef.value?.clear()
 }
 
-async function generateDiagram(): Promise<void> {
-  const content: RichInputContent | undefined = generateInputRef.value?.getContent()
-  const prompt = content?.text?.trim() ?? ''
-  if (!prompt) return
-
+async function generateDiagram(payload: AIPromptSubmit): Promise<void> {
   isGenerating.value  = true
   generateError.value = null
 
-  const result = await (window.api.invoke('excalidraw:generate', { prompt }) as Promise<
-    { elements: string; appState: string } | { error: string }
-  >)
+  const result = await (window.api.invoke('excalidraw:generate', {
+    prompt:              payload.prompt,
+    mentionedEntityIds:  payload.mentionedEntityIds,
+    mentionedNoteIds:    payload.mentionedNoteIds,
+    images:              payload.images,
+    files:               payload.files,
+    overrideModelId:     payload.model || undefined,
+  }) as Promise<{ elements: string; appState: string } | { error: string }>)
 
   isGenerating.value = false
 
@@ -78,7 +76,7 @@ async function generateDiagram(): Promise<void> {
     return
   }
 
-  closeGeneratePanel()
+  closeGenerateModal()
 
   // Re-render Excalidraw canvas with the generated diagram
   const { ExcalidrawComponent, createElement, createRoot } = await loadExcalidraw()
@@ -359,7 +357,7 @@ watch(() => props.node.attrs.elements, () => { void autoGeneratePreview() })
 function onGlobalKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
     if (fullscreen.value)        { closeLightbox();      return }
-    if (showGeneratePanel.value) { closeGeneratePanel(); return }
+    if (showGenerateModal.value) { closeGenerateModal(); return }
     if (isEditing.value)         { cancelEdit();         return }
   }
 }
@@ -484,10 +482,10 @@ onBeforeUnmount(() => {
             class="excalidraw-btn excalidraw-btn--ai"
             :disabled="isLoading"
             title="Generate diagram with AI"
-            @click="showGeneratePanel ? closeGeneratePanel() : openGeneratePanel()"
+            @click="openGenerateModal"
           >
             <Sparkles :size="13" />
-            {{ showGeneratePanel ? 'Hide Generator' : '✨ Generate' }}
+            ✨ Generate
           </button>
           <button class="excalidraw-btn" :disabled="isSaving || isLoading" @click="cancelEdit">
             <X :size="13" />
@@ -505,35 +503,21 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- AI generate panel — slides down from the header -->
-      <Transition name="excalidraw-gen">
-        <div v-if="showGeneratePanel" class="excalidraw-gen-panel" contenteditable="false">
-          <RichTextInput
-            ref="generateInputRef"
-            class="excalidraw-gen-rich-input"
-            placeholder="Describe your diagram… e.g. 'User login flow with error handling' or 'Microservice architecture with auth, API gateway, and database'"
-            :disabled="isGenerating"
-            @submit="generateDiagram"
-            @escape="closeGeneratePanel"
-          />
-          <div v-if="generateError" class="excalidraw-gen-error">
-            ⚠ {{ generateError }}
-          </div>
-          <div class="excalidraw-gen-footer">
-            <span class="excalidraw-gen-hint">⌘ Enter to generate · Esc to close</span>
-            <button
-              class="excalidraw-btn excalidraw-btn--ai"
-              :disabled="isGenerating"
-              @click="generateDiagram"
-            >
-              <Loader2 v-if="isGenerating" :size="12" class="excalidraw-spinner" />
-              <Sparkles v-else :size="12" />
-              {{ isGenerating ? 'Generating…' : 'Generate' }}
-            </button>
-          </div>
-        </div>
-      </Transition>
     </div>
+  </Teleport>
+
+  <!-- ── AI Generate modal ─────────────────────────────────────────────────── -->
+  <Teleport to="body">
+    <AIPromptModal
+      v-if="showGenerateModal"
+      mode="insert"
+      title="Generate Diagram"
+      placeholder="Describe your diagram… e.g. 'User login flow with error handling' or 'Microservice architecture with auth, API gateway, and database'"
+      :loading="isGenerating"
+      :error-message="generateError ?? undefined"
+      @submit="generateDiagram"
+      @close="closeGenerateModal"
+    />
   </Teleport>
 
   <!-- ── Fullscreen lightbox ───────────────────────────────────────────────── -->
@@ -879,70 +863,7 @@ onBeforeUnmount(() => {
   display: block;
 }
 
-/* ── AI Generate overlay ─────────────────────────────────────────────────────── */
-/* ── AI Generate panel (below modal header, above the canvas) ───────────────── */
-.excalidraw-gen-panel {
-  position: absolute;
-  top: 44px; /* directly below the header */
-  left: 0;
-  right: 0;
-  z-index: 1201;
-  background: var(--color-bg-elevated);
-  border-bottom: 1px solid var(--color-border);
-  padding: 12px 16px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  pointer-events: all; /* re-enable interaction */
-}
-
-.excalidraw-gen-rich-input {
-  min-height: 80px;
-  max-height: 160px;
-  overflow-y: auto;
-  font-size: 13px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 7px 10px;
-}
-.excalidraw-gen-rich-input:focus-within {
-  border-color: var(--color-accent);
-}
-
-.excalidraw-gen-error {
-  font-size: 12px;
-  color: var(--color-danger);
-  background: var(--color-danger-subtle);
-  border: 1px solid var(--color-danger-border);
-  border-radius: 6px;
-  padding: 6px 10px;
-}
-
-.excalidraw-gen-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.excalidraw-gen-hint {
-  font-size: 11px;
-  color: var(--color-text-muted);
-}
-
 /* ── Transitions ─────────────────────────────────────────────────────────────── */
-.excalidraw-gen-enter-active,
-.excalidraw-gen-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
-}
-.excalidraw-gen-enter-from,
-.excalidraw-gen-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
-
 .excalidraw-lightbox-enter-active,
 .excalidraw-lightbox-leave-active {
   transition: opacity 0.18s ease;

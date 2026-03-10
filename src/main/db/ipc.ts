@@ -3045,15 +3045,84 @@ export function registerDbIpcHandlers(): void {
   })
 
   /**
-   * excalidraw:generate — generates an Excalidraw diagram from a text prompt.
-   * Uses a two-step AI pipeline (plan → render) via the diagram_generate feature slot.
+   * excalidraw:generate — generates an Excalidraw diagram from a prompt.
+   * Accepts optional entity IDs, note IDs, file attachments, and image attachments
+   * for richer context; these are resolved and injected into the AI prompt.
    * Returns { elements, appState } JSON strings, or { error } on failure.
    */
-  ipcMain.handle('excalidraw:generate', async (_event, { prompt }: { prompt: string }) => {
+  ipcMain.handle('excalidraw:generate', async (
+    _event,
+    {
+      prompt,
+      mentionedEntityIds,
+      mentionedNoteIds,
+      images,
+      files,
+      overrideModelId,
+    }: {
+      prompt: string
+      mentionedEntityIds?: string[]
+      mentionedNoteIds?: string[]
+      images?: { dataUrl: string; mimeType: string }[]
+      files?: { name: string; content: string; mimeType: string }[]
+      overrideModelId?: string
+    },
+  ) => {
     const db = getDatabase()
     try {
+      // Build context sections to append to the user prompt
+      const contextParts: string[] = []
+
+      if (mentionedEntityIds?.length) {
+        const placeholders = mentionedEntityIds.map(() => '?').join(',')
+        const entities = db
+          .prepare(`SELECT name, fields FROM entities WHERE id IN (${placeholders}) AND trashed_at IS NULL`)
+          .all(...mentionedEntityIds) as { name: string; fields: string }[]
+        if (entities.length) {
+          const entityLines = entities.map((e) => {
+            let extra = ''
+            try {
+              const f = JSON.parse(e.fields) as Record<string, unknown>
+              const pairs = Object.entries(f)
+                .filter(([, v]) => v !== null && v !== undefined && v !== '')
+                .slice(0, 6)
+                .map(([k, v]) => `${k}: ${v}`)
+              if (pairs.length) extra = ` (${pairs.join(', ')})`
+            } catch { /* ignore */ }
+            return `- ${e.name}${extra}`
+          })
+          contextParts.push(`Mentioned entities:\n${entityLines.join('\n')}`)
+        }
+      }
+
+      if (mentionedNoteIds?.length) {
+        const placeholders = mentionedNoteIds.map(() => '?').join(',')
+        const notes = db
+          .prepare(`SELECT title, body_plain FROM notes WHERE id IN (${placeholders}) AND archived_at IS NULL`)
+          .all(...mentionedNoteIds) as { title: string; body_plain: string }[]
+        if (notes.length) {
+          const noteBlocks = notes.map((n) => {
+            const excerpt = (n.body_plain ?? '').slice(0, 800)
+            return `### ${n.title}\n${excerpt}${excerpt.length >= 800 ? '…' : ''}`
+          })
+          contextParts.push(`Referenced notes:\n${noteBlocks.join('\n\n')}`)
+        }
+      }
+
+      if (files?.length) {
+        const fileBlocks = files.map((f) => `### ${f.name}\n${f.content.slice(0, 1200)}`)
+        contextParts.push(`Attached files:\n${fileBlocks.join('\n\n')}`)
+      }
+
+      const enrichedPrompt = contextParts.length
+        ? `${prompt}\n\n---\n${contextParts.join('\n\n')}`
+        : prompt
+
       const { generateExcalidrawDiagram } = await import('../embedding/diagramGenerator')
-      return await generateExcalidrawDiagram(prompt, db)
+      return await generateExcalidrawDiagram(enrichedPrompt, db, {
+        images: images as { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[] | undefined,
+        overrideModelId,
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return { error: msg }

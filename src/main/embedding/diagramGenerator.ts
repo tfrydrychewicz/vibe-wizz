@@ -15,6 +15,7 @@
 
 import Database from 'better-sqlite3'
 import { callWithFallback } from '../ai/modelRouter'
+import type { ImageBlock, ContentBlock } from '../ai/providers/types'
 
 // ── Layout constants (must match the RENDER prompt below) ─────────────────────
 const CELL_W  = 240  // horizontal distance between column centres
@@ -92,25 +93,27 @@ Layout rules:
 - Color coding: blue = system/service, green = success/output, red = error/warning, orange = user/input, purple = external, default = neutral`
 
 async function planDiagram(
-  userPrompt:   string,
-  db:           Database.Database,
+  userPrompt:      string,
+  db:              Database.Database,
+  images?:         ImageBlock[],
+  overrideModelId?: string,
 ): Promise<DiagramPlan> {
-  // Always route through 'chat' — it uses whatever the user has configured and
-  // working. The 'diagram_generate' slot appears in Settings → AI Features so
-  // the user can optionally dedicate a different model, but we don't route here
-  // automatically to avoid accidentally picking up broken/stale DB entries.
-  const raw = await callWithFallback('chat', db, async (model) => {
+  // Route through 'diagram_generate' slot; overrideModelId is placed at the front.
+  const userContent: string | ContentBlock[] = images?.length
+    ? [...images, { type: 'text' as const, text: userPrompt }]
+    : userPrompt
+  const raw = await callWithFallback('diagram_generate', db, async (model) => {
     const response = await model.adapter.chat(
       {
         model:     model.modelId,
-        messages:  [{ role: 'user', content: userPrompt }],
+        messages:  [{ role: 'user', content: userContent }],
         system:    PLAN_SYSTEM,
         maxTokens: 1200,
       },
       model.apiKey,
     )
     return response.text
-  })
+  }, overrideModelId)
 
   // Strip markdown fences if the model included them despite instructions
   const clean = (raw as string)
@@ -438,8 +441,17 @@ function renderPlanToElements(plan: DiagramPlan): object[] {
 export async function generateExcalidrawDiagram(
   prompt: string,
   db:     Database.Database,
+  opts?: {
+    images?: { dataUrl: string; mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }[]
+    overrideModelId?: string
+  },
 ): Promise<{ elements: string; appState: string }> {
-  const plan     = await planDiagram(prompt, db)
+  const imageBlocks: ImageBlock[] = (opts?.images ?? []).map((img) => ({
+    type: 'image',
+    mediaType: img.mimeType,
+    data: img.dataUrl.includes(',') ? img.dataUrl.split(',')[1] : img.dataUrl,
+  }))
+  const plan     = await planDiagram(prompt, db, imageBlocks.length ? imageBlocks : undefined, opts?.overrideModelId)
   const elements = renderPlanToElements(plan)
 
   const appState = {
