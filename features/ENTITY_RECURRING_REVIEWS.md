@@ -166,9 +166,11 @@ scheduleEntityReviews(db: Database): void
 
 1. Load all entity types where `review_enabled = 1`
 2. For each type, determine if a review is due now:
-   - Get the **expected generation timestamp** for today based on `review_frequency`, `review_day`, `review_time`
    - Check if a review already exists for the correct period window (`period_end = yesterday` for daily/weekly/biweekly/monthly)
-   - If no review exists for this window AND current local time ≥ `review_time` → mark as due
+   - If no review exists for this window AND the scheduled moment has passed → mark as due:
+     - **daily**: current local time ≥ `review_time`
+     - **weekly/biweekly**: today is on or after `review_day` (if on the day, time ≥ `review_time`). **If the app was not run on the scheduled day, the next run will catch up** — e.g. if Tuesday 7am was missed, running on Wednesday will still generate the review.
+     - **monthly**: time ≥ `review_time` and gap check
 3. Load all non-trashed entities of that type
 4. For each entity, call `generateEntityReview(db, entity, type)` in sequence (not concurrent — rate limit friendly)
 5. Store result in `entity_reviews`

@@ -50,12 +50,15 @@ const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
  *
  * A review is due when all of the following hold:
  *  1. review_enabled = 1 and review_frequency is set
- *  2. Current local time >= review_time (HH:MM)
- *  3. No review has already been generated for the current window
+ *  2. No review has already been generated for the current window
  *     (period_end = yesterday, since getPeriodWindow always ends yesterday)
- *  4. For weekly / biweekly: today is the configured review_day
- *  5. For biweekly: at least 12 days have passed since the last review's period_end
- *  6. For monthly:  at least 25 days have passed since the last review's period_end
+ *  3. The scheduled moment has passed:
+ *     - daily: current local time >= review_time
+ *     - weekly/biweekly: today is on or after review_day (if on the day, time >= review_time)
+ *       — if the app was not run on the scheduled day, the next run will catch up
+ *     - monthly: time >= review_time and gap check
+ *  4. For biweekly: at least 12 days have passed since the last review's period_end
+ *  5. For monthly:  at least 25 days have passed since the last review's period_end
  */
 export function isReviewDue(
   type: EntityTypeWithReview,
@@ -71,19 +74,29 @@ export function isReviewDue(
   // Already generated for the current window
   if (latestPeriodEnd === yesterdayStr) return false
 
-  // Time-of-day gate: don't generate before the configured local time
   const [hStr = '7', mStr = '0'] = type.review_time.split(':')
   const reviewMinuteOfDay = parseInt(hStr, 10) * 60 + parseInt(mStr, 10)
   const nowMinuteOfDay = now.getHours() * 60 + now.getMinutes()
-  if (nowMinuteOfDay < reviewMinuteOfDay) return false
-
   const freq = type.review_frequency
 
-  // Day-of-week constraint for weekly and biweekly
+  // Weekly / biweekly: scheduled day must have passed (or we're on it and past time).
+  // If the app was not run on the scheduled day, the next run will catch up.
   if (freq === 'weekly' || freq === 'biweekly') {
     const requiredDay = type.review_day ?? 'mon'
     const todayDayName = DAY_NAMES[now.getDay()]
-    if (todayDayName !== requiredDay) return false
+    const todayIndex = DAY_NAMES.indexOf(todayDayName)
+    const requiredIndex = DAY_NAMES.indexOf(requiredDay)
+
+    if (todayIndex < requiredIndex) return false // scheduled day hasn't come yet this week
+    if (todayIndex > requiredIndex) {
+      // we're past the scheduled day — run catch-up (skip time-of-day gate)
+    } else {
+      // todayIndex === requiredIndex: due only if past the configured time
+      if (nowMinuteOfDay < reviewMinuteOfDay) return false
+    }
+  } else {
+    // daily / monthly: enforce time-of-day gate
+    if (nowMinuteOfDay < reviewMinuteOfDay) return false
   }
 
   // Minimum gap enforcement to prevent double-generation within a window
