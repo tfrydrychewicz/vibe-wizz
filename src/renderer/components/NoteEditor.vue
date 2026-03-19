@@ -58,6 +58,7 @@ import { TaskItem } from '@tiptap/extension-task-item'
 import ActionTaskItem from './ActionTaskItem.vue'
 import { setCurrentNoteId, registerPromoteHandler } from '../stores/taskActionStore'
 import { taskDataCache, derivingIds, fireShowInlineDetail, registerUnlinkHandler } from '../stores/taskInlineDetailStore'
+import { fireOpenDetail } from '../stores/taskDetailStore'
 import ToolbarDropdown from './ToolbarDropdown.vue'
 import AutoMentionPopup from './AutoMentionPopup.vue'
 import { AutoMentionDecoration } from '../extensions/AutoMentionDecoration'
@@ -154,6 +155,10 @@ type LinkedCalendarEvent = {
 const linkedCalendarEvent = ref<LinkedCalendarEvent | null>(null)
 const meetingAttendeesEl = ref<HTMLElement | null>(null)
 
+/** Task that has this note as linked_note_id (task note). */
+type LinkedTask = { id: string; title: string; status: string; due_date: string | null; project_name: string | null }
+const linkedTask = ref<LinkedTask | null>(null)
+
 const { applyToElement: applyAttendeeChips } = useEntityChips()
 
 type AttendeeItem = { name: string; email?: string; entity_id?: string }
@@ -242,6 +247,17 @@ async function onAttendeesClick(e: MouseEvent): Promise<void> {
   const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
   const result = await window.api.invoke('entities:get', { id: entityId }) as { entity: { type_id: string } } | null
   if (result) emit('open-entity', { entityId, typeId: result.entity.type_id, mode })
+}
+
+function formatTaskDueDate(due: string | null): string {
+  if (!due) return ''
+  const d = new Date(due)
+  const today = new Date()
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1)
+  const ds = d.toDateString()
+  if (ds === today.toDateString()) return 'Due today'
+  if (ds === tomorrow.toDateString()) return 'Due tomorrow'
+  return `Due ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
 }
 
 function formatMeetingTime(ev: LinkedCalendarEvent): string {
@@ -1190,11 +1206,13 @@ async function loadNote(noteId: string): Promise<void> {
   isLoading = true
   saveStatus.value = 'saved'
   try {
-    const [note, calEvent] = await Promise.all([
+    const [note, calEvent, task] = await Promise.all([
       window.api.invoke('notes:get', { id: noteId }) as Promise<NoteRow | null>,
       window.api.invoke('calendar-events:get-by-note', { note_id: noteId }) as Promise<LinkedCalendarEvent | null>,
+      window.api.invoke('action-items:get-by-linked-note', { note_id: noteId }) as Promise<LinkedTask | null>,
     ])
     linkedCalendarEvent.value = calEvent
+    linkedTask.value = task
     if (!note || !editor.value) return
     title.value = note.title
     setCurrentNoteId(noteId)
@@ -2238,6 +2256,27 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
+    </div>
+
+    <!-- Task context header (shown when this note is a task note) -->
+    <div v-if="linkedTask" class="task-context-header">
+      <div class="task-context-label">Task Note</div>
+      <div class="task-context-title">{{ linkedTask.title }}</div>
+      <div v-if="linkedTask.project_name || linkedTask.due_date || linkedTask.status" class="task-context-meta">
+        <span v-if="linkedTask.project_name" class="task-context-chip">{{ linkedTask.project_name }}</span>
+        <span v-if="linkedTask.due_date" class="task-context-time">{{ formatTaskDueDate(linkedTask.due_date) }}</span>
+        <span v-if="linkedTask.status" class="task-context-chip task-context-status">{{ linkedTask.status }}</span>
+      </div>
+      <div class="task-context-actions">
+        <button
+          class="task-context-open-btn"
+          title="Open task in Actions view"
+          @click="fireOpenDetail(linkedTask!.id)"
+        >
+          <ExternalLink :size="11" />
+          Open in Actions
+        </button>
+      </div>
     </div>
 
     <!-- Meeting context header (shown when this note is linked to a calendar event) -->

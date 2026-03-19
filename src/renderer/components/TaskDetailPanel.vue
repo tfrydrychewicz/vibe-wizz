@@ -2,6 +2,7 @@
 import { ref, watch, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { X, FileText, ExternalLink, Plus, Check, Trash2 } from 'lucide-vue-next'
 import TaskAttributeChip from './TaskAttributeChip.vue'
+import TaskNotePreview from './TaskNotePreview.vue'
 import SubTaskInput from './SubTaskInput.vue'
 import TaskCard from './TaskCard.vue'
 import type { ActionItem } from './TaskCard.vue'
@@ -14,6 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   'open-note': [payload: { noteId: string; title: string; mode: OpenMode }]
+  'open-entity': [payload: { entityId: string; typeId?: string; mode: OpenMode }]
   'open-actions': []
   deleted: [taskId: string]
 }>()
@@ -46,6 +48,14 @@ const projectEntityTypeId = ref('')
 // Waiting-for entity
 const editWaitingForId = ref<string | null>(null)
 const editWaitingForName = ref<string | null>(null)
+
+// Linked (attached) note
+const editLinkedNoteId = ref<string | null>(null)
+const editLinkedNoteTitle = ref<string | null>(null)
+const noteSearchQuery = ref('')
+const noteSearchResults = ref<Array<{ id: string; title: string }>>([])
+const showNoteDropdown = ref(false)
+const creatingNote = ref(false)
 
 // ── Entity search dropdowns ───────────────────────────────────────────────────
 type EntityResult = { id: string; name: string }
@@ -100,6 +110,8 @@ async function loadTask(silent = false): Promise<void> {
     editProjectName.value = result.project_name
     editWaitingForId.value = result.waiting_for_entity_id
     editWaitingForName.value = result.waiting_for_entity_name
+    editLinkedNoteId.value = result.linked_note_id ?? null
+    editLinkedNoteTitle.value = result.linked_note_title ?? null
 
     editContexts.value = parseContexts(result.contexts)
 
@@ -412,6 +424,53 @@ function openSourceNote(e: MouseEvent): void {
     title: task.value.source_note_title ?? 'Untitled',
     mode,
   })
+}
+
+// ── Linked (attached) note ──────────────────────────────────────────────────────
+function openLinkedNote(e: MouseEvent): void {
+  if (!editLinkedNoteId.value) return
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-note', { noteId: editLinkedNoteId.value, title: editLinkedNoteTitle.value ?? 'Untitled', mode })
+}
+
+watch(noteSearchQuery, async (q) => {
+  if (!q.trim()) { noteSearchResults.value = []; showNoteDropdown.value = false; return }
+  noteSearchResults.value = (await window.api.invoke('notes:search', { query: q })) as Array<{ id: string; title: string }>
+  showNoteDropdown.value = noteSearchResults.value.length > 0
+})
+
+async function selectAttachedNote(result: { id: string; title: string }): Promise<void> {
+  editLinkedNoteId.value = result.id
+  editLinkedNoteTitle.value = result.title
+  noteSearchQuery.value = ''
+  showNoteDropdown.value = false
+  await saveField({ linked_note_id: result.id })
+}
+
+function closeNoteDropdownDelayed(): void {
+  window.setTimeout(() => { showNoteDropdown.value = false }, 150)
+}
+
+async function createAttachedNote(e: MouseEvent): Promise<void> {
+  if (!task.value || creatingNote.value) return
+  creatingNote.value = true
+  try {
+    const noteTitle = `Task Note: ${task.value.title}`
+    const note = (await window.api.invoke('notes:create', { title: noteTitle })) as { id: string; title: string }
+    editLinkedNoteId.value = note.id
+    editLinkedNoteTitle.value = noteTitle
+    await saveField({ linked_note_id: note.id })
+    const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+    emit('open-note', { noteId: note.id, title: noteTitle, mode })
+  } finally {
+    creatingNote.value = false
+  }
+}
+
+async function unlinkAttachedNote(): Promise<void> {
+  editLinkedNoteId.value = null
+  editLinkedNoteTitle.value = null
+  await saveField({ linked_note_id: null })
 }
 
 // ── Delete task ───────────────────────────────────────────────────────────────
@@ -736,6 +795,7 @@ const formattedUpdatedAt = computed(() => {
           @open-detail="(id) => $emit('close') /* handled by parent */"
           @status-changed="onSubTaskStatusChanged"
           @open-note="emit('open-note', $event)"
+          @open-entity="emit('open-entity', $event)"
           @subtask-created="onSubTaskCreated"
         />
 
@@ -752,6 +812,65 @@ const formattedUpdatedAt = computed(() => {
           No sub-tasks
         </p>
       </div>
+
+      <!-- ── Attached note ────────────────────────────────────────────────── -->
+      <div class="section-divider" />
+      <div class="section-header">
+        <span class="section-title">Attached Note</span>
+      </div>
+      <div v-if="editLinkedNoteId && editLinkedNoteTitle" class="attached-note-row">
+        <div class="attached-note-actions">
+          <button class="source-note-btn" @click="openLinkedNote($event)">
+            <FileText :size="11" />
+            {{ editLinkedNoteTitle }}
+          </button>
+          <button
+            class="btn-unlink-sm"
+            title="Unlink note"
+            aria-label="Unlink attached note"
+            @click="unlinkAttachedNote"
+          >
+            <X :size="11" />
+          </button>
+        </div>
+        <TaskNotePreview
+          :note-id="editLinkedNoteId"
+          :note-title="editLinkedNoteTitle"
+          :height="160"
+          @open-note="emit('open-note', $event)"
+          @open-entity="emit('open-entity', $event)"
+        />
+      </div>
+      <template v-else>
+        <div class="attach-note-actions">
+          <button
+            class="btn-add-field"
+            :disabled="creatingNote"
+            @click="createAttachedNote($event)"
+          >
+            <Plus :size="11" />
+            {{ creatingNote ? 'Creating…' : 'Create note' }}
+          </button>
+          <div class="entity-search-wrap">
+            <input
+              v-model="noteSearchQuery"
+              class="entity-search-input"
+              placeholder="or attach existing note…"
+              aria-label="Search notes to attach"
+              autocomplete="off"
+              @blur="closeNoteDropdownDelayed"
+            />
+            <ul v-if="showNoteDropdown && noteSearchResults.length" class="entity-results">
+              <li
+                v-for="r in noteSearchResults"
+                :key="r.id"
+                class="entity-result"
+                @mousedown.prevent="selectAttachedNote(r)"
+              >{{ r.title }}</li>
+            </ul>
+          </div>
+        </div>
+      </template>
 
       <!-- ── Source note ─────────────────────────────────────────────────── -->
       <div v-if="task.source_note_id" class="section-divider" />
@@ -1257,6 +1376,47 @@ const formattedUpdatedAt = computed(() => {
 .source-note-btn:hover {
   color: var(--color-accent);
   background: var(--color-hover);
+}
+
+/* ── Attached note ─────────────────────────────────────────────────────────── */
+.attached-note-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 8px;
+}
+
+.attached-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-unlink-sm {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.btn-unlink-sm:hover {
+  color: var(--color-danger);
+  background: var(--color-danger-subtle);
+}
+
+.attach-note-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 14px 8px;
+}
+
+.attach-note-actions .entity-search-input {
+  width: 100%;
 }
 
 /* ── Footer ───────────────────────────────────────────────────────────────── */

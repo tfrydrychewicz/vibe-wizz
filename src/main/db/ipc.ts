@@ -359,8 +359,9 @@ export function registerDbIpcHandlers(): void {
     db.prepare(
       `UPDATE notes SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`
     ).run(id)
-    // Unlink this note from any calendar event that references it as meeting notes
+    // Unlink this note from any calendar event or action item that references it
     db.prepare(`UPDATE calendar_events SET linked_note_id = NULL WHERE linked_note_id = ?`).run(id)
+    db.prepare(`UPDATE action_items SET linked_note_id = NULL WHERE linked_note_id = ?`).run(id)
     return { ok: true }
   })
 
@@ -1139,20 +1140,22 @@ export function registerDbIpcHandlers(): void {
     SELECT
       ai.id, ai.title, ai.status, ai.extraction_type, ai.confidence,
       ai.created_at, ai.updated_at, ai.completed_at,
-      ai.source_note_id, ai.assigned_entity_id, ai.due_date,
+      ai.source_note_id, ai.linked_note_id, ai.assigned_entity_id, ai.due_date,
       ai.parent_id, ai.project_entity_id,
       ai.contexts, ai.energy_level, ai.is_waiting_for, ai.is_next_action, ai.waiting_for_entity_id,
       n.title  AS source_note_title,
+      ln.title AS linked_note_title,
       e.name   AS assigned_entity_name,
       p.name   AS project_name,
       wf.name  AS waiting_for_entity_name,
       (SELECT COUNT(*) FROM action_items sub WHERE sub.parent_id = ai.id)                               AS subtask_count,
       (SELECT COUNT(*) FROM action_items sub WHERE sub.parent_id = ai.id AND sub.status NOT IN ('done','cancelled')) AS open_subtask_count
     FROM action_items ai
-    LEFT JOIN notes    n  ON ai.source_note_id        = n.id
-    LEFT JOIN entities e  ON ai.assigned_entity_id    = e.id
-    LEFT JOIN entities p  ON ai.project_entity_id     = p.id
-    LEFT JOIN entities wf ON ai.waiting_for_entity_id = wf.id`
+    LEFT JOIN notes    n   ON ai.source_note_id = n.id
+    LEFT JOIN notes    ln  ON ai.linked_note_id = ln.id
+    LEFT JOIN entities e   ON ai.assigned_entity_id    = e.id
+    LEFT JOIN entities p   ON ai.project_entity_id     = p.id
+    LEFT JOIN entities wf  ON ai.waiting_for_entity_id = wf.id`
 
   /**
    * action-items:list — returns action items with all GTD fields.
@@ -1248,6 +1251,12 @@ export function registerDbIpcHandlers(): void {
     return db.prepare(`${ACTION_SELECT} WHERE ai.id = ?`).get(id) ?? null
   })
 
+  /** action-items:get-by-linked-note — returns the task that has linked_note_id = note_id, or null. */
+  ipcMain.handle('action-items:get-by-linked-note', (_event, { note_id }: { note_id: string }) => {
+    const db = getDatabase()
+    return db.prepare(`${ACTION_SELECT} WHERE ai.linked_note_id = ?`).get(note_id) ?? null
+  })
+
   /** action-items:create — creates a new action item and returns the full row with joins. */
   ipcMain.handle(
     'action-items:create',
@@ -1256,6 +1265,7 @@ export function registerDbIpcHandlers(): void {
       opts: {
         title: string
         source_note_id?: string | null
+        linked_note_id?: string | null
         assigned_entity_id?: string | null
         parent_id?: string | null
         project_entity_id?: string | null
@@ -1273,14 +1283,15 @@ export function registerDbIpcHandlers(): void {
       const contextsJson = JSON.stringify(opts.contexts ?? [])
       db.prepare(
         `INSERT INTO action_items
-           (id, title, source_note_id, assigned_entity_id, parent_id, project_entity_id,
+           (id, title, source_note_id, linked_note_id, assigned_entity_id, parent_id, project_entity_id,
             contexts, energy_level, is_waiting_for, waiting_for_entity_id,
             due_date, extraction_type, confidence)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         opts.title,
         opts.source_note_id ?? null,
+        opts.linked_note_id ?? null,
         opts.assigned_entity_id ?? null,
         opts.parent_id ?? null,
         opts.project_entity_id ?? null,
@@ -1307,6 +1318,7 @@ export function registerDbIpcHandlers(): void {
         id: string
         title?: string
         status?: string
+        linked_note_id?: string | null
         assigned_entity_id?: string | null
         parent_id?: string | null
         project_entity_id?: string | null
@@ -1323,6 +1335,7 @@ export function registerDbIpcHandlers(): void {
       const params: unknown[] = []
 
       if (opts.title !== undefined) { sets.push('title = ?'); params.push(opts.title) }
+      if ('linked_note_id' in opts) { sets.push('linked_note_id = ?'); params.push(opts.linked_note_id ?? null) }
       if (opts.status !== undefined) {
         sets.push('status = ?')
         params.push(opts.status)

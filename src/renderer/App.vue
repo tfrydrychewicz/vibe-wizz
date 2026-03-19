@@ -822,7 +822,7 @@ onBeforeUnmount(() => {
 
       <!-- Actions view -->
       <template v-else-if="activeView === 'actions'">
-        <ActionsView @open-note="onOpenNote" />
+        <ActionsView @open-note="onOpenNote" @open-entity="onChatOpenEntity" />
       </template>
 
       <!-- Calendar view -->
@@ -919,6 +919,7 @@ onBeforeUnmount(() => {
       :task-id="activeTaskDetailId"
       @close="showTaskDetail = false"
       @open-note="onOpenNote"
+      @open-entity="onChatOpenEntity"
       @open-actions="activeView = 'actions'; showTaskDetail = false"
       @deleted="showTaskDetail = false"
     />
@@ -931,6 +932,7 @@ onBeforeUnmount(() => {
       :anchor-rect="globalTaskInlineRect"
       @close="globalTaskInlineId = null"
       @open-note="onOpenNote"
+      @open-entity="onChatOpenEntity"
     />
 
     <!-- Global meeting modal — opened from event chips without navigating to calendar -->

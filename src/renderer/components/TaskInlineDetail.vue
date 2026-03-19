@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ExternalLink, X, Check } from 'lucide-vue-next'
 import TaskAttributeChip from './TaskAttributeChip.vue'
+import TaskNotePreview from './TaskNotePreview.vue'
 import type { ActionItem } from './TaskCard.vue'
 import { fireOpenDetail } from '../stores/taskDetailStore'
 import { fireUnlink } from '../stores/taskInlineDetailStore'
@@ -15,6 +16,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   'open-note': [payload: { noteId: string; title: string; mode: OpenMode }]
+  'open-entity': [payload: { entityId: string; typeId?: string; mode: OpenMode }]
 }>()
 
 // ── Positioning ───────────────────────────────────────────────────────────────
@@ -55,6 +57,12 @@ const editWaitingForId = ref<string | null>(null)
 const editWaitingForName = ref<string | null>(null)
 
 const projectEntityTypeId = ref('')
+
+// Linked note
+const noteSearchQuery = ref('')
+const noteSearchResults = ref<Array<{ id: string; title: string }>>([])
+const showNoteDropdown = ref(false)
+const creatingNote = ref(false)
 
 // Entity search
 type EntityResult = { id: string; name: string }
@@ -180,6 +188,46 @@ async function pickAssignee(e: EntityResult): Promise<void> {
 async function clearAssignee(): Promise<void> {
   editAssignedId.value = null; editAssignedName.value = null
   await save({ assigned_entity_id: null })
+}
+
+// ── Linked note ──────────────────────────────────────────────────────────────
+watch(noteSearchQuery, async (q) => {
+  if (!q.trim()) { noteSearchResults.value = []; showNoteDropdown.value = false; return }
+  noteSearchResults.value = (await window.api.invoke('notes:search', { query: q })) as Array<{ id: string; title: string }>
+  showNoteDropdown.value = noteSearchResults.value.length > 0
+})
+
+async function selectLinkedNote(r: { id: string; title: string }): Promise<void> {
+  noteSearchQuery.value = ''
+  showNoteDropdown.value = false
+  await save({ linked_note_id: r.id })
+  await load()
+}
+
+function openLinkedNote(e: MouseEvent): void {
+  if (!task.value?.linked_note_id) return
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-note', { noteId: task.value.linked_note_id, title: task.value.linked_note_title ?? 'Untitled', mode })
+}
+
+async function unlinkNote(): Promise<void> {
+  await save({ linked_note_id: null })
+  await load()
+}
+
+async function createLinkedNote(e: MouseEvent): Promise<void> {
+  if (!task.value || creatingNote.value) return
+  creatingNote.value = true
+  try {
+    const noteTitle = `Task Note: ${task.value.title}`
+    const note = (await window.api.invoke('notes:create', { title: noteTitle })) as { id: string; title: string }
+    await save({ linked_note_id: note.id })
+    await load()
+    const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+    emit('open-note', { noteId: note.id, title: note.title, mode })
+  } finally {
+    creatingNote.value = false
+  }
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -327,6 +375,48 @@ onBeforeUnmount(() => {
           <button class="source-btn" @click="emit('open-note', { noteId: task.source_note_id!, title: task.source_note_title ?? 'Untitled', mode: 'default' })">
             {{ task.source_note_title ?? 'Untitled' }}
           </button>
+        </div>
+
+        <!-- Attached note -->
+        <div class="field-row">
+          <span class="label-sm">Note</span>
+          <div class="field-value-row">
+            <template v-if="task.linked_note_id">
+              <button class="source-btn" @click="openLinkedNote">
+                {{ task.linked_note_title ?? 'Note' }}
+              </button>
+              <button class="btn-unlink-sm" title="Unlink" @click="unlinkNote">×</button>
+            </template>
+            <template v-else>
+              <button
+                class="btn-add-sm"
+                :disabled="creatingNote"
+                @click="createLinkedNote($event)"
+              >
+                + Create
+              </button>
+              <div class="entity-mini-search">
+                <input
+                  v-model="noteSearchQuery"
+                  class="mini-search-input"
+                  placeholder="or attach…"
+                  @keydown.escape="showNoteDropdown = false"
+                />
+                <ul v-if="showNoteDropdown && noteSearchResults.length" class="mini-results">
+                  <li v-for="r in noteSearchResults" :key="r.id" @mousedown.prevent="selectLinkedNote(r)">{{ r.title }}</li>
+                </ul>
+              </div>
+            </template>
+          </div>
+        </div>
+        <div v-if="task.linked_note_id" class="linked-preview-wrap">
+          <TaskNotePreview
+            :note-id="task.linked_note_id"
+            :note-title="task.linked_note_title ?? 'Untitled'"
+            :height="100"
+            @open-note="emit('open-note', $event)"
+            @open-entity="emit('open-entity', $event)"
+          />
         </div>
 
         <!-- Footer: unlink -->
@@ -654,6 +744,19 @@ onBeforeUnmount(() => {
 }
 
 .source-btn:hover { color: var(--color-accent); }
+
+.btn-unlink-sm {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.btn-unlink-sm:hover { color: var(--color-danger); }
+
+.linked-preview-wrap { padding: 0 12px 8px; }
 
 /* ── Footer ───────────────────────────────────────────────────────────────── */
 .popup-footer {

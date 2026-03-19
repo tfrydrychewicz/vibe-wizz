@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, nextTick } from 'vue'
-import { FileText, Plus, Clock } from 'lucide-vue-next'
+import { FileText, Plus, Clock, ChevronDown, ChevronRight } from 'lucide-vue-next'
 import TaskAttributeChip from './TaskAttributeChip.vue'
+import TaskNotePreview from './TaskNotePreview.vue'
 import SubTaskInput from './SubTaskInput.vue'
 import type { OpenMode } from '../stores/tabStore'
 import { fireOpenDetail } from '../stores/taskDetailStore'
@@ -17,6 +18,7 @@ export interface ActionItem {
   updated_at: string | null
   completed_at: string | null
   source_note_id: string | null
+  linked_note_id: string | null
   assigned_entity_id: string | null
   parent_id: string | null
   project_entity_id: string | null
@@ -30,6 +32,7 @@ export interface ActionItem {
   waiting_for_entity_id: string | null
   due_date: string | null
   source_note_title: string | null
+  linked_note_title: string | null
   assigned_entity_name: string | null
   project_name: string | null
   waiting_for_entity_name: string | null
@@ -44,14 +47,17 @@ const props = withDefaults(
     depth?: number
     showProject?: boolean
     showSourceNote?: boolean
+    /** Show linked (attached) note chip and expandable preview */
+    showLinkedNote?: boolean
   }>(),
-  { depth: 0, showProject: true, showSourceNote: false },
+  { depth: 0, showProject: true, showSourceNote: false, showLinkedNote: true },
 )
 
 const emit = defineEmits<{
   'open-detail': [taskId: string]
   'status-changed': [taskId: string, status: ActionItem['status']]
   'open-note': [payload: { noteId: string; title: string; mode: OpenMode }]
+  'open-entity': [payload: { entityId: string; typeId?: string; mode: OpenMode }]
   'subtask-created': [task: ActionItem]
 }>()
 
@@ -119,10 +125,36 @@ async function toggleChecked(): Promise<void> {
 }
 
 // ── Source note open ──────────────────────────────────────────────────────────
-function openNote(e: MouseEvent): void {
+function openSourceNote(e: MouseEvent): void {
   if (!props.task.source_note_id) return
   const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
   emit('open-note', { noteId: props.task.source_note_id, title: props.task.source_note_title ?? 'Untitled', mode })
+}
+
+// ── Linked note open ──────────────────────────────────────────────────────────
+function openLinkedNote(e: MouseEvent): void {
+  if (!props.task.linked_note_id) return
+  const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+  emit('open-note', { noteId: props.task.linked_note_id, title: props.task.linked_note_title ?? 'Untitled', mode })
+}
+
+// ── Expandable linked note preview ─────────────────────────────────────────────
+const linkedNoteExpanded = ref(false)
+
+// ── Create linked note (from task view pane) ───────────────────────────────────
+const creatingNote = ref(false)
+async function createLinkedNote(e: MouseEvent): Promise<void> {
+  if (creatingNote.value) return
+  creatingNote.value = true
+  try {
+    const noteTitle = `Task Note: ${props.task.title}`
+    const note = (await window.api.invoke('notes:create', { title: noteTitle })) as { id: string; title: string }
+    await window.api.invoke('action-items:update', { id: props.task.id, linked_note_id: note.id })
+    const mode: OpenMode = (e.metaKey || e.ctrlKey) ? 'new-tab' : e.shiftKey ? 'new-pane' : 'default'
+    emit('open-note', { noteId: note.id, title: noteTitle, mode })
+  } finally {
+    creatingNote.value = false
+  }
 }
 
 // ── Add sub-task ──────────────────────────────────────────────────────────────
@@ -173,7 +205,7 @@ function onSubTaskCreated(task: ActionItem): void {
         </div>
 
         <!-- Chips row -->
-        <div v-if="showProject && task.project_name || visibleContexts.length || task.energy_level || isWaiting || task.assigned_entity_name || formattedDueDate || (showSourceNote && task.source_note_id)" class="chips-row">
+        <div v-if="showProject && task.project_name || visibleContexts.length || task.energy_level || isWaiting || task.assigned_entity_name || formattedDueDate || (showSourceNote && task.source_note_id) || (showLinkedNote && (task.linked_note_id || true))" class="chips-row">
           <!-- Project -->
           <TaskAttributeChip
             v-if="showProject && task.project_name"
@@ -223,12 +255,54 @@ function onSubTaskCreated(task: ActionItem): void {
           <button
             v-if="showSourceNote && task.source_note_id"
             class="source-note-chip"
-            :title="task.source_note_title ?? 'Note'"
-            @click.stop="openNote($event)"
+            :title="task.source_note_title ?? 'Source'"
+            @click.stop="openSourceNote($event)"
           >
             <FileText :size="9" />
-            {{ task.source_note_title ?? 'Note' }}
+            {{ task.source_note_title ?? 'Source' }}
           </button>
+
+          <!-- Linked (attached) note chip -->
+          <button
+            v-if="showLinkedNote && task.linked_note_id"
+            class="source-note-chip source-note-chip--linked"
+            :title="task.linked_note_title ?? 'Attached note'"
+            @click.stop="openLinkedNote($event)"
+          >
+            <FileText :size="9" />
+            {{ task.linked_note_title ?? 'Note' }}
+          </button>
+
+          <!-- Create note button (when no linked note) -->
+          <button
+            v-if="showLinkedNote && !task.linked_note_id"
+            class="add-note-btn"
+            :disabled="creatingNote"
+            title="Create and attach note"
+            @click.stop="createLinkedNote($event)"
+          >
+            <Plus :size="9" />
+            {{ creatingNote ? '…' : 'Note' }}
+          </button>
+        </div>
+
+        <!-- Expandable linked note preview -->
+        <div v-if="showLinkedNote && task.linked_note_id" class="linked-note-preview-wrap">
+          <button
+            class="expand-toggle"
+            @click.stop="linkedNoteExpanded = !linkedNoteExpanded"
+          >
+            <component :is="linkedNoteExpanded ? ChevronDown : ChevronRight" :size="12" />
+            {{ linkedNoteExpanded ? 'Hide note' : 'View note' }}
+          </button>
+          <TaskNotePreview
+            v-if="linkedNoteExpanded"
+            :note-id="task.linked_note_id"
+            :note-title="task.linked_note_title ?? 'Untitled'"
+            :height="120"
+            @open-note="emit('open-note', $event)"
+            @open-entity="emit('open-entity', $event)"
+          />
         </div>
       </div>
 
@@ -463,6 +537,61 @@ function onSubTaskCreated(task: ActionItem): void {
 .source-note-chip:hover {
   color: var(--color-accent);
   background: var(--color-hover);
+}
+
+.source-note-chip--linked {
+  border-left: 2px solid var(--color-note);
+}
+
+.add-note-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.add-note-btn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.add-note-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* ── Linked note expandable preview ─────────────────────────────────────────── */
+.linked-note-preview-wrap {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 2px 0;
+  align-self: flex-start;
+}
+
+.expand-toggle:hover {
+  color: var(--color-accent);
 }
 
 /* ── Right side ───────────────────────────────────────────────────────────── */

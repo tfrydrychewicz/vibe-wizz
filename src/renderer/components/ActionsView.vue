@@ -9,6 +9,7 @@ import type { OpenMode } from '../stores/tabStore'
 
 const emit = defineEmits<{
   'open-note': [{ noteId: string; title: string; mode: OpenMode }]
+  'open-entity': [{ entityId: string; typeId?: string; mode: OpenMode }]
   'open-settings': []
 }>()
 
@@ -457,6 +458,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
                   :show-source-note="true"
                   class="inbox-card"
                   @open-note="emit('open-note', $event)"
+                  @open-entity="emit('open-entity', $event)"
                   @status-changed="onStatusChanged"
                   @subtask-created="onSubtaskCreated"
                 />
@@ -556,6 +558,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
                   :show-project="true"
                   :show-source-note="true"
                   @open-note="emit('open-note', $event)"
+                  @open-entity="emit('open-entity', $event)"
                   @status-changed="onStatusChanged"
                   @subtask-created="onSubtaskCreated"
                 />
@@ -592,6 +595,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
                   :show-project="true"
                   :show-source-note="true"
                   @open-note="emit('open-note', $event)"
+                  @open-entity="emit('open-entity', $event)"
                   @status-changed="onStatusChanged"
                   @subtask-created="onSubtaskCreated"
                 />
@@ -628,6 +632,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
                   :show-project="true"
                   :show-source-note="true"
                   @open-note="emit('open-note', $event)"
+                  @open-entity="emit('open-entity', $event)"
                   @status-changed="onStatusChanged"
                   @subtask-created="onSubtaskCreated"
                 />
@@ -662,6 +667,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
                 :show-project="false"
                 :show-source-note="true"
                 @open-note="emit('open-note', $event)"
+                  @open-entity="emit('open-entity', $event)"
                 @status-changed="onProjectStatusChanged"
                 @subtask-created="onSubtaskCreated"
               />
@@ -693,6 +699,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
                   :show-source-note="true"
                   class="inbox-card"
                   @open-note="emit('open-note', $event)"
+                  @open-entity="emit('open-entity', $event)"
                   @status-changed="onStatusChanged"
                   @subtask-created="onSubtaskCreated"
                 />
@@ -726,6 +733,7 @@ onBeforeUnmount(() => unsubs.forEach((fn) => fn()))
                   :show-project="true"
                   :show-source-note="true"
                   @open-note="emit('open-note', $event)"
+                  @open-entity="emit('open-entity', $event)"
                   @status-changed="onStatusChanged"
                   @subtask-created="onSubtaskCreated"
                 />

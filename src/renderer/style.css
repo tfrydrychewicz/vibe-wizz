@@ -831,6 +831,79 @@ select:focus {
   color: #f0a050;
 }
 
+/* ── Task context header (task note) ── */
+.task-context-header {
+  padding: 10px 48px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: rgba(80, 192, 160, 0.06);
+  flex-shrink: 0;
+}
+
+.task-context-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-note);
+  margin-bottom: 2px;
+}
+
+.task-context-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+
+.task-context-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-context-time {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.task-context-chip {
+  font-size: 11px;
+  background: rgba(80, 192, 160, 0.1);
+  border: 1px solid rgba(80, 192, 160, 0.22);
+  border-radius: 12px;
+  padding: 1px 8px;
+  color: var(--color-text-muted);
+}
+
+.task-context-status {
+  text-transform: capitalize;
+}
+
+.task-context-actions {
+  margin-top: 8px;
+}
+
+.task-context-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid rgba(80, 192, 160, 0.3);
+  background: rgba(80, 192, 160, 0.1);
+  color: var(--color-note);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.task-context-open-btn:hover {
+  background: rgba(80, 192, 160, 0.18);
+  border-color: var(--color-note);
+}
+
 /* ── Meeting context header ── */
 .meeting-context-header {
   padding: 10px 48px 12px;

@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS action_items (
   title                 TEXT NOT NULL,
   body                  TEXT,
   source_note_id        TEXT REFERENCES notes(id) ON DELETE SET NULL,
+  linked_note_id        TEXT REFERENCES notes(id) ON DELETE SET NULL,
   assigned_entity_id    TEXT REFERENCES entities(id) ON DELETE SET NULL,
   parent_id             TEXT REFERENCES action_items(id) ON DELETE SET NULL,
   project_entity_id     TEXT REFERENCES entities(id) ON DELETE SET NULL,
